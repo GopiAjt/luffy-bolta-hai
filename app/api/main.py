@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shutil
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
 
 from ..core.pdf_processor import PDFProcessor
 from ..core.text_processor import TextProcessor
 from ..core.rag_processor import RAGProcessor
+from ..core.subtitle_rag import SubtitleRAG
 from ..utils.text_processing import clean_text, format_dialogue
 from config.config import (
     RAW_DATA_DIR, PROCESSED_DATA_DIR, VECTOR_DB_DIR,
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="One Piece Hindi Voiceover API",
-    description="API for generating Hindi voiceover scripts from One Piece manga",
+    description="API for generating Hindi voiceover scripts from One Piece manga and anime subtitles",
     version="1.0.0"
 )
 
@@ -39,6 +40,7 @@ app.add_middleware(
 pdf_processor = PDFProcessor(PROCESSED_DATA_DIR)
 text_processor = TextProcessor(OCR_CONFIG)
 rag_processor = RAGProcessor(VECTOR_DB_CONFIG)
+subtitle_rag = SubtitleRAG(PROCESSED_DATA_DIR / 'subtitles_en')
 
 @app.post("/api/v1/process-chapter")
 async def process_chapter(file: UploadFile = File(...)):
@@ -193,4 +195,89 @@ async def health_check():
     return {
         "status": "healthy",
         "version": "1.0.0"
-    } 
+    }
+
+@app.post("/api/v1/subtitles/query")
+async def query_subtitles(
+    query: str,
+    n_results: Optional[int] = 5,
+    filter_episode: Optional[str] = None
+):
+    """
+    Query the One Piece subtitle database.
+    
+    Args:
+        query: The search query
+        n_results: Number of results to return (default: 5)
+        filter_episode: Optional episode number to filter by
+        
+    Returns:
+        List of matching dialogue entries with metadata
+    """
+    try:
+        results = subtitle_rag.query_dialogue(
+            query=query,
+            n_results=n_results,
+            filter_episode=filter_episode
+        )
+        return {
+            "status": "success",
+            "data": results
+        }
+    except Exception as e:
+        logger.error(f"Error querying subtitles: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/subtitles/process")
+async def process_subtitles():
+    """
+    Process all subtitle files and create embeddings.
+    """
+    try:
+        # Load subtitles
+        subtitle_data = subtitle_rag.load_subtitles()
+        logger.info(f"Loaded {len(subtitle_data)} subtitle entries")
+        
+        # Create embeddings
+        subtitle_rag.create_embeddings(subtitle_data)
+        logger.info("Embeddings created and stored in ChromaDB")
+        
+        return {
+            "status": "success",
+            "message": "Subtitles processed successfully",
+            "data": {
+                "entries_processed": len(subtitle_data)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error processing subtitles: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/subtitles/episodes")
+async def get_episodes():
+    """
+    Get list of all processed episodes.
+    """
+    try:
+        # Get all documents from collection
+        results = subtitle_rag.collection.get()
+        
+        # Extract unique episodes
+        episodes = {}
+        for metadata in results["metadatas"]:
+            episode_number = metadata.get("episode_number", "unknown")
+            if episode_number not in episodes:
+                episodes[episode_number] = {
+                    "title": metadata.get("title", "Unknown Title"),
+                    "file_name": metadata.get("file_name", ""),
+                    "dialogue_count": 0
+                }
+            episodes[episode_number]["dialogue_count"] += 1
+        
+        return {
+            "status": "success",
+            "data": episodes
+        }
+    except Exception as e:
+        logger.error(f"Error getting episodes: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

@@ -5,8 +5,6 @@ from typing import List, Dict, Tuple, Optional
 import logging
 from pathlib import Path
 import json
-from transformers import MarianMTModel, MarianTokenizer
-import torch
 
 logger = logging.getLogger(__name__)
 
@@ -14,14 +12,6 @@ class TextProcessor:
     def __init__(self, config: dict):
         self.config = config
         self.reader = easyocr.Reader(['ja', 'en'])
-        
-        # Initialize translation model
-        self.translator = MarianMTModel.from_pretrained('Helsinki-NLP/opus-mt-ja-hi')
-        self.tokenizer = MarianTokenizer.from_pretrained('Helsinki-NLP/opus-mt-ja-hi')
-        
-        # Set device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.translator.to(self.device)
 
     def extract_text(self, image: np.ndarray, region: Tuple[int, int, int, int]) -> str:
         """
@@ -50,33 +40,6 @@ class TextProcessor:
             logger.error(f"Error extracting text: {str(e)}")
             raise
 
-    def translate_to_hindi(self, text: str) -> str:
-        """
-        Translate text to Hindi.
-        
-        Args:
-            text: Input text
-            
-        Returns:
-            Translated text in Hindi
-        """
-        try:
-            # Tokenize
-            inputs = self.tokenizer(text, return_tensors="pt", padding=True)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            # Generate translation
-            translated = self.translator.generate(**inputs)
-            
-            # Decode
-            hindi_text = self.tokenizer.batch_decode(translated, skip_special_tokens=True)[0]
-            
-            return hindi_text
-            
-        except Exception as e:
-            logger.error(f"Error translating text: {str(e)}")
-            raise
-
     def process_speech_bubble(self, image: np.ndarray, bubble_contour: np.ndarray) -> Dict:
         """
         Process a speech bubble and extract its text.
@@ -98,12 +61,8 @@ class TextProcessor:
             # Get bubble tail
             tail_point = extract_bubble_tail(bubble_contour)
             
-            # Translate to Hindi
-            hindi_text = self.translate_to_hindi(text)
-            
             return {
                 "original_text": text,
-                "hindi_text": hindi_text,
                 "bounding_box": (x, y, w, h),
                 "tail_point": tail_point
             }

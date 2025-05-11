@@ -37,9 +37,11 @@ class PDFProcessor:
             for idx, image in enumerate(images):
                 # Convert PIL Image to numpy array
                 img_array = np.array(image)
+                logger.info(f"Image shape: {img_array.shape}, dtype: {img_array.dtype}")
                 
                 # Convert RGB to BGR (OpenCV format)
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                logger.info(f"Converted image shape: {img_array.shape}, dtype: {img_array.dtype}")
                 
                 # Preprocess image
                 processed_img = preprocess_image(img_array)
@@ -91,8 +93,11 @@ class PDFProcessor:
             List of tuples containing (region_image, bounding_box)
         """
         try:
-            # Convert to grayscale
-            gray = cv2.cvtColor(page_image, cv2.COLOR_BGR2GRAY)
+            # Convert to grayscale if the image is not already in grayscale
+            if len(page_image.shape) == 3:
+                gray = cv2.cvtColor(page_image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = page_image
             
             # Apply adaptive thresholding
             thresh = cv2.adaptiveThreshold(

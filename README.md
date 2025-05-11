@@ -1,86 +1,113 @@
-# One Piece Hindi Voiceover Script Generator
+# Luffy Bolta Hai - One Piece Subtitle Analysis
 
-A Retrieval-Augmented Generation (RAG) system that automatically generates Hindi voiceover scripts from One Piece manga chapters.
+A Python project for processing, analyzing, and translating One Piece anime subtitles.
 
 ## Features
 
-- PDF to image conversion with preprocessing
-- Speech bubble detection using YOLOv8
-- Multi-language OCR (Japanese/English) for text extraction
-- Character attribution based on bubble geometry
-- Vector database for storing and retrieving past dialogues
-- Hindi script generation with character-specific tone preservation
-- REST API for easy integration
+- Process and clean subtitle files (SRT format)
+- Extract character dialogue and speaking patterns
+- Analyze subtitle statistics and trends
+- Translate Japanese subtitles to English using Google Cloud Translation API
+- Generate visualizations for character interactions and episode patterns
 
 ## Project Structure
 
 ```
-.
-├── app/                    # Main application code
-│   ├── api/               # FastAPI endpoints
-│   ├── core/              # Core functionality
-│   ├── models/            # ML models and utilities
-│   └── utils/             # Helper functions
-├── data/                  # Data storage
-│   ├── raw/              # Raw manga PDFs
-│   ├── processed/        # Processed images and text
-│   └── vector_db/        # Vector database storage
-├── tests/                # Unit tests
-├── config/               # Configuration files
-└── scripts/              # Utility scripts
+luffy-bolta-hai/
+├── data/
+│   ├── raw/              # Raw subtitle files (not tracked in git)
+│   ├── processed/        # Processed subtitle files (not tracked in git)
+│   └── analysis/         # Analysis results and visualizations (not tracked in git)
+├── scripts/
+│   ├── process_subtitles.py    # Subtitle processing script
+│   ├── analyze_subtitles.py    # Subtitle statistics analysis
+│   ├── analyze_dialogue.py     # Dialogue analysis
+│   ├── analyze_characters.py   # Character analysis
+│   └── translate_subtitles.py  # Subtitle translation
+├── credentials/          # Google Cloud credentials (not tracked in git)
+├── requirements.txt      # Python dependencies
+└── README.md            # Project documentation
 ```
 
 ## Setup
 
-1. Install dependencies:
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/luffy-bolta-hai.git
+cd luffy-bolta-hai
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Install Tesseract OCR:
-```bash
-# Ubuntu/Debian
-sudo apt-get install tesseract-ocr
-sudo apt-get install tesseract-ocr-jpn
-```
+4. Set up Google Cloud credentials:
+   - Create a Google Cloud project
+   - Enable the Cloud Translation API
+   - Create a service account and download the credentials JSON file
+   - Create a `credentials` directory in the project root
+   - Place your credentials file in the `credentials` directory
+   - Rename it to `google_cloud_credentials.json`
 
-3. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+5. Prepare your data:
+   - Place your raw subtitle files in `data/raw/`
+   - The processed files will be saved in `data/processed/`
+   - Analysis results will be saved in `data/analysis/`
 
 ## Usage
 
-1. Start the API server:
+1. Process subtitles:
 ```bash
-uvicorn app.api.main:app --reload
+python scripts/process_subtitles.py
 ```
 
-2. Process a new manga chapter:
+2. Analyze subtitles:
 ```bash
-python scripts/process_chapter.py --input path/to/chapter.pdf
+python scripts/analyze_subtitles.py
 ```
 
-3. Generate Hindi script:
+3. Analyze dialogue:
 ```bash
-python scripts/generate_script.py --chapter 1 --page 1
+python scripts/analyze_dialogue.py
 ```
 
-## API Endpoints
+4. Analyze characters:
+```bash
+python scripts/analyze_characters.py
+```
 
-- `POST /api/v1/process-chapter`: Upload and process a new chapter
-- `GET /api/v1/generate-script`: Generate Hindi script for a specific page
-- `GET /api/v1/characters`: List all characters with their dialogue history
+5. Translate subtitles:
+```bash
+python scripts/translate_subtitles.py
+```
+
+## Dependencies
+
+- Python 3.8+
+- pandas
+- numpy
+- matplotlib
+- seaborn
+- japanize-matplotlib
+- networkx
+- wordcloud
+- google-cloud-translate
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## License
-
-MIT License 
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request 

@@ -35,12 +35,12 @@ wheels/
 # Project specific
 data/raw/*
 data/processed/*
-data/vector_db/*
-data/scripts/*
+data/analysis/*
+credentials/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-!data/vector_db/.gitkeep
-!data/scripts/.gitkeep
+!data/analysis/.gitkeep
+!credentials/.gitkeep
 
 # Logs
 logs/
@@ -55,4 +55,8 @@ logs/
 *.pt
 *.pth
 *.onnx
-*.bin 
+*.bin
+
+# Google Cloud credentials
+google_cloud_credentials.json
+*credentials*.json 

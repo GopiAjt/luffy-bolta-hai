@@ -37,6 +37,7 @@ VECTOR_DB_CONFIG = {
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
     "chunk_size": 500,
     "chunk_overlap": 50,
+    "vector_db_dir": str(VECTOR_DB_DIR)
 }
 
 # LLM Configuration

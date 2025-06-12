@@ -28,6 +28,7 @@ python-multipart>=0.0.6
 # Utilities
 tqdm>=4.65.0
 pandas>=2.0.0
+rich>=13.0.0  # For beautiful console output
 
 # Additional dependencies
 matplotlib>=3.5.0

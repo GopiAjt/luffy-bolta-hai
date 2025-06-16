@@ -10,7 +10,7 @@ import ffmpeg
 logger = logging.getLogger(__name__)
 
 # Constants
-UPLOADS_DIR = Path("/data/uploads")
+UPLOADS_DIR = Path(__file__).parent.parent.parent / "data" / "uploads"
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {"mp3", "wav"}
 

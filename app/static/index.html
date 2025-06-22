@@ -108,8 +108,50 @@
             display: none;
         }
 
-        #loading {
+        #loading, #subtitleLoading, #videoLoading {
             display: none;
+            margin: 10px 0;
+            color: #666;
+        }
+
+        #videoPreview {
+            margin-top: 15px;
+            max-width: 100%;
+            background-color: #000;
+            border-radius: 5px;
+        }
+
+        #videoOutput {
+            margin-top: 15px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+            display: none;
+        }
+
+        #generateVideoButton {
+            background-color: #e67e22;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin-top: 10px;
+        }
+
+        #generateVideoButton:hover {
+            background-color: #d35400;
+        }
+
+        #generateVideoButton:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+
+        .video-preview {
+            margin-top: 15px;
         }
     </style>
 </head>
@@ -155,6 +197,19 @@
                 <button id="generateSubtitlesButton">Generate Subtitles</button>
                 <div id="subtitleLoading">Generating subtitles...</div>
                 <div id="subtitleOutput"></div>
+            </div>
+        </div>
+
+        <!-- Video Generation Section -->
+        <div class="section">
+            <h2>Generate Video</h2>
+            <div id="videoControls" style="display: none">
+                <button id="generateVideoButton">Generate Video with Subtitles</button>
+                <div id="videoLoading">Generating video... This may take a moment.</div>
+                <div id="videoOutput"></div>
+                <div class="video-preview">
+                    <video id="videoPreview" controls style="display: none"></video>
+                </div>
             </div>
         </div>
     </div>

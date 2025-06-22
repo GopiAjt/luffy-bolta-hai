@@ -17,6 +17,7 @@ if not api_key:
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
+
 def generate_script() -> str:
     """Generate a 30–60s One Piece narration script via Gemini."""
     try:
@@ -38,9 +39,8 @@ def generate_script() -> str:
             "- No camera or stage directions—just the lines spoken by the narrator.\n"
             "- End with a teaser or call to action (e.g., “But that’s not all… What’s your favorite power?”).\n"
             "Assume viewers know One Piece casually but explain terms briefly.\n"
-            "Length: ~90‑120 words."
+            "Length: ~90 words."
         )
-
 
         response = model.generate_content(prompt)
         # Get the first candidate from the response
@@ -51,6 +51,7 @@ def generate_script() -> str:
     except Exception as e:
         logger.error(f"Error generating script: {str(e)}")
         raise
+
 
 if __name__ == "__main__":
     script = generate_script()

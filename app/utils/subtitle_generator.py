@@ -5,9 +5,8 @@ from typing import List, Dict
 import logging
 import tempfile
 from pathlib import Path
-from aeneas.executetask import ExecuteTask
-from aeneas.task import Task
 import nltk
+from pydub import AudioSegment, silence
 
 logger = logging.getLogger(__name__)
 
@@ -68,523 +67,123 @@ class SubtitleGenerator:
             f"Subtitle generator initialized with audio: {self.audio_path}")
         logger.info(f"Script length: {len(script_text)} characters")
 
-    def generate_timestamps(self) -> List[Dict]:
+    def detect_silence_gaps(self, min_silence_len=300, silence_thresh=-40):
         """
-        Generate word-level timestamps using forced alignment.
+        Detect silence gaps in the audio file using pydub.
+        Returns a list of (start, end) tuples for each non-silent segment.
+        """
+        audio = AudioSegment.from_wav(self.audio_path)
+        non_silent_ranges = silence.detect_nonsilent(
+            audio,
+            min_silence_len=min_silence_len,
+            silence_thresh=silence_thresh
+        )
+        # Convert ms to seconds
+        return [(start/1000, end/1000) for start, end in non_silent_ranges]
+
+    def generate_timestamps(self, model_size: str = "small", device: str = "cpu") -> List[Dict]:
+        """
+        Generate word-level timestamps using WhisperX (transcribe + align).
+
+        Args:
+            model_size: Whisper model size (tiny, base, small, medium, large-v2)
+            device: 'cpu' or 'cuda'
 
         Returns:
-            List of dictionaries containing word timestamps
+            List of dicts: [{"word": str, "start": float, "end": float}]
         """
         try:
-            # Create temporary files for input
-            text_file = os.path.join(self.temp_dir, "script.txt")
-            with open(text_file, "w", encoding="utf-8") as f:
-                f.write(self.script_text)
-                logger.info(f"Wrote script text to {text_file}:")
-                logger.info(f"Script content length: {len(self.script_text)}")
-                logger.info(
-                    f"Script content preview: {self.script_text[:100]}...")
-
-            # Configure task with more detailed parameters
-            config_string = (
-                "task_language=eng|"
-                "is_text_type=plain|"
-                "os_task_file_format=json|"
-                "os_task_file_level=3|"  # Maximum verbosity
-                "os_task_file_name=syncmap.json|"
-                "task_adjust_boundary_nonspeech_min=0.5|"
-                "task_adjust_boundary_nonspeech_string=REMOVE|"
-                "task_adjust_boundary_algorithm=percent|"
-                "task_adjust_boundary_percent_value=50"
-            )
-
-            task = Task(config_string=config_string)
-            task.audio_file_path_absolute = os.path.abspath(self.audio_path)
-            task.text_file_path_absolute = os.path.abspath(text_file)
-            task.sync_map_file_path_absolute = os.path.abspath(
-                os.path.join(self.temp_dir, "syncmap.json"))
-
-            # Ensure output directory exists and is writable
-            os.makedirs(os.path.dirname(
-                task.sync_map_file_path_absolute), exist_ok=True)
-
-            # Log task details
-            logger.info(f"Task audio path: {task.audio_file_path_absolute}")
-            logger.info(f"Task text path: {task.text_file_path_absolute}")
-            logger.info(
-                f"Task output path: {task.sync_map_file_path_absolute}")
-            logger.info(f"Temporary directory: {self.temp_dir}")
-
-            # Verify file permissions
-            if not os.access(self.audio_path, os.R_OK):
-                logger.error(f"Audio file not readable: {self.audio_path}")
-                raise PermissionError(
-                    f"Cannot read audio file: {self.audio_path}")
-
-            if not os.access(text_file, os.R_OK):
-                logger.error(f"Text file not readable: {text_file}")
-                raise PermissionError(f"Cannot read text file: {text_file}")
-
-            # Check if files exist before task execution
-            logger.info("Checking file existence before task execution...")
-            for file_path in [self.audio_path, text_file]:
-                if not os.path.exists(file_path):
-                    logger.error(f"File does not exist: {file_path}")
-                    raise FileNotFoundError(
-                        f"Required file not found: {file_path}")
-                logger.info(f"File exists and is readable: {file_path}")
-
-            # Execute the task
-            executor = ExecuteTask(task)
-            logger.info("Starting aeneas task execution...")
-
-            try:
-                # Execute with more detailed logging
-                import logging as pylogging
-                import sys
-
-                # Redirect aeneas output to our logger
-                class AeneasLogger:
-                    def write(self, message):
-                        if message.strip():
-                            logger.info(f"Aeneas output: {message.strip()}")
-
-                    def flush(self):
-                        pass
-
-                # Save original stdout/stderr
-                original_stdout = sys.stdout
-                original_stderr = sys.stderr
-
-                # Redirect stdout/stderr
-                sys.stdout = AeneasLogger()
-                sys.stderr = AeneasLogger()
-
-                # Set up aeneas logging
-                pylogging.basicConfig(level=pylogging.DEBUG)
-                logger.info("Aeneas configuration:")
-
-                # Log configuration using safe attribute access
-                try:
-                    # Try to get the configuration as a string
-                    config_str = str(task.configuration)
-                    logger.info(f"Configuration: {config_str}")
-
-                    # Log individual parameters if they exist
-                    if hasattr(task.configuration, '__getitem__'):
-                        for param in ['task_language', 'is_text_type', 'os_task_file_format']:
-                            try:
-                                logger.info(
-                                    f"{param}: {task.configuration[param]}")
-                            except KeyError:
-                                logger.debug(
-                                    f"Configuration parameter not found: {param}")
-                except Exception as e:
-                    logger.warning(f"Could not log configuration: {str(e)}")
-
-                # Log paths and configuration
-                logger.info(f"Audio path: {task.audio_file_path_absolute}")
-                logger.info(f"Text path: {task.text_file_path_absolute}")
-                logger.info(f"Output path: {task.sync_map_file_path_absolute}")
-                logger.info(f"Temporary directory: {self.temp_dir}")
-
-                # Execute task with detailed error handling
-                try:
-                    # Enable debug output from aeneas
-                    import aeneas.globalfunctions as gf
-                    gf.PRINT_INFO = True
-                    gf.PRINT_WARNING = True
-                    gf.PRINT_ERROR = True
-                    gf.PRINT_DEBUG = True
-
-                    # Set maximum verbosity
-                    executor.verbosity_level = 3
-
-                    # Create a buffer to capture output
-                    from io import StringIO
-                    import sys
-
-                    # Save original stdout/stderr
-                    old_stdout = sys.stdout
-                    old_stderr = sys.stderr
-
-                    # Create string buffers
-                    stdout_buffer = StringIO()
-                    stderr_buffer = StringIO()
-
-                    try:
-                        # Redirect stdout/stderr
-                        sys.stdout = stdout_buffer
-                        sys.stderr = stderr_buffer
-
-                        # Try with default parameters first
-                        logger.info("Executing aeneas task...")
-
-                        # Log task details
-                        logger.info(
-                            f"Task audio path: {task.audio_file_path_absolute}")
-                        logger.info(
-                            f"Task text path: {task.text_file_path_absolute}")
-                        logger.info(
-                            f"Output path: {task.sync_map_file_path_absolute}")
-
-                        # Verify input files exist and are readable
-                        if not os.path.isfile(task.audio_file_path_absolute):
-                            raise FileNotFoundError(
-                                f"Audio file not found: {task.audio_file_path_absolute}")
-                        if not os.path.isfile(task.text_file_path_absolute):
-                            raise FileNotFoundError(
-                                f"Text file not found: {task.text_file_path_absolute}")
-
-                        # Execute with error handling
-                        try:
-                            executor.execute()
-                        except Exception as e:
-                            # Check if output was created despite the exception
-                            if os.path.exists(task.sync_map_file_path_absolute):
-                                logger.warning(
-                                    f"Task raised exception but output file exists: {e}")
-                            else:
-                                raise
-
-                        # Get captured output
-                        stdout_output = stdout_buffer.getvalue()
-                        stderr_output = stderr_buffer.getvalue()
-
-                        if stdout_output:
-                            logger.info("Aeneas stdout:\n" + stdout_output)
-                        if stderr_output:
-                            logger.error("Aeneas stderr:\n" + stderr_output)
-
-                    finally:
-                        # Restore stdout/stderr
-                        sys.stdout = old_stdout
-                        sys.stderr = old_stderr
-
-                    # Define possible output locations
-                    possible_outputs = [
-                        task.sync_map_file_path_absolute,
-                        os.path.join(os.path.dirname(
-                            task.sync_map_file_path_absolute), 'output.json'),
-                        os.path.join(os.path.dirname(
-                            task.sync_map_file_path_absolute), 'output.txt')
-                    ]
-
-                    # Try the CLI fallback if Python API fails
-                    logger.warning("Python API failed, trying CLI fallback...")
-                    if not self._run_aeneas_cli(
-                        task.audio_file_path_absolute,
-                        task.text_file_path_absolute,
-                        task.sync_map_file_path_absolute
-                    ):
-                        logger.warning(
-                            "CLI fallback failed, checking for any output files...")
-
-                    # Check which output file was created
-                    output_found = False
-                    output_path = task.sync_map_file_path_absolute
-
-                    if not os.path.exists(output_path):
-                        # Check other possible output locations
-                        for path in possible_outputs:
-                            if os.path.exists(path):
-                                output_path = path
-                                logger.info(
-                                    f"Found output file at alternative location: {output_path}")
-                                output_found = True
-                                break
-                    else:
-                        output_found = True
-
-                    if not output_found:
-                        raise RuntimeError(
-                            "No output files were generated by aeneas")
-
-                    # Update the sync map file path to the found file
-                    task.sync_map_file_path_absolute = output_path
-                    logger.info(f"Using sync map file: {output_path}")
-
-                    # Log file details
-                    logger.info(
-                        f"Output file: {task.sync_map_file_path_absolute}")
-                    logger.info(
-                        f"File size: {os.path.getsize(task.sync_map_file_path_absolute)} bytes")
-                    logger.info(
-                        f"File permissions: {oct(os.stat(task.sync_map_file_path_absolute).st_mode)[-3:]}")
-
-                except Exception as e:
-                    logger.error(
-                        f"Error during aeneas execution: {str(e)}", exc_info=True)
-
-                    # Log directory contents for debugging
-                    if os.path.exists(self.temp_dir):
-                        logger.error("Temporary directory contents:")
-                        for item in os.listdir(self.temp_dir):
-                            item_path = os.path.join(self.temp_dir, item)
-                            try:
-                                size = os.path.getsize(item_path)
-                                logger.error(f"  {item} ({size} bytes)")
-                                # Only read small text files
-                                if item.endswith(('.txt', '.json', '.log')) and size < 1024*1024:
-                                    try:
-                                        with open(item_path, 'r') as f:
-                                            content = f.read()
-                                            logger.error(
-                                                f"Content of {item}: {content[:500]}")
-                                    except:
-                                        pass
-                            except:
-                                logger.error(f"  {item} (error getting size)")
-
-                    # Restore original stdout/stderr before raising
-                    sys.stdout = original_stdout
-                    sys.stderr = original_stderr
-
-                    raise RuntimeError(
-                        f"Failed to generate subtitle timestamps: {str(e)}")
-
-                # Restore original stdout/stderr on success
-                sys.stdout = original_stdout
-                sys.stderr = original_stderr
-
-                # Check if sync map file exists and validate it
-                if not os.path.exists(task.sync_map_file_path_absolute):
-                    logger.error(
-                        f"Sync map file not found after task execution: {task.sync_map_file_path_absolute}")
-                    logger.error("Directory contents:")
-                    if os.path.exists(self.temp_dir):
-                        for item in os.listdir(self.temp_dir):
-                            logger.error(f"  {item}")
-                        # Check file permissions
-                        if os.path.exists(task.sync_map_file_path_absolute):
-                            logger.error(
-                                f"Sync map file exists but cannot be accessed: {os.access(task.sync_map_file_path_absolute, os.R_OK)}")
-                            logger.error(
-                                f"File permissions: {oct(os.stat(task.sync_map_file_path_absolute).st_mode)[-3:]}")
-
-                    # Check if any other files were created
-                    logger.error("Checking for other output files:")
-                    for file in os.listdir(self.temp_dir):
-                        if file != "resampled.wav" and file != "script.txt":
-                            logger.error(f"Found unexpected file: {file}")
-                            if file.endswith(".json"):
-                                try:
-                                    with open(os.path.join(self.temp_dir, file), 'r') as f:
-                                        content = f.read()
-                                        logger.error(
-                                            f"Content of {file}: {content[:100]}...")
-                                except Exception as e:
-                                    logger.error(
-                                        f"Could not read {file}: {str(e)}")
-
-                    raise FileNotFoundError(
-                        f"Sync map file not found at {task.sync_map_file_path_absolute}")
-
-                # Read and parse the sync map
-                with open(task.sync_map_file_path_absolute, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    logger.info(
-                        f"Sync map file content length: {len(content)}")
-                    # Log first 500 chars
-                    logger.debug(f"Sync map content: {content[:500]}...")
-
-                    try:
-                        # Parse the sync map
-                        sync_map_content = json.loads(content)
-                        logger.info(
-                            f"Successfully parsed sync map: {type(sync_map_content)}")
-
-                        # Log basic structure for debugging
-                        if isinstance(sync_map_content, dict):
-                            logger.info(
-                                f"Sync map keys: {list(sync_map_content.keys())}")
-                            if 'fragments' in sync_map_content:
-                                logger.info(
-                                    f"Found {len(sync_map_content['fragments'])} fragments")
-                                if sync_map_content['fragments']:
-                                    logger.debug(
-                                        f"First fragment: {sync_map_content['fragments'][0]}")
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            f"Failed to parse sync map JSON: {str(e)}")
-                        raise
-
-                    # Log the sync map structure for debugging
-                    logger.info(
-                        f"Successfully parsed sync map with {len(sync_map_content.get('fragments', []))} fragments")
-
-                    # Convert to the expected format
-                    timestamps = []
-                    if 'fragments' in sync_map_content and isinstance(sync_map_content['fragments'], list):
-                        logger.info(
-                            f"Processing {len(sync_map_content['fragments'])} fragments")
-                        for i, fragment in enumerate(sync_map_content['fragments']):
-                            try:
-                                if not isinstance(fragment, dict):
-                                    logger.warning(
-                                        f"Skipping invalid fragment at index {i}: {fragment}")
-                                    continue
-
-                                # Get the text from the fragment
-                                text = ' '.join(fragment.get(
-                                    'lines', [''])).strip()
-                                if not text or text == '---':
-                                    logger.debug(
-                                        f"Skipping empty or separator fragment: {text}")
-                                    continue
-
-                                # Create timestamp entry
-                                timestamp = {
-                                    'word': text,  # Store the full text as word for now
-                                    'start': float(fragment.get('begin', 0)),
-                                    'end': float(fragment.get('end', 0)),
-                                    'text': text  # Also store in text for backward compatibility
-                                }
-
-                                logger.debug(
-                                    f"Added timestamp {i}: {timestamp}")
-                                timestamps.append(timestamp)
-
-                            except (ValueError, TypeError) as e:
-                                logger.error(
-                                    f"Error parsing fragment {i} ({fragment}): {e}")
-                                continue
-
-                        logger.info(
-                            f"Generated {len(timestamps)} valid timestamps")
-                        if timestamps:
-                            logger.info(f"First timestamp: {timestamps[0]}")
-                        else:
-                            logger.warning(
-                                "No valid timestamp fragments found in sync map")
-
-                        # Return the timestamps if we have any
-                        if timestamps:
-                            return timestamps
-
-                        # If we get here, no timestamps were generated
-                        logger.error(
-                            "No valid timestamps could be generated from the sync map")
-                        logger.error(f"Sync map content: {sync_map_content}")
-                        return []
-                    else:
-                        logger.error(
-                            f"Unexpected sync map format: {sync_map_content}")
-                        raise ValueError(
-                            "Invalid sync map format: missing 'fragments' array")
-
-                # Convert sync map to word timestamps
-                timestamps = []
-                for fragment in timestamps:
-                    if fragment["id"] == "fragment_0":
-                        continue
-
-                    # Extract word-level timestamps
-                    for word in fragment["fragments"]:
-                        timestamps.append({
-                            "word": word["text"],
-                            "start": word["begin"],
-                            "end": word["end"]
-                        })
-
-                return timestamps
-
-            except Exception as e:
-                # Capture full traceback for debugging
-                import traceback
-                logger.error(f"Error during task execution: {str(e)}")
-                logger.error(f"Full traceback: {traceback.format_exc()}")
-                logger.error(f"Task configuration: {config_string}")
-                logger.error(f"Temporary directory contents:")
-                if os.path.exists(self.temp_dir):
-                    for item in os.listdir(self.temp_dir):
-                        logger.error(f"  {item}")
-                    # Check file permissions
-                    if os.path.exists(task.sync_map_file_path_absolute):
-                        logger.error(
-                            f"Sync map file exists but cannot be accessed: {os.access(task.sync_map_file_path_absolute, os.R_OK)}")
-                raise
-
-            # Convert sync map to word timestamps
-            timestamps = []
-            try:
-                if not sync_map_content or 'fragments' not in sync_map_content:
-                    logger.error(
-                        f"Invalid sync map format: {sync_map_content}")
-                    return []
-
-                for fragment in sync_map_content['fragments']:
-                    if not isinstance(fragment, dict):
-                        logger.warning(
-                            f"Skipping invalid fragment: {fragment}")
-                        continue
-
-                    try:
-                        word = {
-                            'word': ' '.join(fragment.get('lines', [''])),
-                            'start': float(fragment.get('begin', 0)),
-                            'end': float(fragment.get('end', 0))
-                        }
-                        timestamps.append(word)
-                        logger.debug(f"Added word: {word}")
-                    except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Error processing fragment {fragment}: {e}")
-                        continue
-
-                logger.info(f"Generated {len(timestamps)} word timestamps")
-                if timestamps:
-                    logger.debug(f"First timestamp: {timestamps[0]}")
-
-                return timestamps
-
-            except Exception as e:
-                logger.error(
-                    f"Error processing sync map: {str(e)}", exc_info=True)
-                raise
-
-        except Exception as e:
-            logger.error(f"Error in generate_timestamps: {str(e)}")
-            logger.error(f"Current directory: {os.getcwd()}")
-            logger.error(f"Temporary directory contents:")
-            if os.path.exists(self.temp_dir):
-                for item in os.listdir(self.temp_dir):
-                    logger.error(f"  {item}")
+            import whisperx
+        except ImportError:
+            logger.error(
+                "whisperx is not installed. Please install with 'pip install git+https://github.com/m-bain/whisperx'")
             raise
+
+        logger.info(
+            f"Loading WhisperX model: {model_size} on {device} (compute_type=float32)")
+        model = whisperx.load_model(model_size, device, compute_type="float32")
+        audio = whisperx.load_audio(self.audio_path)
+        logger.info(f"Transcribing audio with WhisperX...")
+        result = model.transcribe(audio)
+        logger.info(
+            f"Transcription done. Performing alignment for word-level timestamps...")
+        model_a, metadata = whisperx.load_align_model(
+            language_code=result["language"], device=device)
+        result = whisperx.align(
+            result["segments"], model_a, metadata, audio, device)
+        logger.info(f"Alignment done. Extracting word-level timestamps...")
+        words = []
+        for segment in result.get("segments", []):
+            for word in segment.get("words", []):
+                words.append({
+                    "word": word["word"],
+                    "start": word["start"],
+                    "end": word["end"]
+                })
+        logger.info(
+            f"Extracted {len(words)} word-level timestamps from WhisperX.")
+        if words:
+            logger.info(f"First word: {words[0]}")
+        return words
 
     def group_words_into_phrases(
         self,
         timestamps: List[Dict],
         min_gap: float = 1.0,
         max_phrase_duration: float = 5.0,
-        max_words: int = 5  # Changed from 8 to 5
+        max_words: int = 5,
+        use_audio_gaps: bool = True,
+        min_silence_len: int = 300,
+        silence_thresh: int = -40
     ) -> List[Dict]:
         """
-        Group words into short, readable phrases by max word count (ignoring sentence boundaries).
+        Hybrid: Group words into phrases using detected silence gaps and max word count.
+        min_silence_len and silence_thresh are now adjustable for optimization.
         """
         if not timestamps:
             return []
-
         logger.info(
-            f"Grouping {len(timestamps)} words into fixed-size phrases (max {max_words} words)...")
-
+            f"Grouping {len(timestamps)} words into phrases (hybrid gap+word)...")
+        gap_ranges = self.detect_silence_gaps(
+            min_silence_len=min_silence_len, silence_thresh=silence_thresh) if use_audio_gaps else []
+        logger.info(
+            f"Detected {len(gap_ranges)} non-silent segments (silence gaps)")
+        if gap_ranges:
+            logger.info(f"First 3 gap ranges: {gap_ranges[:3]}")
         phrases = []
         idx = 0
         n = len(timestamps)
         while idx < n:
-            chunk = timestamps[idx:idx+max_words]
-            if not chunk:
-                break
-            start_time = chunk[0]['start']
-            end_time = chunk[-1]['end']
-            text = ' '.join([w['word'] for w in chunk])
-            phrases.append({
-                "start": start_time,
-                "end": end_time,
-                "text": text
-            })
-            idx += max_words
-        logger.info(f"Created {len(phrases)} fixed-size phrases")
+            phrase_start = timestamps[idx]['start']
+            phrase_end = None
+            for gap_start, gap_end in gap_ranges:
+                if gap_start > phrase_start:
+                    phrase_end = gap_start
+                    break
+            chunk = []
+            chunk_start = idx
+            while idx < n and len(chunk) < max_words:
+                word = timestamps[idx]
+                if phrase_end is not None and word['end'] > phrase_end:
+                    break
+                chunk.append(word)
+                idx += 1
+            if chunk:
+                start_time = chunk[0]['start']
+                end_time = chunk[-1]['end']
+                text = ' '.join([w.get('word', '') for w in chunk])
+                phrases.append({
+                    "start": start_time,
+                    "end": end_time,
+                    "text": text
+                })
+                logger.info(
+                    f"Phrase: {start_time:.2f}-{end_time:.2f}s: '{text}'")
+            else:
+                logger.warning(
+                    f"No chunk formed at idx={idx}, forcing idx increment to prevent infinite loop.")
+                idx += 1
+        logger.info(f"Created {len(phrases)} hybrid phrases")
         if phrases:
             logger.info(f"Sample phrases:")
             for i, p in enumerate(phrases[:3]):
@@ -637,7 +236,7 @@ class SubtitleGenerator:
 
         # Write each phrase as a single Dialogue line, with bold formatting
         last_end = -1
-        for phrase in phrases:
+        for i, phrase in enumerate(phrases):
             start = self.seconds_to_ass_format(phrase['start'])
             end = self.seconds_to_ass_format(phrase['end'])
             # Remove any curly braces, effect tags, or markup
@@ -646,6 +245,8 @@ class SubtitleGenerator:
             text = text.replace('\\N', ' ').replace('\\n', ' ')
             text = text.replace('\n', ' ').replace('\r', ' ')
             text = text.strip()
+            word_count = len(text.split())
+            logger.info(f"Subtitle line {i+1}: {word_count} words: '{text}'")
             # Ensure no overlap or duplicate
             if phrase['start'] < last_end:
                 logger.warning(f"Skipping overlapping phrase: {text}")
@@ -679,50 +280,6 @@ class SubtitleGenerator:
         logger.info(
             f"Added phrase {len(phrase_words)} words: {phrase_start} --> {phrase_end}: {phrase_text[:50]}...")
 
-    def _run_aeneas_cli(self, audio_path: str, text_path: str, output_path: str) -> bool:
-        """Run aeneas as a command line tool for better error diagnostics."""
-        try:
-            import subprocess
-
-            # Create output directory if it doesn't exist
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Build the command
-            cmd = [
-                'python', '-m', 'aeneas.tools.execute_task',
-                audio_path,
-                text_path,
-                'task_language=eng|is_text_type=plain|os_task_file_format=json|os_task_file_level=3',
-                output_path
-            ]
-
-            logger.info(f"Running aeneas CLI: {' '.join(cmd)}")
-
-            # Run the command with output capture
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-
-            # Log the output
-            if result.stdout:
-                logger.info(f"aeneas stdout:\n{result.stdout}")
-            if result.stderr:
-                logger.error(f"aeneas stderr:\n{result.stderr}")
-
-            return os.path.exists(output_path)
-
-        except subprocess.CalledProcessError as e:
-            logger.error(f"aeneas CLI failed with return code {e.returncode}")
-            logger.error(f"stdout: {e.stdout}")
-            logger.error(f"stderr: {e.stderr}")
-            return False
-        except Exception as e:
-            logger.error(f"Error running aeneas CLI: {str(e)}")
-            return False
-
     def __del__(self):
         """Clean up temporary files."""
         if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
@@ -732,5 +289,3 @@ class SubtitleGenerator:
                 logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
             except Exception as e:
                 logger.error(f"Error cleaning up temporary directory: {e}")
-
-    # ... (rest of the code remains the same)

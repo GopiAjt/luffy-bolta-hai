@@ -49,7 +49,7 @@ class VideoGenerator:
         audio_path: str,
         subtitle_path: str,
         output_path: str,
-        resolution: str = '1920x1080',
+        resolution: str = '1080x1920',  # Changed from '1920x1080' to '1080x1920' for 9:16
         color: str = 'green',
         fps: int = 30,
         convert_to_mp4: bool = True

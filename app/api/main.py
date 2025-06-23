@@ -175,8 +175,8 @@ def generate_subtitles():
         ass_path = os.path.join(
             UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
         logger.info(f"Generating ASS file at {ass_path}...")
-        # Pass the original timestamps, not the phrases
-        subtitle_generator.generate_ass_file(timestamps, ass_path)
+        # Pass the grouped phrases, not the word-level timestamps
+        subtitle_generator.generate_ass_file(phrases, ass_path)
 
         # Verify ASS file was created
         # Check if file is too small

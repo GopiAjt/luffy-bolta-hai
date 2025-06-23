@@ -32,7 +32,7 @@ def generate_script() -> str:
         prompt = (
             "You are a creative anime scriptwriter and One Piece expert.\n"
             "Write a concise, high‑energy, 30–60 second script for a YouTube Shorts or Instagram Reel about One Piece.\n"
-            "Topic: Character Power Breakdown\n\n"
+            f"Topic: {topic}\n\n"
             "Requirements:\n"
             "- Pure narration only. Do NOT include any sound effect descriptions, music cues, or parenthetical directions.\n"
             "- Fast‑paced, engaging voice‑over tone.\n"

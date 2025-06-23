@@ -88,8 +88,8 @@ class VideoGenerator:
                 '-preset', 'medium',
                 '-crf', '23',
                 '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac' if not str(
-                    audio_path).lower().endswith('.aac') else 'copy',
+                '-c:a', 'libmp3lame' if not str(
+                    audio_path).lower().endswith('.mp3') else 'copy',
                 '-b:a', '192k',
                 '-shortest',  # Stop encoding when the shortest input ends
                 str(output_path)
@@ -151,7 +151,7 @@ class VideoGenerator:
                 # Constant Rate Factor (lower = better quality, 23 is default)
                 '-crf', '23',
                 '-pix_fmt', 'yuv420p',  # Pixel format for compatibility
-                '-c:a', 'aac',  # Audio codec
+                '-c:a', 'libmp3lame',  # Audio codec
                 '-b:a', '192k',  # Audio bitrate
                 '-movflags', '+faststart',  # Enable streaming
                 output_path

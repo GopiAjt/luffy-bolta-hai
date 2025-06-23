@@ -469,7 +469,7 @@ class SubtitleGenerator:
                         return []
                     else:
                         logger.error(
-                            f"Unexpected sync map format: {sync_map_content.keys() if isinstance(sync_map_content, dict) else 'not a dict'}")
+                            f"Unexpected sync map format: {sync_map_content}")
                         raise ValueError(
                             "Invalid sync map format: missing 'fragments' array")
 
@@ -557,43 +557,34 @@ class SubtitleGenerator:
         timestamps: List[Dict],
         min_gap: float = 1.0,
         max_phrase_duration: float = 5.0,
-        max_words: int = 12
+        max_words: int = 5  # Changed from 8 to 5
     ) -> List[Dict]:
         """
-        Group words into phrases using NLTK sentence tokenization and advanced heuristics.
+        Group words into short, readable phrases by max word count (ignoring sentence boundaries).
         """
         if not timestamps:
             return []
 
-        logger.info(f"Grouping {len(timestamps)} words into phrases (NLTK)...")
+        logger.info(
+            f"Grouping {len(timestamps)} words into fixed-size phrases (max {max_words} words)...")
 
-        # Concatenate all words to a single text for sentence tokenization
-        words = [w['word'] for w in timestamps]
-        full_text = ' '.join(words)
-        sentences = nltk.sent_tokenize(full_text)
-        logger.info(f"NLTK split into {len(sentences)} sentences.")
-
-        # Map each word to its timestamp
-        word_idx = 0
         phrases = []
-        for sent in sentences:
-            sent_words = sent.split()
-            if not sent_words:
-                continue
-            start_idx = word_idx
-            end_idx = word_idx + len(sent_words) - 1
-            # Defensive: don't go out of bounds
-            if end_idx >= len(timestamps):
-                end_idx = len(timestamps) - 1
-            start_time = timestamps[start_idx]['start']
-            end_time = timestamps[end_idx]['end']
+        idx = 0
+        n = len(timestamps)
+        while idx < n:
+            chunk = timestamps[idx:idx+max_words]
+            if not chunk:
+                break
+            start_time = chunk[0]['start']
+            end_time = chunk[-1]['end']
+            text = ' '.join([w['word'] for w in chunk])
             phrases.append({
                 "start": start_time,
                 "end": end_time,
-                "text": sent
+                "text": text
             })
-            word_idx = end_idx + 1
-        logger.info(f"Created {len(phrases)} NLTK-based phrases")
+            idx += max_words
+        logger.info(f"Created {len(phrases)} fixed-size phrases")
         if phrases:
             logger.info(f"Sample phrases:")
             for i, p in enumerate(phrases[:3]):
@@ -608,21 +599,18 @@ class SubtitleGenerator:
         seconds = seconds % 60
         return f"{hours}:{minutes:02d}:{seconds:05.2f}".replace('.', '.')
 
-    def generate_ass_file(self, timestamps: List[Dict], output_path: str, word_by_word: bool = True) -> None:
+    def generate_ass_file(self, phrases: List[Dict], output_path: str) -> None:
         """
-        Generate an ASS subtitle file from timestamps with word-by-word timing.
+        Generate a clean, phrase-based ASS subtitle file (no effects, no karaoke, no formatting).
 
         Args:
-            timestamps: List of word timestamps with start/end times
+            phrases: List of dicts with 'start', 'end', 'text' for each phrase
             output_path: Path to save the ASS file
-            word_by_word: Whether to generate word-by-word karaoke effect
         """
-        logger.info(f"Generating ASS file at {output_path}")
-
-        # Ensure the output directory exists
+        logger.info(f"Generating clean phrase-based ASS file at {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Build header
+        # Strictly use the clean template for header
         header = textwrap.dedent("""
         [Script Info]
         Title: Generated Subtitles
@@ -640,85 +628,39 @@ class SubtitleGenerator:
         
         [Events]
         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-        
         """)
-
-        # Prepare the content to write
         content = [header.strip() + '\n']
 
-        if not timestamps:
-            logger.warning("No timestamps provided for subtitle generation")
+        if not phrases:
+            logger.warning("No phrases provided for subtitle generation")
             return
 
-        if not word_by_word:
-            # Simple phrase-based subtitles
-            for i, ts in enumerate(timestamps):
-                start = self.seconds_to_ass_format(ts['start'])
-                end = self.seconds_to_ass_format(ts['end'])
-                text = ts['word'].replace('{', '\\{').replace('}', '\\}')
-                content.append(
-                    f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\\n")
-        else:
-            # Word-by-word karaoke
-            logger.info(
-                f"Starting word-by-word processing for {len(timestamps)} timestamps")
-            logger.debug(
-                f"Timestamps sample: {json.dumps(timestamps[:3], indent=2) if timestamps else 'No timestamps'}")
+        # Write each phrase as a single Dialogue line, with bold formatting
+        last_end = -1
+        for phrase in phrases:
+            start = self.seconds_to_ass_format(phrase['start'])
+            end = self.seconds_to_ass_format(phrase['end'])
+            # Remove any curly braces, effect tags, or markup
+            text = phrase['text']
+            text = text.replace('{', '').replace('}', '')
+            text = text.replace('\\N', ' ').replace('\\n', ' ')
+            text = text.replace('\n', ' ').replace('\r', ' ')
+            text = text.strip()
+            # Ensure no overlap or duplicate
+            if phrase['start'] < last_end:
+                logger.warning(f"Skipping overlapping phrase: {text}")
+                continue
+            # Add bold override tags
+            text = "{\\b1}" + text + "{\\b0}"
+            content.append(
+                f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+            last_end = phrase['end']
 
-            current_phrase = []
-            phrase_start = None
-
-            for i, word in enumerate(timestamps):
-                word_text = word.get('word', '').strip()
-                if not word_text:
-                    logger.debug(f"Skipping empty word at index {i}")
-                    continue
-
-                if phrase_start is None:
-                    phrase_start = word['start']
-                    logger.debug(f"New phrase started at {phrase_start}s")
-
-                # Add word to current phrase
-                current_phrase.append(word_text)
-
-                # Write karaoke effect for this word
-                start = self.seconds_to_ass_format(word['start'])
-                end = self.seconds_to_ass_format(word['end'])
-                duration = int((word['end'] - word['start'])
-                               * 100)  # centiseconds
-                text = word_text.replace('{', '\\{').replace('}', '\\}')
-
-                # Add word with karaoke effect
-                karaoke_line = f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\kf{duration}}}{text} \\n"
-                logger.debug(f"Adding karaoke line: {karaoke_line.strip()}")
-                content.append(karaoke_line)
-
-                # Check for phrase boundary or end of timestamps
-                is_last_word = (i == len(timestamps) - 1)
-                if not is_last_word:
-                    gap = timestamps[i+1]['start'] - word['end']
-                    is_sentence_end = any(punc in word_text for punc in '.!?')
-
-                    if gap > 0.5 or is_sentence_end:
-                        self._add_phrase_line(
-                            content, current_phrase, phrase_start, word['end'])
-                        current_phrase = []
-                        phrase_start = None
-                elif current_phrase:  # Handle the last phrase
-                    self._add_phrase_line(
-                        content, current_phrase, phrase_start, word['end'])
-
-        # Write all content to file
         try:
             with open(output_path, 'w', encoding='utf-8-sig') as f:
                 f.writelines(content)
                 logger.info(
                     f"Successfully wrote {len(content)} lines to {output_path}")
-                logger.debug(
-                    f"First few lines of content:\n{''.join(content[:5])}...")
-            logger.info(
-                f"Successfully generated word-by-word ASS file at {output_path}")
-
         except Exception as e:
             logger.error(f"Error writing ASS file: {e}")
             raise

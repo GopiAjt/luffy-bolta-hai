@@ -180,8 +180,18 @@ class SubtitleGenerator:
                 logger.info(
                     f"Phrase: {start_time:.2f}-{end_time:.2f}s: '{text}'")
             else:
+                # Instead of skipping, forcibly add the current word as a single-word phrase
+                word = timestamps[idx]
+                start_time = word['start']
+                end_time = word['end']
+                text = word.get('word', '')
+                phrases.append({
+                    "start": start_time,
+                    "end": end_time,
+                    "text": text
+                })
                 logger.warning(
-                    f"No chunk formed at idx={idx}, forcing idx increment to prevent infinite loop.")
+                    f"No chunk formed at idx={idx}, forcibly adding single word phrase: '{text}'")
                 idx += 1
         logger.info(f"Created {len(phrases)} hybrid phrases")
         if phrases:

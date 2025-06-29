@@ -235,7 +235,6 @@ def download_images_for_slides(json_path, out_dir):
             logger.warning(f"No image_search_query for slide {idx+1}")
             continue
         img_url_16_9 = None
-        img_url_9_16 = None
         try:
             # Always add One Piece and Luffy to the search query for relevance (if not already present)
             if "one piece" not in search_query.lower():
@@ -243,27 +242,17 @@ def download_images_for_slides(json_path, out_dir):
             items = google_image_search(search_query, num_results=5)
             logger.info(
                 f"[Slide {idx+1}] Google image search returned {len(items)} results.")
-            # Pick the image with aspect ratio closest to 16:9 (1.77) and 9:16 (0.56)
-            best_item_16_9 = None
-            best_score_16_9 = float('inf')
-            best_item_9_16 = None
-            best_score_9_16 = float('inf')
+            # Only keep images with aspect ratio close to 16:9 (within 10%)
+            filtered_items_16_9 = []
             for item in items:
                 url = item.get('link')
                 aspect = get_image_aspect_ratio(url)
-                score_16_9 = abs(aspect - 16/9)
-                score_9_16 = abs(aspect - 9/16)
-                logger.info(
-                    f"[Slide {idx+1}] URL: {url}, aspect: {aspect:.2f}, score_16_9: {score_16_9:.2f}, score_9_16: {score_9_16:.2f}")
-                if aspect > 0:
-                    if score_16_9 < best_score_16_9:
-                        best_score_16_9 = score_16_9
-                        best_item_16_9 = item
-                    if score_9_16 < best_score_9_16:
-                        best_score_9_16 = score_9_16
-                        best_item_9_16 = item
-            # Save 16:9 image
-            if best_item_16_9:
+                if aspect > 0 and abs(aspect - 16/9) / (16/9) < 0.10:
+                    filtered_items_16_9.append((item, aspect))
+            if filtered_items_16_9:
+                # Pick the closest to 16:9
+                best_item_16_9, _ = min(
+                    filtered_items_16_9, key=lambda x: abs(x[1] - 16/9))
                 img_url_16_9 = best_item_16_9['link']
                 ext = os.path.splitext(img_url_16_9)[-1].split("?")[0]
                 if not ext or len(ext) > 5:
@@ -275,35 +264,14 @@ def download_images_for_slides(json_path, out_dir):
                 download_image(img_url_16_9, save_path_16_9)
                 print(f"Downloaded (16:9): {save_path_16_9}")
                 logger.info(f"Downloaded (16:9): {save_path_16_9}")
-                time.sleep(1)  # Be nice to the API
+                time.sleep(1)
             else:
                 print(f"No suitable 16:9 image found for: {search_query}")
                 logger.warning(
                     f"No suitable 16:9 image found for: {search_query}")
-            # Save 9:16 image
-            if best_item_9_16:
-                img_url_9_16 = best_item_9_16['link']
-                ext = os.path.splitext(img_url_9_16)[-1].split("?")[0]
-                if not ext or len(ext) > 5:
-                    ext = ".jpg"
-                save_path_9_16 = os.path.join(
-                    out_dir, f"slide_{idx+1}_9x16{ext}")
-                logger.info(
-                    f"[Slide {idx+1}] Downloading 9:16 to: {save_path_9_16}")
-                download_image(img_url_9_16, save_path_9_16)
-                print(f"Downloaded (9:16): {save_path_9_16}")
-                logger.info(f"Downloaded (9:16): {save_path_9_16}")
-                time.sleep(1)  # Be nice to the API
-            else:
-                print(f"No suitable 9:16 image found for: {search_query}")
-                logger.warning(
-                    f"No suitable 9:16 image found for: {search_query}")
         except Exception as e:
             print(f"Failed to download for slide {idx+1}: {e}")
             logger.error(f"Failed to download for slide {idx+1}: {e}")
             if img_url_16_9:
                 print(f"URL tried (16:9): {img_url_16_9}")
                 logger.error(f"URL tried (16:9): {img_url_16_9}")
-            if img_url_9_16:
-                print(f"URL tried (9:16): {img_url_9_16}")
-                logger.error(f"URL tried (9:16): {img_url_9_16}")

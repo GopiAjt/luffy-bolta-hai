@@ -315,4 +315,41 @@ document.addEventListener('DOMContentLoaded', function () {
             generateVideoButton.disabled = false;
         }
     }
+
+    // Image Slides Generation (no input box, use latest .ass file in uploads)
+    const generateImageSlidesButton = document.getElementById('generateImageSlidesButton');
+    const imageSlidesStatus = document.getElementById('imageSlidesStatus');
+    const imageSlidesOutput = document.getElementById('imageSlidesOutput');
+
+    if (generateImageSlidesButton) {
+        generateImageSlidesButton.addEventListener('click', async function () {
+            imageSlidesStatus.textContent = 'Finding latest .ass file...';
+            imageSlidesOutput.style.display = 'none';
+            try {
+                // Fetch the latest .ass file from the uploads folder (backend endpoint needed)
+                const res = await fetch('/api/v1/latest-ass-file');
+                const data = await res.json();
+                if (!data.path) {
+                    imageSlidesStatus.textContent = 'No .ass file found in uploads.';
+                    return;
+                }
+                imageSlidesStatus.textContent = 'Generating image slides...';
+                const response = await fetch('/api/v1/generate-image-slides', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ass_path: data.path })
+                });
+                const slidesData = await response.json();
+                if (slidesData.status === 'success') {
+                    imageSlidesStatus.textContent = 'Image slides generated!';
+                    imageSlidesOutput.textContent = JSON.stringify(slidesData.slides, null, 2);
+                    imageSlidesOutput.style.display = 'block';
+                } else {
+                    imageSlidesStatus.textContent = 'Error: ' + (slidesData.message || 'Unknown error');
+                }
+            } catch (err) {
+                imageSlidesStatus.textContent = 'Error: ' + err.message;
+            }
+        });
+    }
 });

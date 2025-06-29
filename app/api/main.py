@@ -9,8 +9,10 @@ from app.utils.script_generator import generate_script
 from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir, UPLOADS_DIR
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.video_generator import VideoGenerator
+from app.utils.image_slides import generate_image_slides
 import re
 import json
+import glob
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -227,6 +229,37 @@ def generate_subtitles():
         }), 500
 
 
+@app.route('/api/v1/generate-image-slides', methods=['POST'])
+def generate_image_slides_endpoint():
+    """
+    Generate image slide prompts from an ASS subtitle file.
+    Request JSON:
+    {
+        "ass_path": "relative/or/absolute/path/to/file.ass",
+        "out_path": "relative/or/absolute/path/to/output.json" (optional)
+    }
+    """
+    try:
+        data = request.json
+        ass_path = data.get('ass_path')
+        out_path = data.get('out_path')
+        if not ass_path:
+            return jsonify({'error': 'ass_path is required'}), 400
+        if not out_path:
+            out_path = ass_path.rsplit('.', 1)[0] + '.image_slides.json'
+        result_path = generate_image_slides(ass_path, out_path)
+        with open(result_path, 'r', encoding='utf-8') as f:
+            slides = json.load(f)
+        return jsonify({
+            'status': 'success',
+            'slides': slides,
+            'output_path': result_path
+        })
+    except Exception as e:
+        logger.error(f"Error in generate_image_slides_endpoint: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @app.route("/api/v1/health")
 def health_check():
     """
@@ -422,6 +455,22 @@ def generate_video():
         return jsonify({
             'error': str(e)
         }), 500
+
+
+@app.route('/api/v1/latest-ass-file', methods=['GET'])
+def get_latest_ass_file():
+    """
+    Returns the path to the latest .ass file in data/uploads.
+    """
+    try:
+        ass_files = glob.glob('data/uploads/*.ass')
+        if not ass_files:
+            return jsonify({'path': None})
+        latest_file = max(ass_files, key=os.path.getmtime)
+        return jsonify({'path': latest_file})
+    except Exception as e:
+        logger.error(f"Error finding latest .ass file: {str(e)}")
+        return jsonify({'path': None, 'error': str(e)}), 500
 
 
 if __name__ == "__main__":

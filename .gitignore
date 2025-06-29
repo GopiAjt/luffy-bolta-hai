@@ -43,6 +43,8 @@ credentials/*
 !credentials/.gitkeep
 data/uploads/*
 !data/uploads/.gitkeep
+app/output/image_slides/*
+!app/output/image_slides/.gitkeep
 
 # Logs
 logs/

@@ -6,9 +6,17 @@ import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 import logging
+import time
+import shutil
 
 # Set up logging
 logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(levelname)s:%(name)s:%(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 # Load environment variables from .env
 load_dotenv()
@@ -109,7 +117,7 @@ def filter_irrelevant_summaries(slides):
     return filtered
 
 
-def generate_gemini_image_slides(ass_path: str, out_path: str) -> str:
+def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = None) -> str:
     # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
     groups = group_dialogues(dialogues)
@@ -120,13 +128,13 @@ def generate_gemini_image_slides(ass_path: str, out_path: str) -> str:
             f"[{group['start']} - {group['end']}] {group['text']}")
     all_segments = "\n".join(prompt_segments)
     prompt = (
-        "You are an expert video content designer. Your task is to map subtitle segments to suggested background image descriptions, structured in JSON.\n"
+        "You are an expert video content designer. Your task is to map subtitle segments to suggested Google image search queries, structured in JSON.\n"
         f"Here are the grouped subtitle segments for a short video:\n{all_segments}\n\n"
-        "Generate a JSON array where each object has:\n- start_time (string, e.g. '0:00:00')\n- end_time\n- summary (short subtitle text)\n- image_description (concise prompt for a slide background image)\n\n"
+        "Generate a JSON array where each object has:\n- start_time (string, e.g. '0:00:00')\n- end_time\n- summary (short subtitle text)\n- image_search_query (a concise, highly relevant Google image search string for a One Piece slide, including character names, powers, and the term 'One Piece')\n\n"
         "Only create a new object if the segment contains meaningful, content-rich, or One Piece-specific narration.\n"
-        "Do NOT create a new object for generic, transition, or filler lines (e.g., 'get this', 'trick question', 'but here\'s the question', 'it\'s both', 'wait', 'and', 'so', 'then', 'but that\'s not all', or any line with less than 4 words or that does not mention a One Piece concept or character).\n"
+        "Do NOT create a new object for generic, transition, or filler lines (e.g., 'get this', 'trick question', 'but here's the question', 'it's both', 'wait', 'and', 'so', 'then', 'but that's not all', or any line with less than 4 words or that does not mention a One Piece concept or character).\n"
         "Instead, extend the previous object's end_time to cover these lines.\n"
-        "Use the exact schema below.\n\nSchema:\n[\n  {\n    \"start_time\": \"string\",\n    \"end_time\": \"string\",\n    \"summary\": \"string\",\n    \"image_description\": \"string\"\n  }\n]"
+        "Use the exact schema below.\n\nSchema:\n[\n  {\n    \"start_time\": \"string\",\n    \"end_time\": \"string\",\n    \"summary\": \"string\",\n    \"image_search_query\": \"string\"\n  }\n]"
     )
     try:
         response = model.generate_content(prompt)
@@ -154,11 +162,148 @@ def generate_gemini_image_slides(ass_path: str, out_path: str) -> str:
         raise
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(slides, f, indent=2)
+    # Automatically download images if image_dir is provided
+    if image_dir:
+        download_images_for_slides(out_path, image_dir)
     return out_path
 
 
-def generate_image_slides(ass_path: str, out_path: str) -> str:
+def generate_image_slides(ass_path: str, out_path: str, image_dir: str = None) -> str:
     """
     Backward-compatible alias for generate_gemini_image_slides.
     """
-    return generate_gemini_image_slides(ass_path, out_path)
+    return generate_gemini_image_slides(ass_path, out_path, image_dir)
+
+
+def google_image_search(query, api_key=None, cse_id=None, num_results=10):
+    api_key = api_key or os.getenv("GOOGLE_API_KEY")
+    cse_id = cse_id or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "q": query,
+        "cx": cse_id,
+        "key": api_key,
+        "searchType": "image",
+        "num": num_results,
+        "safe": "active"
+    }
+    resp = requests.get(url, params=params)
+    resp.raise_for_status()
+    results = resp.json()
+    if "items" in results and results["items"]:
+        return results["items"]
+    return []
+
+
+def get_image_aspect_ratio(url):
+    try:
+        from PIL import Image
+        from io import BytesIO
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        img = Image.open(BytesIO(resp.content))
+        width, height = img.size
+        return width / height if height else 0
+    except Exception as e:
+        logger.warning(f"Failed to get aspect ratio for {url}: {e}")
+        return 0
+
+
+def download_image(url, save_path):
+    resp = requests.get(url, stream=True, timeout=10)
+    resp.raise_for_status()
+    with open(save_path, "wb") as f:
+        for chunk in resp.iter_content(1024):
+            f.write(chunk)
+
+
+def download_images_for_slides(json_path, out_dir):
+    # Clear the output directory before downloading new images
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"Downloading images to {out_dir} from {json_path}")
+    logger.info(f"Downloading images to {out_dir} from {json_path}")
+    with open(json_path, "r", encoding="utf-8") as f:
+        slides = json.load(f)
+    for idx, slide in enumerate(slides):
+        # Use the new image_search_query field from Gemini
+        search_query = slide.get("image_search_query")
+        logger.info(f"[Slide {idx+1}] Image search query: {search_query}")
+        if not search_query:
+            print(f"No image_search_query for slide {idx+1}")
+            logger.warning(f"No image_search_query for slide {idx+1}")
+            continue
+        img_url_16_9 = None
+        img_url_9_16 = None
+        try:
+            # Always add One Piece and Luffy to the search query for relevance (if not already present)
+            if "one piece" not in search_query.lower():
+                search_query = f"{search_query} One Piece Luffy"
+            items = google_image_search(search_query, num_results=5)
+            logger.info(
+                f"[Slide {idx+1}] Google image search returned {len(items)} results.")
+            # Pick the image with aspect ratio closest to 16:9 (1.77) and 9:16 (0.56)
+            best_item_16_9 = None
+            best_score_16_9 = float('inf')
+            best_item_9_16 = None
+            best_score_9_16 = float('inf')
+            for item in items:
+                url = item.get('link')
+                aspect = get_image_aspect_ratio(url)
+                score_16_9 = abs(aspect - 16/9)
+                score_9_16 = abs(aspect - 9/16)
+                logger.info(
+                    f"[Slide {idx+1}] URL: {url}, aspect: {aspect:.2f}, score_16_9: {score_16_9:.2f}, score_9_16: {score_9_16:.2f}")
+                if aspect > 0:
+                    if score_16_9 < best_score_16_9:
+                        best_score_16_9 = score_16_9
+                        best_item_16_9 = item
+                    if score_9_16 < best_score_9_16:
+                        best_score_9_16 = score_9_16
+                        best_item_9_16 = item
+            # Save 16:9 image
+            if best_item_16_9:
+                img_url_16_9 = best_item_16_9['link']
+                ext = os.path.splitext(img_url_16_9)[-1].split("?")[0]
+                if not ext or len(ext) > 5:
+                    ext = ".jpg"
+                save_path_16_9 = os.path.join(
+                    out_dir, f"slide_{idx+1}_16x9{ext}")
+                logger.info(
+                    f"[Slide {idx+1}] Downloading 16:9 to: {save_path_16_9}")
+                download_image(img_url_16_9, save_path_16_9)
+                print(f"Downloaded (16:9): {save_path_16_9}")
+                logger.info(f"Downloaded (16:9): {save_path_16_9}")
+                time.sleep(1)  # Be nice to the API
+            else:
+                print(f"No suitable 16:9 image found for: {search_query}")
+                logger.warning(
+                    f"No suitable 16:9 image found for: {search_query}")
+            # Save 9:16 image
+            if best_item_9_16:
+                img_url_9_16 = best_item_9_16['link']
+                ext = os.path.splitext(img_url_9_16)[-1].split("?")[0]
+                if not ext or len(ext) > 5:
+                    ext = ".jpg"
+                save_path_9_16 = os.path.join(
+                    out_dir, f"slide_{idx+1}_9x16{ext}")
+                logger.info(
+                    f"[Slide {idx+1}] Downloading 9:16 to: {save_path_9_16}")
+                download_image(img_url_9_16, save_path_9_16)
+                print(f"Downloaded (9:16): {save_path_9_16}")
+                logger.info(f"Downloaded (9:16): {save_path_9_16}")
+                time.sleep(1)  # Be nice to the API
+            else:
+                print(f"No suitable 9:16 image found for: {search_query}")
+                logger.warning(
+                    f"No suitable 9:16 image found for: {search_query}")
+        except Exception as e:
+            print(f"Failed to download for slide {idx+1}: {e}")
+            logger.error(f"Failed to download for slide {idx+1}: {e}")
+            if img_url_16_9:
+                print(f"URL tried (16:9): {img_url_16_9}")
+                logger.error(f"URL tried (16:9): {img_url_16_9}")
+            if img_url_9_16:
+                print(f"URL tried (9:16): {img_url_9_16}")
+                logger.error(f"URL tried (9:16): {img_url_9_16}")

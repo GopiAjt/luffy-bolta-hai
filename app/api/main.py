@@ -243,11 +243,13 @@ def generate_image_slides_endpoint():
         data = request.json
         ass_path = data.get('ass_path')
         out_path = data.get('out_path')
+        image_dir = "app/output/image_slides"
         if not ass_path:
             return jsonify({'error': 'ass_path is required'}), 400
         if not out_path:
             out_path = ass_path.rsplit('.', 1)[0] + '.image_slides.json'
-        result_path = generate_image_slides(ass_path, out_path)
+        result_path = generate_image_slides(
+            ass_path, out_path, image_dir=image_dir)
         with open(result_path, 'r', encoding='utf-8') as f:
             slides = json.load(f)
         return jsonify({

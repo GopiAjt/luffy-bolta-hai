@@ -266,9 +266,25 @@ def download_images_for_slides(json_path, out_dir):
                 logger.info(f"Downloaded (16:9): {save_path_16_9}")
                 time.sleep(1)
             else:
-                print(f"No suitable 16:9 image found for: {search_query}")
-                logger.warning(
-                    f"No suitable 16:9 image found for: {search_query}")
+                # If no suitable 16:9 image, save the first available image (any aspect)
+                if items:
+                    fallback_item = items[0]
+                    img_url_fallback = fallback_item['link']
+                    ext = os.path.splitext(img_url_fallback)[-1].split("?")[0]
+                    if not ext or len(ext) > 5:
+                        ext = ".jpg"
+                    save_path_fallback = os.path.join(
+                        out_dir, f"slide_{idx+1}_16x9{ext}")
+                    logger.info(
+                        f"[Slide {idx+1}] Downloading fallback to: {save_path_fallback}")
+                    download_image(img_url_fallback, save_path_fallback)
+                    print(f"Downloaded (fallback): {save_path_fallback}")
+                    logger.info(f"Downloaded (fallback): {save_path_fallback}")
+                    time.sleep(1)
+                else:
+                    print(f"No suitable 16:9 image found for: {search_query}")
+                    logger.warning(
+                        f"No suitable 16:9 image found for: {search_query}")
         except Exception as e:
             print(f"Failed to download for slide {idx+1}: {e}")
             logger.error(f"Failed to download for slide {idx+1}: {e}")

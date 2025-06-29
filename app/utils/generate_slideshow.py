@@ -19,11 +19,11 @@ def main(json_path, image_dir, output_path, crossfade=0.5, resolution=(576, 1024
         duration = end - start
         img_path = os.path.join(image_dir, f"slide_{idx+1}_9x16.jpg")
         if not os.path.exists(img_path):
-            # Try all common image extensions
+            # Try all common image extensions for 16x9 images
             img_path = None
             for ext in ["jpg", "png", "jpeg"]:
                 candidate = os.path.join(
-                    image_dir, f"slide_{idx+1}_9x16.{ext}")
+                    image_dir, f"slide_{idx+1}_16x9.{ext}")
                 if os.path.exists(candidate):
                     img_path = candidate
                     break
@@ -51,33 +51,16 @@ def main(json_path, image_dir, output_path, crossfade=0.5, resolution=(576, 1024
         elif any(word in summary for word in ["pause", "dramatic", "intro", "outro", "end", "start"]):
             use_ken_burns = False
             use_fade = True
-        # --- CROP TO 16:9, THEN ZOOM TO 9:16 AND SLIDE ---
+        # --- ZOOM TO 9:16 AND SLIDE ---
         from moviepy import vfx
-        crop = vfx.Crop
         # 1. Load image
         img_clip = ImageClip(img_path, duration=duration)
-        # 2. Crop to center 16:9 (only if image is large enough)
+        # 2. Do NOT crop to 16:9, just use the original image
         w, h = img_clip.size
-        aspect_16_9 = 16 / 9
-        if w / h > aspect_16_9 and h >= int(w / aspect_16_9):
-            crop_h = h
-            crop_w = int(h * aspect_16_9)
-        elif w / h < aspect_16_9 and w >= int(h * aspect_16_9):
-            crop_w = w
-            crop_h = int(w / aspect_16_9)
-        else:
-            # Image is too small to crop to 16:9, skip cropping
-            crop_w, crop_h = w, h
-        x1 = int((w - crop_w) / 2)
-        y1 = int((h - crop_h) / 2)
-        if crop_w != w or crop_h != h:
-            img_clip = img_clip.with_effects([
-                vfx.Crop(x1=x1, y1=y1, x2=x1+crop_w, y2=y1+crop_h)
-            ])
-        # 3. Resize to 9:16 (vertical)
-        img_clip = img_clip.with_effects([vfx.Resize(resolution)])
-        # 4. Slide horizontally over time (MoviePy v2: use with_effects and vfx.Scroll)
+        # 3. Do NOT resize to 9:16 (vertical), just use the original image
+        # 4. Slide horizontally over time
         direction = 1 if idx % 2 == 0 else -1
+        # Center the image vertically in the frame using CompositeVideoClip
         img_clip = img_clip.with_effects([
             vfx.Scroll(
                 x_speed=direction * (resolution[0] * 0.4 / duration),
@@ -90,7 +73,10 @@ def main(json_path, image_dir, output_path, crossfade=0.5, resolution=(576, 1024
             vfx.FadeIn(0.5),
             vfx.FadeOut(0.5)
         ])
-        final_clip = CompositeVideoClip([img_clip], size=resolution)
+        # Place the image at the center using the bg_color and transparent background trick
+        # This avoids tuple errors and centers the image in the frame
+        final_clip = CompositeVideoClip(
+            [img_clip], size=resolution, bg_color=(0, 0, 0))
         clips.append(final_clip)
     if not clips:
         print("No clips to concatenate.")

@@ -208,36 +208,45 @@ class SubtitleGenerator:
         seconds = seconds % 60
         return f"{hours}:{minutes:02d}:{seconds:05.2f}".replace('.', '.')
 
-    def generate_ass_file(self, phrases: List[Dict], output_path: str) -> None:
+    def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920') -> None:
         """
         Generate a clean, phrase-based ASS subtitle file (no effects, no karaoke, no formatting).
 
         Args:
             phrases: List of dicts with 'start', 'end', 'text' for each phrase
             output_path: Path to save the ASS file
+            resolution: Video resolution as 'WIDTHxHEIGHT' (default: '1080x1920')
         """
         logger.info(f"Generating clean phrase-based ASS file at {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
+        # Parse resolution
+        try:
+            res_x, res_y = map(int, resolution.lower().split('x'))
+        except Exception:
+            logger.warning(
+                f"Invalid resolution '{resolution}', defaulting to 1080x1920")
+            res_x, res_y = 1080, 1920
+
         # Strictly use the clean template for header
-        header = textwrap.dedent("""
-        [Script Info]
-        Title: Generated Subtitles
-        ScriptType: v4.00+
-        
-        PlayResX: 1920
-        PlayResY: 1080
-        WrapStyle: 0
-        ScaledBorderAndShadow: yes
-        YCbCr Matrix: TV.601
-        
-        [V4+ Styles]
-        Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-        Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,30,30,30,1
-        
-        [Events]
-        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-        """)
+        header = textwrap.dedent(f"""
+[Script Info]
+Title: Generated Subtitles
+ScriptType: v4.00+
+
+PlayResX: {res_x}
+PlayResY: {res_y}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.601
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,1,0,0,100,100,0,0,1,2,0,5,30,30,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+""")
         content = [header.strip() + '\n']
 
         if not phrases:
@@ -261,8 +270,8 @@ class SubtitleGenerator:
             if phrase['start'] < last_end:
                 logger.warning(f"Skipping overlapping phrase: {text}")
                 continue
-            # Add bold override tags
-            text = "{\\b1}" + text + "{\\b0}"
+            # Add bold override tags and force middle alignment
+            text = "{\\an5}{\\b1}" + text + "{\\b0}"
             content.append(
                 f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
             last_end = phrase['end']

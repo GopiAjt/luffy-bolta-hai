@@ -41,6 +41,8 @@ credentials/*
 !data/processed/.gitkeep
 !data/analysis/.gitkeep
 !credentials/.gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
 
 # Logs
 logs/
@@ -59,4 +61,4 @@ logs/
 
 # Google Cloud credentials
 google_cloud_credentials.json
-*credentials*.json 
+*credentials*.json

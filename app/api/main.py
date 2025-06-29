@@ -10,6 +10,7 @@ from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.video_generator import VideoGenerator
 import re
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -175,23 +176,47 @@ def generate_subtitles():
         ass_path = os.path.join(
             UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
         logger.info(f"Generating ASS file at {ass_path}...")
-        # Pass the grouped phrases, not the word-level timestamps
-        subtitle_generator.generate_ass_file(phrases, ass_path)
+        # Use the same resolution as the video generator
+        resolution = '1080x1920'  # Update this if your video resolution is dynamic
+        subtitle_generator.generate_ass_file(
+            phrases, ass_path, resolution=resolution)
 
         # Verify ASS file was created
-        # Check if file is too small
         if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
             logger.error(f"ASS file was not generated properly at {ass_path}")
             return jsonify({
                 'error': 'Failed to generate subtitles: ASS file not generated correctly'
             }), 500
 
+        # --- Expression Mapping Integration ---
+        try:
+            from app.utils.expression_mapper import gemini_expression_mapping_from_ass, parse_ass_file
+            gemini_api_key = os.environ.get('GEMINI_API_KEY')
+            expr_json_path = ass_path.rsplit('.', 1)[0] + '.expressions.json'
+            if gemini_api_key:
+                logger.info("Running Gemini-based expression mapping...")
+                expressions = gemini_expression_mapping_from_ass(
+                    ass_path, gemini_api_key)
+            else:
+                logger.info(
+                    "No Gemini API key found, using rule-based expression mapping...")
+                expressions = parse_ass_file(ass_path)
+            with open(expr_json_path, 'w', encoding='utf-8') as f:
+                json.dump(expressions, f, indent=2, ensure_ascii=False)
+            logger.info(f"Expression mapping written to {expr_json_path}")
+        except Exception as e:
+            logger.error(f"Expression mapping failed: {e}")
+            expr_json_path = None
+            expressions = None
+
         return jsonify({
             'status': 'success',
             'message': 'Subtitles generated successfully',
             'output': {
                 'ass_file': os.path.basename(ass_path),
-                'phrases': phrases
+                'phrases': phrases,
+                'expressions_file': os.path.basename(expr_json_path) if expr_json_path else None,
+                'expressions': expressions
             }
         })
 
@@ -295,7 +320,7 @@ def preview_file(filename):
 @app.route('/api/v1/generate-video', methods=['POST'])
 def generate_video():
     """
-    Generate a video with audio and subtitles on a colored background.
+    Generate a video with audio, subtitles, and (optionally) facial expression overlays.
 
     Request:
     {
@@ -318,6 +343,9 @@ def generate_video():
         # Get file paths
         audio_path = os.path.join(UPLOADS_DIR, audio_id)
         subtitle_path = os.path.join(UPLOADS_DIR, subtitle_id)
+        base_name = os.path.splitext(audio_id)[0]
+        expr_json_path = os.path.join(
+            UPLOADS_DIR, f"{base_name}.expressions.json")
 
         # Verify files exist
         if not os.path.exists(audio_path):
@@ -326,18 +354,50 @@ def generate_video():
             return jsonify({'error': f'Subtitle file not found: {subtitle_id}'}), 404
 
         # Generate output path with .mkv extension for better subtitle support
-        output_filename = f"{os.path.splitext(audio_id)[0]}.mkv"
+        output_filename = f"{base_name}.mkv"
         output_path = os.path.join(UPLOADS_DIR, output_filename)
 
-        # Generate video (will be converted to MP4 automatically)
         video_generator = VideoGenerator()
-        video_path = video_generator.generate_video(
-            audio_path=audio_path,
-            subtitle_path=subtitle_path,
-            output_path=output_path,
-            color=background_color,
-            convert_to_mp4=True  # Convert to MP4 by default
-        )
+        expr_img_dir = os.path.join(os.path.dirname(
+            __file__), '../static/expressions')
+
+        # If expressions file exists, use generate_video_with_expressions
+        if os.path.exists(expr_json_path):
+            # Patch expressions file to fallback to 'neutral' if image is missing
+            try:
+                with open(expr_json_path, 'r', encoding='utf-8') as f:
+                    expressions = json.load(f)
+                available_imgs = {os.path.splitext(f)[0] for f in os.listdir(
+                    expr_img_dir) if f.endswith('.png')}
+                for expr in expressions:
+                    label = expr['expression'].lower()
+                    if label not in available_imgs:
+                        expr['expression'] = 'neutral'
+                # Save patched expressions to a temp file (or overwrite)
+                with open(expr_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(expressions, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"Failed to patch expressions file: {e}")
+            video_path = video_generator.generate_video_with_expressions(
+                audio_path=audio_path,
+                subtitle_path=subtitle_path,
+                expressions_path=expr_json_path,
+                output_path=output_path,
+                color=background_color,
+                expr_img_dir=expr_img_dir,
+                convert_to_mp4=True
+            )
+            used_expressions = True
+        else:
+            # Fallback to standard video generation
+            video_path = video_generator.generate_video(
+                audio_path=audio_path,
+                subtitle_path=subtitle_path,
+                output_path=output_path,
+                color=background_color,
+                convert_to_mp4=True
+            )
+            used_expressions = False
 
         # Generate download URL
         video_filename = os.path.basename(video_path)
@@ -353,7 +413,8 @@ def generate_video():
             'video_file': video_filename,
             'download_url': video_url,
             'format': 'mp4' if is_mp4 else 'mkv',
-            'is_compatible': is_mp4  # Flag for frontend to know if it's compatible
+            'is_compatible': is_mp4,  # Flag for frontend to know if it's compatible
+            'used_expressions': used_expressions
         })
 
     except Exception as e:

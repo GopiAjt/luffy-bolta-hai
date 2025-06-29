@@ -1,7 +1,6 @@
 import os
 import json
-from moviepy.editor import ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip
-from moviepy.video.fx.all import fadein, fadeout
+from moviepy import ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip, vfx
 
 
 def parse_time(t):
@@ -20,30 +19,57 @@ def main(json_path, image_dir, output_path, crossfade=0.5, resolution=(576, 1024
         duration = end - start
         img_path = os.path.join(image_dir, f"slide_{idx+1}_9x16.jpg")
         if not os.path.exists(img_path):
-            # Try png fallback
-            img_path = os.path.join(image_dir, f"slide_{idx+1}_9x16.png")
-            if not os.path.exists(img_path):
+            # Try all common image extensions
+            img_path = None
+            for ext in ["jpg", "png", "jpeg"]:
+                candidate = os.path.join(
+                    image_dir, f"slide_{idx+1}_9x16.{ext}")
+                if os.path.exists(candidate):
+                    img_path = candidate
+                    break
+            if not img_path:
                 print(f"Image not found for slide {idx+1}, skipping.")
                 continue
-        img_clip = ImageClip(img_path).set_duration(
-            duration).resize(newsize=resolution)
-        # Ken Burns effect: slow zoom in
-        img_clip = img_clip.fx(lambda c: c.resize(
-            lambda t: 1 + 0.05 * t / duration))
-        # Fade in/out
-        img_clip = fadein(img_clip, 0.5).fx(fadeout, 0.5)
-        # Optional: overlay summary as subtitle
-        txt = TextClip(slide["summary"], fontsize=40, color='white', font='Arial-Bold',
-                       size=resolution, method='caption', align='center', stroke_color='black', stroke_width=2)
-        txt = txt.set_duration(duration).set_position(
-            ('center', 'bottom')).margin(bottom=60, opacity=0)
-        final_clip = CompositeVideoClip([img_clip, txt], size=resolution)
+        # Choose effect based on summary keywords
+        summary = slide.get("summary", "").lower()
+        effects = []
+        # Default: Ken Burns + Fade In/Out
+        use_ken_burns = True
+        use_fade = True
+        use_slide = False
+        slide_side = 'left'
+        # Keyword-based effect selection
+        if any(word in summary for word in ["speed", "attack", "boost", "energy", "fast", "whip"]):
+            # Simulate whip pan/slide for high-energy
+            use_ken_burns = False
+            use_slide = True
+            slide_side = 'left'
+        elif any(word in summary for word in ["reveal", "change", "scene", "variation", "slide"]):
+            use_ken_burns = False
+            use_slide = True
+            slide_side = 'bottom'
+        elif any(word in summary for word in ["pause", "dramatic", "intro", "outro", "end", "start"]):
+            use_ken_burns = False
+            use_fade = True
+        # Build the image clip
+        img_clip = ImageClip(img_path, duration=duration)
+        img_clip = img_clip.with_effects([vfx.Resize(resolution)])
+        if use_ken_burns:
+            img_clip = img_clip.resized(lambda t: 1 + 0.05 * t / duration)
+        if use_slide:
+            img_clip = img_clip.with_effects(
+                [vfx.SlideIn(0.7, side=slide_side)])
+        if use_fade:
+            img_clip = img_clip.with_effects([
+                vfx.FadeIn(0.5),
+                vfx.FadeOut(0.5)
+            ])
+        final_clip = CompositeVideoClip([img_clip], size=resolution)
         clips.append(final_clip)
     if not clips:
         print("No clips to concatenate.")
         return
-    video = concatenate_videoclips(clips, method="compose", padding=-
-                                   crossfade, transition=lambda c1, c2: c1.crossfadeout(crossfade))
+    video = concatenate_videoclips(clips, method="compose", padding=-crossfade)
     video.write_videofile(output_path, fps=30, codec="libx264", audio=False)
 
 

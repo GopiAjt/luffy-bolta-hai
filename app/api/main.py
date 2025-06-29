@@ -10,6 +10,7 @@ from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.video_generator import VideoGenerator
 from app.utils.image_slides import generate_image_slides
+from app.utils.generate_slideshow import main as generate_slideshow_video
 import re
 import json
 import glob
@@ -473,6 +474,53 @@ def get_latest_ass_file():
     except Exception as e:
         logger.error(f"Error finding latest .ass file: {str(e)}")
         return jsonify({'path': None, 'error': str(e)}), 500
+
+
+@app.route('/api/v1/latest-image-slides-json', methods=['GET'])
+def get_latest_image_slides_json():
+    """
+    Returns the path to the latest .image_slides.json file in data/uploads.
+    """
+    try:
+        json_files = glob.glob('data/uploads/*.image_slides.json')
+        if not json_files:
+            return jsonify({'path': None})
+        latest_file = max(json_files, key=os.path.getmtime)
+        return jsonify({'path': latest_file})
+    except Exception as e:
+        logger.error(f"Error finding latest image slides json: {str(e)}")
+        return jsonify({'path': None, 'error': str(e)}), 500
+
+
+@app.route('/api/v1/generate-slideshow', methods=['POST'])
+def generate_slideshow_endpoint():
+    """
+    Generate a slideshow video from image slides JSON and images.
+    Request JSON:
+    {
+        "slides_json": "path/to/slides.json",
+        "images_dir": "path/to/images/",
+        "output_path": "path/to/output.mp4" (optional)
+    }
+    """
+    try:
+        data = request.json
+        slides_json = data.get('slides_json')
+        images_dir = data.get('images_dir', 'app/output/image_slides')
+        output_path = data.get('output_path')
+        if not slides_json:
+            return jsonify({'error': 'slides_json is required'}), 400
+        if not output_path:
+            base = os.path.splitext(os.path.basename(slides_json))[0]
+            output_path = os.path.join('data/uploads', f"{base}.slideshow.mp4")
+        generate_slideshow_video(slides_json, images_dir, output_path)
+        return jsonify({
+            'status': 'success',
+            'output_path': output_path
+        })
+    except Exception as e:
+        logger.error(f"Error in generate_slideshow_endpoint: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 if __name__ == "__main__":

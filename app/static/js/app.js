@@ -352,4 +352,44 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     }
+
+    // Slideshow Generation
+    const generateSlideshowButton = document.getElementById('generateSlideshowButton');
+    const slideshowStatus = document.getElementById('slideshowStatus');
+    const slideshowOutput = document.getElementById('slideshowOutput');
+
+    if (generateSlideshowButton) {
+        generateSlideshowButton.addEventListener('click', async function () {
+            slideshowStatus.textContent = 'Finding latest image slides JSON...';
+            slideshowOutput.style.display = 'none';
+            try {
+                // Find the latest .image_slides.json file in uploads
+                const res = await fetch('/api/v1/latest-image-slides-json');
+                const data = await res.json();
+                if (!data.path) {
+                    slideshowStatus.textContent = 'No image slides JSON found in uploads.';
+                    return;
+                }
+                slideshowStatus.textContent = 'Generating slideshow video...';
+                const response = await fetch('/api/v1/generate-slideshow', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        slides_json: data.path,
+                        images_dir: 'app/output/image_slides'
+                    })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    slideshowStatus.textContent = 'Slideshow video generated!';
+                    slideshowOutput.innerHTML = `<a href="/api/v1/download/${result.output_path.split('/').pop()}" download>Download Slideshow Video</a>`;
+                    slideshowOutput.style.display = 'block';
+                } else {
+                    slideshowStatus.textContent = 'Error: ' + (result.message || 'Unknown error');
+                }
+            } catch (err) {
+                slideshowStatus.textContent = 'Error: ' + err.message;
+            }
+        });
+    }
 });

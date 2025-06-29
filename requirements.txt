@@ -57,4 +57,5 @@ tqdm>=4.65.0
 # RAG Pipeline dependencies
 sentence-transformers>=2.2.2
 chromadb>=0.4.0
-torch>=2.0.0 
+torch>=2.0.0
+moviepy

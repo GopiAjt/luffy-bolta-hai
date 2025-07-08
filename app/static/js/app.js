@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const subtitleLoading = document.getElementById('subtitleLoading');
     const subtitleOutput = document.getElementById('subtitleOutput');
     let currentAudioId = null;
+    let currentSlideshowVideoId = null;
 
     // Script Generation
     generateButton.addEventListener('click', async function () {
@@ -165,7 +166,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Video Generation
     async function generateVideo(audioId, subtitleFile) {
-        console.log('Starting video generation with:', { audioId, subtitleFile });
+        console.log('Starting video generation with:', { audioId, subtitleFile, currentSlideshowVideoId });
         const videoLoading = document.getElementById('videoLoading');
         const videoOutput = document.getElementById('videoOutput');
         const videoPreview = document.getElementById('videoPreview');
@@ -189,6 +190,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 body: JSON.stringify({
                     audio_id: audioId,
                     subtitle_id: subtitleFile,
+                    slideshow_video_id: currentSlideshowVideoId, // Use the stored slideshow video ID
                     background_color: 'green'
                 })
             });
@@ -360,6 +362,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (generateSlideshowButton) {
         generateSlideshowButton.addEventListener('click', async function () {
+            if (!currentAudioId) {
+                alert('Please upload an audio file first to get the audio duration.');
+                return;
+            }
             slideshowStatus.textContent = 'Finding latest image slides JSON...';
             slideshowOutput.style.display = 'none';
             try {
@@ -370,13 +376,20 @@ document.addEventListener('DOMContentLoaded', function () {
                     slideshowStatus.textContent = 'No image slides JSON found in uploads.';
                     return;
                 }
+                const audioIdForSlideshow = data.audio_id || currentAudioId;
+                if (!audioIdForSlideshow) {
+                    alert('Could not determine audio ID for slideshow generation. Please upload an audio file first.');
+                    slideshowStatus.textContent = 'Error: Audio ID missing.';
+                    return;
+                }
                 slideshowStatus.textContent = 'Generating slideshow video...';
                 const response = await fetch('/api/v1/generate-slideshow', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         slides_json: data.path,
-                        images_dir: 'app/output/image_slides'
+                        images_dir: 'app/output/image_slides',
+                        audio_id: audioIdForSlideshow
                     })
                 });
                 const result = await response.json();
@@ -384,6 +397,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     slideshowStatus.textContent = 'Slideshow video generated!';
                     slideshowOutput.innerHTML = `<a href="/api/v1/download/${result.output_path.split('/').pop()}" download>Download Slideshow Video</a>`;
                     slideshowOutput.style.display = 'block';
+                    currentSlideshowVideoId = result.output_path.split('/').pop(); // Store the ID
                 } else {
                     slideshowStatus.textContent = 'Error: ' + (result.message || 'Unknown error');
                 }

@@ -131,11 +131,16 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = 
         "You are an expert video content designer. Your task is to map subtitle segments to suggested Google image search queries, structured in JSON.\n"
         f"Here are the grouped subtitle segments for a short video:\n{all_segments}\n\n"
         "Generate a JSON array where each object has:\n- start_time (string, e.g. '0:00:00')\n- end_time\n- summary (short subtitle text)\n- image_search_query (a concise, highly relevant Google image search string for a One Piece slide, including character names, powers, and the term 'One Piece')\n\n"
-        "Only create a new object if the segment contains meaningful, content-rich, or One Piece-specific narration.\n"
-        "Do NOT create a new object for generic, transition, or filler lines (e.g., 'get this', 'trick question', 'but here's the question', 'it's both', 'wait', 'and', 'so', 'then', 'but that's not all', or any line with less than 4 words or that does not mention a One Piece concept or character).\n"
-        "Instead, extend the previous object's end_time to cover these lines.\n"
+        "IMPORTANT TIMING RULES:\n"
+        "- PRESERVE the exact start_time and end_time from the original subtitle segments\n"
+        "- Do NOT extend or modify timing to cover gaps or filler words\n"
+        "- Only create objects for meaningful, content-rich One Piece-specific narration\n"
+        "- SKIP generic/filler segments entirely (e.g., 'get this', 'trick question', 'but here's the question', 'it's both', 'wait', 'and', 'so', 'then', 'but that's not all', or any line with less than 4 words)\n"
+        "- Natural gaps between segments should be preserved as-is for pacing\n"
+        "- Each object should represent ONE complete thought/concept with its original timing\n\n"
         "Use the exact schema below.\n\nSchema:\n[\n  {\n    \"start_time\": \"string\",\n    \"end_time\": \"string\",\n    \"summary\": \"string\",\n    \"image_search_query\": \"string\"\n  }\n]"
     )
+
     try:
         response = model.generate_content(prompt)
         if response.text:
@@ -195,27 +200,17 @@ def google_image_search(query, api_key=None, cse_id=None, num_results=10):
     return []
 
 
-def get_image_aspect_ratio(url):
-    try:
-        from PIL import Image
-        from io import BytesIO
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        img = Image.open(BytesIO(resp.content))
-        width, height = img.size
-        return width / height if height else 0
-    except Exception as e:
-        logger.warning(f"Failed to get aspect ratio for {url}: {e}")
-        return 0
-
-
 def download_image(url, save_path):
-    resp = requests.get(url, stream=True, timeout=10)
-    resp.raise_for_status()
-    with open(save_path, "wb") as f:
-        for chunk in resp.iter_content(1024):
-            f.write(chunk)
-
+    """Downloads an image from a URL to a given path."""
+    try:
+        resp = requests.get(url, stream=True, timeout=10)
+        resp.raise_for_status()
+        with open(save_path, "wb") as f:
+            for chunk in resp.iter_content(1024):
+                f.write(chunk)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to download image from {url}: {e}")
+        raise
 
 def download_images_for_slides(json_path, out_dir):
     # Clear the output directory before downloading new images
@@ -227,67 +222,86 @@ def download_images_for_slides(json_path, out_dir):
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
     for idx, slide in enumerate(slides):
-        # Use the new image_search_query field from Gemini
         search_query = slide.get("image_search_query")
         logger.info(f"[Slide {idx+1}] Image search query: {search_query}")
         if not search_query:
-            print(f"No image_search_query for slide {idx+1}")
             logger.warning(f"No image_search_query for slide {idx+1}")
             continue
-        img_url_16_9 = None
+
         try:
-            # Always add One Piece and Luffy to the search query for relevance (if not already present)
             if "one piece" not in search_query.lower():
                 search_query = f"{search_query} One Piece Luffy"
-            items = google_image_search(search_query, num_results=5)
-            logger.info(
-                f"[Slide {idx+1}] Google image search returned {len(items)} results.")
-            # Only keep images with aspect ratio close to 16:9 (within 10%)
-            filtered_items_16_9 = []
-            for item in items:
-                url = item.get('link')
-                aspect = get_image_aspect_ratio(url)
-                if aspect > 0 and abs(aspect - 16/9) / (16/9) < 0.10:
-                    filtered_items_16_9.append((item, aspect))
-            if filtered_items_16_9:
-                # Pick the closest to 16:9
-                best_item_16_9, _ = min(
-                    filtered_items_16_9, key=lambda x: abs(x[1] - 16/9))
-                img_url_16_9 = best_item_16_9['link']
-                ext = os.path.splitext(img_url_16_9)[-1].split("?")[0]
-                if not ext or len(ext) > 5:
-                    ext = ".jpg"
-                save_path_16_9 = os.path.join(
-                    out_dir, f"slide_{idx+1}_16x9{ext}")
-                logger.info(
-                    f"[Slide {idx+1}] Downloading 16:9 to: {save_path_16_9}")
-                download_image(img_url_16_9, save_path_16_9)
-                print(f"Downloaded (16:9): {save_path_16_9}")
-                logger.info(f"Downloaded (16:9): {save_path_16_9}")
-                time.sleep(1)
-            else:
-                # If no suitable 16:9 image, save the first available image (any aspect)
-                if items:
-                    fallback_item = items[0]
-                    img_url_fallback = fallback_item['link']
-                    ext = os.path.splitext(img_url_fallback)[-1].split("?")[0]
-                    if not ext or len(ext) > 5:
-                        ext = ".jpg"
-                    save_path_fallback = os.path.join(
-                        out_dir, f"slide_{idx+1}_16x9{ext}")
-                    logger.info(
-                        f"[Slide {idx+1}] Downloading fallback to: {save_path_fallback}")
-                    download_image(img_url_fallback, save_path_fallback)
-                    print(f"Downloaded (fallback): {save_path_fallback}")
-                    logger.info(f"Downloaded (fallback): {save_path_fallback}")
-                    time.sleep(1)
+            
+            items = google_image_search(search_query, num_results=10)
+            logger.info(f"[Slide {idx+1}] Google image search returned {len(items)} results.")
+
+            # Filter for actual images with correct aspect ratio
+            valid_images = []
+            for item_idx, item in enumerate(items):
+                item_link = item.get('link', 'N/A')
+                item_mime = item.get('mime', 'N/A')
+                item_width = item.get('image', {}).get('width', 0)
+                item_height = item.get('image', {}).get('height', 0)
+
+                if 'image' not in item_mime:
+                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {item_link}")
+                    continue
+                
+                if not item_width or not item_height:
+                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Missing dimensions ({item_width}x{item_height}) - {item_link}")
+                    continue
+
+                aspect_ratio = item_width / item_height
+                if abs(aspect_ratio - 16/9) / (16/9) < 0.10: # 10% tolerance
+                    valid_images.append(item)
+                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Accepted: Aspect ratio {aspect_ratio:.2f} - {item_link}")
                 else:
-                    print(f"No suitable 16:9 image found for: {search_query}")
-                    logger.warning(
-                        f"No suitable 16:9 image found for: {search_query}")
+                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Aspect ratio mismatch ({aspect_ratio:.2f} vs 16/9) - {item_link}")
+
+            downloaded_successfully = False
+            if valid_images:
+                logger.debug(f"[Slide {idx+1}] Found {len(valid_images)} 16:9 images. Attempting download.")
+                for item_idx, best_image in enumerate(valid_images):
+                    img_url = best_image['link']
+                    ext = os.path.splitext(img_url)[-1].split("?")[0] or ".jpg"
+                    save_path = os.path.join(out_dir, f"slide_{idx+1}_16x9{ext}")
+                    try:
+                        logger.info(f"[Slide {idx+1}] Attempting to download 16:9 image {item_idx+1}: {img_url}")
+                        download_image(img_url, save_path)
+                        print(f"Downloaded: {save_path}")
+                        logger.info(f"Downloaded: {save_path}")
+                        downloaded_successfully = True
+                        break # Exit loop if download is successful
+                    except Exception as download_e:
+                        logger.warning(f"[Slide {idx+1}] Failed to download 16:9 image {item_idx+1} from {img_url}: {download_e}")
+            
+            if not downloaded_successfully and items:
+                logger.warning(f"[Slide {idx+1}] No suitable 16:9 image downloaded. Attempting fallback to any image.")
+                for item_idx, fallback_item in enumerate(items):
+                    img_url_fallback = fallback_item['link']
+                    item_mime = fallback_item.get('mime', '')
+                    if 'image' not in item_mime:
+                        logger.debug(f"[Slide {idx+1} - Fallback Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {img_url_fallback}")
+                        continue
+                    
+                    ext = os.path.splitext(img_url_fallback)[-1].split("?")[0] or ".jpg"
+                    save_path_fallback = os.path.join(out_dir, f"slide_{idx+1}_fallback{ext}") # Use a different name for fallback
+                    try:
+                        logger.info(f"[Slide {idx+1}] Attempting to download fallback image {item_idx+1}: {img_url_fallback}")
+                        download_image(img_url_fallback, save_path_fallback)
+                        print(f"Downloaded (fallback): {save_path_fallback}")
+                        logger.info(f"Downloaded (fallback): {save_path_fallback}")
+                        downloaded_successfully = True
+                        break # Exit loop if download is successful
+                    except Exception as fallback_e:
+                        logger.warning(f"[Slide {idx+1}] Failed to download fallback image {item_idx+1} from {img_url_fallback}: {fallback_e}")
+
+            if not downloaded_successfully:
+                logger.error(f"[Slide {idx+1}] No image could be downloaded for query: {search_query}")
+                print(f"No image could be downloaded for slide {idx+1}")
+
         except Exception as e:
             print(f"Failed to download for slide {idx+1}: {e}")
             logger.error(f"Failed to download for slide {idx+1}: {e}")
-            if img_url_16_9:
-                print(f"URL tried (16:9): {img_url_16_9}")
-                logger.error(f"URL tried (16:9): {img_url_16_9}")
+        finally:
+            time.sleep(1) # Rate limit our requests

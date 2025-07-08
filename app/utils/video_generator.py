@@ -50,6 +50,7 @@ class VideoGenerator:
         audio_path: str,
         subtitle_path: str,
         output_path: str,
+        background_video_path: Optional[str] = None,
         resolution: str = '1080x1920',  # Changed from '1920x1080' to '1080x1920' for 9:16
         color: str = 'green',
         fps: int = 30,
@@ -76,25 +77,45 @@ class VideoGenerator:
                 os.path.abspath(output_path)), exist_ok=True)
 
             # Build ffmpeg command for burning in subtitles and explicit stream mapping
-            cmd = [
-                self.ffmpeg,
-                '-y',
-                '-f', 'lavfi',
-                '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}',
-                '-i', str(audio_path),
-                '-vf', f"subtitles='{subtitle_path}'",  # Burn in subtitles
-                '-map', '0:v',  # Explicitly map video from color
-                '-map', '1:a',  # Explicitly map audio from audio file
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '23',
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'libmp3lame' if not str(
-                    audio_path).lower().endswith('.mp3') else 'copy',
-                '-b:a', '192k',
-                '-shortest',  # Stop encoding when the shortest input ends
-                str(output_path)
-            ]
+            if background_video_path:
+                cmd = [
+                    self.ffmpeg,
+                    '-y',
+                    '-i', str(background_video_path), # Input 0: background video
+                    '-i', str(audio_path), # Input 1: audio
+                    '-vf', f"subtitles='{subtitle_path}'",  # Burn in subtitles
+                    '-map', '0:v',  # Explicitly map video from background video
+                    '-map', '1:a',  # Explicitly map audio from audio file
+                    '-c:v', 'libx264',
+                    '-preset', 'medium',
+                    '-crf', '23',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'libmp3lame' if not str(
+                        audio_path).lower().endswith('.mp3') else 'copy',
+                    '-b:a', '192k',
+                    '-shortest',  # Stop encoding when the shortest input ends
+                    str(output_path)
+                ]
+            else:
+                cmd = [
+                    self.ffmpeg,
+                    '-y',
+                    '-f', 'lavfi',
+                    '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}',
+                    '-i', str(audio_path),
+                    '-vf', f"subtitles='{subtitle_path}'",  # Burn in subtitles
+                    '-map', '0:v',  # Explicitly map video from color
+                    '-map', '1:a',  # Explicitly map audio from audio file
+                    '-c:v', 'libx264',
+                    '-preset', 'medium',
+                    '-crf', '23',
+                    '-pix_fmt', 'yuv420p',
+                    '-c:a', 'libmp3lame' if not str(
+                        audio_path).lower().endswith('.mp3') else 'copy',
+                    '-b:a', '192k',
+                    '-shortest',  # Stop encoding when the shortest input ends
+                    str(output_path)
+                ]
 
             logger.info(f"Generating video with command: {' '.join(cmd)}")
             result = subprocess.run(
@@ -234,6 +255,7 @@ class VideoGenerator:
         subtitle_path: str,
         expressions_path: str,
         output_path: str,
+        background_video_path: Optional[str] = None,
         resolution: str = '1080x1920',
         color: str = 'green',
         fps: int = 30,
@@ -261,9 +283,11 @@ class VideoGenerator:
             expr_img_dir = os.path.join(os.path.dirname(
                 __file__), '../static/expressions')
         try:
+            logger.info(f"generate_video_with_expressions called with background_video_path: {background_video_path}")
             duration = self.get_audio_duration(audio_path)
             os.makedirs(os.path.dirname(
                 os.path.abspath(output_path)), exist_ok=True)
+
             # Load expressions
             with open(expressions_path, 'r', encoding='utf-8') as f:
                 expressions = json.load(f)
@@ -279,12 +303,27 @@ class VideoGenerator:
             for label in label_intervals:
                 label_intervals[label] = self._merge_intervals(
                     label_intervals[label])
+
             # Prepare ffmpeg inputs and overlay filters (plain overlays, no fade)
             overlay_inputs = []
             overlay_filters = []
-            last_label = '[bg]'
-            input_idx = 1  # 0 is color, 1+ are overlays
             overlay_step = 1
+
+            # Determine the base video input and initial filter chain
+            if background_video_path:
+                # Input 0 is the background video
+                base_video_input = ['-i', str(background_video_path)]
+                # Initial filter to set PTS for the background video
+                filter_steps = [f"[0:v]setpts=PTS-STARTPTS[bg_video]"]
+                last_label = '[bg_video]'
+                input_idx = 1 # First overlay image will be input 1
+            else:
+                # Input 0 is the color background generated by lavfi
+                base_video_input = ['-f', 'lavfi', '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}']
+                filter_steps = [f"color=c={color}:s={resolution}:d={duration}:r={fps}[bg]"]
+                last_label = '[bg]'
+                input_idx = 1 # First overlay image will be input 1
+
             # For each label and interval, add a separate image input and overlay (no fade/transition)
             for label, intervals in label_intervals.items():
                 img_path = os.path.join(expr_img_dir, f"{label}.png")
@@ -308,25 +347,29 @@ class VideoGenerator:
                     last_label = f"[bg{overlay_step}]"
                     overlay_step += 1
                     input_idx += 1
+
             # Compose filter_complex without empty filter chains
-            filter_steps = [
-                f"color=c={color}:s={resolution}:d={duration}:r={fps}[bg]"]
             filter_steps += [f for f in overlay_filters if f]
             filter_steps.append(
                 f"{last_label}subtitles='{subtitle_path}'[vout]")
             filter_complex = ';'.join(filter_steps)
             # Clean filtergraph: remove newlines only (do not escape double quotes)
             filter_complex_clean = filter_complex.replace('\n', '')
+
             # Write filter_complex to a temporary file as-is (preserve newlines and formatting)
             with tempfile.NamedTemporaryFile('w+', suffix='.ffmpeg', delete=False) as fscript:
                 fscript.write(filter_complex)
                 fscript_path = fscript.name
+
             # Build ffmpeg command using -filter_complex <string> (pass as string, not file)
-            num_overlay_images = len(overlay_inputs) // 2
-            audio_input_idx = 1 + num_overlay_images
+            # audio_input_idx will be the index of the audio input stream
+            # If background_video_path is used, it's input 0, then overlay images, then audio
+            # If color background is used, it's input 0 (lavfi color), then overlay images, then audio
+            audio_input_idx = input_idx # input_idx is already incremented to the next available input index
+
             cmd = [
                 self.ffmpeg, '-y',
-                '-f', 'lavfi', '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}',
+                *base_video_input, # Use the determined base video input
                 *overlay_inputs,
                 '-i', audio_path,
                 '-filter_complex', filter_complex_clean,  # Pass cleaned filtergraph as string

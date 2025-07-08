@@ -362,6 +362,7 @@ def generate_video():
     {
         "audio_id": "file_id",
         "subtitle_id": "subtitle_file_id",
+        "slideshow_video_id": "slideshow_video_file_id", # New: Optional slideshow video to use as background
         "background_color": "green"  # Optional
     }
     """
@@ -369,6 +370,7 @@ def generate_video():
         data = request.json
         audio_id = data.get('audio_id')
         subtitle_id = data.get('subtitle_id')
+        slideshow_video_id = data.get('slideshow_video_id') # Get slideshow video ID
         background_color = data.get('background_color', 'green')
 
         if not audio_id or not subtitle_id:
@@ -382,6 +384,12 @@ def generate_video():
         base_name = os.path.splitext(audio_id)[0]
         expr_json_path = os.path.join(
             UPLOADS_DIR, f"{base_name}.expressions.json")
+
+        slideshow_video_path = None
+        if slideshow_video_id:
+            slideshow_video_path = os.path.join(UPLOADS_DIR, slideshow_video_id)
+            if not os.path.exists(slideshow_video_path):
+                return jsonify({'error': f'Slideshow video file not found: {slideshow_video_id}'}), 404
 
         # Verify files exist
         if not os.path.exists(audio_path):
@@ -419,6 +427,7 @@ def generate_video():
                 subtitle_path=subtitle_path,
                 expressions_path=expr_json_path,
                 output_path=output_path,
+                background_video_path=slideshow_video_path, # Pass slideshow video
                 color=background_color,
                 expr_img_dir=expr_img_dir,
                 convert_to_mp4=True
@@ -430,6 +439,7 @@ def generate_video():
                 audio_path=audio_path,
                 subtitle_path=subtitle_path,
                 output_path=output_path,
+                background_video_path=slideshow_video_path, # Pass slideshow video
                 color=background_color,
                 convert_to_mp4=True
             )
@@ -486,7 +496,10 @@ def get_latest_image_slides_json():
         if not json_files:
             return jsonify({'path': None})
         latest_file = max(json_files, key=os.path.getmtime)
-        return jsonify({'path': latest_file})
+        # Extract audio_id from the filename (e.g., 6844824f-a880-4c56-918f-faaebf876ccd.image_slides.json)
+        audio_id_match = re.match(r'([a-f0-9-]+)\.image_slides\.json', os.path.basename(latest_file))
+        audio_id = audio_id_match.group(1) if audio_id_match else None
+        return jsonify({'path': latest_file, 'audio_id': audio_id})
     except Exception as e:
         logger.error(f"Error finding latest image slides json: {str(e)}")
         return jsonify({'path': None, 'error': str(e)}), 500
@@ -500,20 +513,36 @@ def generate_slideshow_endpoint():
     {
         "slides_json": "path/to/slides.json",
         "images_dir": "path/to/images/",
+        "audio_id": "audio_file_id", # New: to get total duration
         "output_path": "path/to/output.mp4" (optional)
     }
     """
     try:
         data = request.json
+        logger.info(f"Received data for generate_slideshow_endpoint: {data}")
         slides_json = data.get('slides_json')
         images_dir = data.get('images_dir', 'app/output/image_slides')
+        audio_id = data.get('audio_id') # Get audio_id
         output_path = data.get('output_path')
+
         if not slides_json:
+            logger.error("slides_json is missing from request.")
             return jsonify({'error': 'slides_json is required'}), 400
+        if not audio_id:
+            logger.error("audio_id is missing from request.")
+            return jsonify({'error': 'audio_id is required for duration matching'}), 400
+
+        # Get full audio duration
+        audio_path = os.path.join(UPLOADS_DIR, audio_id)
+        if not os.path.exists(audio_path):
+            return jsonify({'error': f'Audio file not found: {audio_id}'}), 404
+        total_audio_duration = get_audio_duration(audio_path)
+
         if not output_path:
             base = os.path.splitext(os.path.basename(slides_json))[0]
-            output_path = os.path.join('data/uploads', f"{base}.slideshow.mp4")
-        generate_slideshow_video(slides_json, images_dir, output_path)
+            output_path = os.path.join('data/uploads', f"{base}.slideshow.avi")
+
+        generate_slideshow_video(slides_json, images_dir, output_path, total_duration=total_audio_duration, resolution=(1080, 1920))
         return jsonify({
             'status': 'success',
             'output_path': output_path

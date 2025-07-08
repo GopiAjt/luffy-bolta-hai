@@ -58,4 +58,4 @@ tqdm>=4.65.0
 sentence-transformers>=2.2.2
 chromadb>=0.4.0
 torch>=2.0.0
-moviepy
+moviepy==2.2.1

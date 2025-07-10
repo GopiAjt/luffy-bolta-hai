@@ -6,21 +6,35 @@ from datetime import datetime
 from typing import Optional
 from pathlib import Path
 from app.utils.script_generator import generate_script
-from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir, UPLOADS_DIR
+from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir
 from app.utils.subtitle_generator import SubtitleGenerator
-from app.utils.video_generator import VideoGenerator
 from app.utils.image_slides import generate_image_slides
-from app.utils.generate_slideshow import main as generate_slideshow_video
+from app.utils.generate_final_video import generate_final_video
 import re
 import json
 import glob
+from config.config import (
+    UPLOADS_DIR,
+    IMAGE_SLIDES_DIR,
+    EXPRESSIONS_DIR,
+    VIDEO_RESOLUTION,
+    VIDEO_BACKGROUND_COLOR,
+    SUBTITLE_RESOLUTION,
+    HOST,
+    PORT,
+    DEBUG,
+)
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app
-app = Flask(__name__, static_folder='../static', static_url_path='')
+# Configure Flask app to serve static files
+app = Flask(__name__, 
+            static_folder='../../app/static',  # Path to static files
+            static_url_path='/static')  # URL prefix for static files
 CORS(app)
 
 # Serve static files
@@ -180,9 +194,8 @@ def generate_subtitles():
             UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
         logger.info(f"Generating ASS file at {ass_path}...")
         # Use the same resolution as the video generator
-        resolution = '1080x1920'  # Update this if your video resolution is dynamic
         subtitle_generator.generate_ass_file(
-            phrases, ass_path, resolution=resolution)
+            phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
 
         # Verify ASS file was created
         if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
@@ -237,20 +250,29 @@ def generate_image_slides_endpoint():
     Request JSON:
     {
         "ass_path": "relative/or/absolute/path/to/file.ass",
+        "audio_id": "file_id", # Added audio_id
         "out_path": "relative/or/absolute/path/to/output.json" (optional)
     }
     """
     try:
         data = request.json
         ass_path = data.get('ass_path')
+        audio_id = data.get('audio_id') # Get audio_id
         out_path = data.get('out_path')
-        image_dir = "app/output/image_slides"
-        if not ass_path:
-            return jsonify({'error': 'ass_path is required'}), 400
+        if not ass_path or not audio_id: # Validate audio_id
+            return jsonify({'error': 'ass_path and audio_id are required'}), 400
+        
+        # Get audio duration
+        audio_path = UPLOADS_DIR / audio_id
+        if not audio_path.exists():
+            return jsonify({'error': f'Audio file not found: {audio_id}'}), 404
+        total_audio_duration = get_audio_duration(str(audio_path))
+        logger.info(f"Total audio duration for image slides: {total_audio_duration:.2f}s")
+
         if not out_path:
             out_path = ass_path.rsplit('.', 1)[0] + '.image_slides.json'
         result_path = generate_image_slides(
-            ass_path, out_path, image_dir=image_dir)
+            ass_path, out_path, total_audio_duration, image_dir=IMAGE_SLIDES_DIR)
         with open(result_path, 'r', encoding='utf-8') as f:
             slides = json.load(f)
         return jsonify({
@@ -353,121 +375,48 @@ def preview_file(filename):
         return jsonify({'error': 'Failed to preview file'}), 500
 
 
-@app.route('/api/v1/generate-video', methods=['POST'])
-def generate_video():
+@app.route('/api/v1/generate-final-video', methods=['POST'])
+def generate_final_video_endpoint():
     """
-    Generate a video with audio, subtitles, and (optionally) facial expression overlays.
-
-    Request:
+    Generate the final video with slideshow, audio, subtitles, and expressions.
+    Request JSON:
     {
         "audio_id": "file_id",
-        "subtitle_id": "subtitle_file_id",
-        "slideshow_video_id": "slideshow_video_file_id", # New: Optional slideshow video to use as background
-        "background_color": "green"  # Optional
+        "slides_json": "path/to/slides.json",
+        "subtitle_file": "path/to/subtitle.ass",
+        "expressions_file": "path/to/expressions.json" (optional)
     }
     """
     try:
         data = request.json
         audio_id = data.get('audio_id')
-        subtitle_id = data.get('subtitle_id')
-        slideshow_video_id = data.get('slideshow_video_id') # Get slideshow video ID
-        background_color = data.get('background_color', 'green')
+        slides_json = data.get('slides_json')
+        subtitle_file = data.get('subtitle_file')
+        expressions_file = data.get('expressions_file')
 
-        if not audio_id or not subtitle_id:
-            return jsonify({
-                'error': 'audio_id and subtitle_id are required'
-            }), 400
+        if not all([audio_id, slides_json, subtitle_file]):
+            return jsonify({'error': 'audio_id, slides_json, and subtitle_file are required'}), 400
 
-        # Get file paths
-        audio_path = os.path.join(UPLOADS_DIR, audio_id)
-        subtitle_path = os.path.join(UPLOADS_DIR, subtitle_id)
-        base_name = os.path.splitext(audio_id)[0]
-        expr_json_path = os.path.join(
-            UPLOADS_DIR, f"{base_name}.expressions.json")
+        final_video_path = generate_final_video(
+            audio_id=audio_id,
+            slides_json_path=slides_json,
+            subtitle_path=subtitle_file,
+            expressions_path=expressions_file,
+        )
 
-        slideshow_video_path = None
-        if slideshow_video_id:
-            slideshow_video_path = os.path.join(UPLOADS_DIR, slideshow_video_id)
-            if not os.path.exists(slideshow_video_path):
-                return jsonify({'error': f'Slideshow video file not found: {slideshow_video_id}'}), 404
-
-        # Verify files exist
-        if not os.path.exists(audio_path):
-            return jsonify({'error': f'Audio file not found: {audio_id}'}), 404
-        if not os.path.exists(subtitle_path):
-            return jsonify({'error': f'Subtitle file not found: {subtitle_id}'}), 404
-
-        # Generate output path with .mkv extension for better subtitle support
-        output_filename = f"{base_name}.mkv"
-        output_path = os.path.join(UPLOADS_DIR, output_filename)
-
-        video_generator = VideoGenerator()
-        expr_img_dir = os.path.join(os.path.dirname(
-            __file__), '../static/expressions')
-
-        # If expressions file exists, use generate_video_with_expressions
-        if os.path.exists(expr_json_path):
-            # Patch expressions file to fallback to 'neutral' if image is missing
-            try:
-                with open(expr_json_path, 'r', encoding='utf-8') as f:
-                    expressions = json.load(f)
-                available_imgs = {os.path.splitext(f)[0] for f in os.listdir(
-                    expr_img_dir) if f.endswith('.png')}
-                for expr in expressions:
-                    label = expr['expression'].lower()
-                    if label not in available_imgs:
-                        expr['expression'] = 'neutral'
-                # Save patched expressions to a temp file (or overwrite)
-                with open(expr_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(expressions, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"Failed to patch expressions file: {e}")
-            video_path = video_generator.generate_video_with_expressions(
-                audio_path=audio_path,
-                subtitle_path=subtitle_path,
-                expressions_path=expr_json_path,
-                output_path=output_path,
-                background_video_path=slideshow_video_path, # Pass slideshow video
-                color=background_color,
-                expr_img_dir=expr_img_dir,
-                convert_to_mp4=True
-            )
-            used_expressions = True
-        else:
-            # Fallback to standard video generation
-            video_path = video_generator.generate_video(
-                audio_path=audio_path,
-                subtitle_path=subtitle_path,
-                output_path=output_path,
-                background_video_path=slideshow_video_path, # Pass slideshow video
-                color=background_color,
-                convert_to_mp4=True
-            )
-            used_expressions = False
-
-        # Generate download URL
-        video_filename = os.path.basename(video_path)
-        video_url = url_for(
-            'download_file', filename=video_filename, _external=True)
-
-        # Determine MIME type based on file extension
-        is_mp4 = video_filename.lower().endswith('.mp4')
+        video_filename = os.path.basename(final_video_path)
+        video_url = url_for('download_file', filename=video_filename, _external=True)
 
         return jsonify({
             'status': 'success',
-            'message': 'Video generated successfully',
+            'message': 'Final video generated successfully',
             'video_file': video_filename,
             'download_url': video_url,
-            'format': 'mp4' if is_mp4 else 'mkv',
-            'is_compatible': is_mp4,  # Flag for frontend to know if it's compatible
-            'used_expressions': used_expressions
         })
 
     except Exception as e:
-        logger.error(f"Error generating video: {str(e)}")
-        return jsonify({
-            'error': str(e)
-        }), 500
+        logger.error(f"Error in generate_final_video_endpoint: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/v1/latest-ass-file', methods=['GET'])
@@ -476,7 +425,7 @@ def get_latest_ass_file():
     Returns the path to the latest .ass file in data/uploads.
     """
     try:
-        ass_files = glob.glob('data/uploads/*.ass')
+        ass_files = glob.glob(f'{UPLOADS_DIR}/*.ass')
         if not ass_files:
             return jsonify({'path': None})
         latest_file = max(ass_files, key=os.path.getmtime)
@@ -492,7 +441,7 @@ def get_latest_image_slides_json():
     Returns the path to the latest .image_slides.json file in data/uploads.
     """
     try:
-        json_files = glob.glob('data/uploads/*.image_slides.json')
+        json_files = glob.glob(f'{UPLOADS_DIR}/*.image_slides.json')
         if not json_files:
             return jsonify({'path': None})
         latest_file = max(json_files, key=os.path.getmtime)
@@ -505,52 +454,4 @@ def get_latest_image_slides_json():
         return jsonify({'path': None, 'error': str(e)}), 500
 
 
-@app.route('/api/v1/generate-slideshow', methods=['POST'])
-def generate_slideshow_endpoint():
-    """
-    Generate a slideshow video from image slides JSON and images.
-    Request JSON:
-    {
-        "slides_json": "path/to/slides.json",
-        "images_dir": "path/to/images/",
-        "audio_id": "audio_file_id", # New: to get total duration
-        "output_path": "path/to/output.mp4" (optional)
-    }
-    """
-    try:
-        data = request.json
-        logger.info(f"Received data for generate_slideshow_endpoint: {data}")
-        slides_json = data.get('slides_json')
-        images_dir = data.get('images_dir', 'app/output/image_slides')
-        audio_id = data.get('audio_id') # Get audio_id
-        output_path = data.get('output_path')
 
-        if not slides_json:
-            logger.error("slides_json is missing from request.")
-            return jsonify({'error': 'slides_json is required'}), 400
-        if not audio_id:
-            logger.error("audio_id is missing from request.")
-            return jsonify({'error': 'audio_id is required for duration matching'}), 400
-
-        # Get full audio duration
-        audio_path = os.path.join(UPLOADS_DIR, audio_id)
-        if not os.path.exists(audio_path):
-            return jsonify({'error': f'Audio file not found: {audio_id}'}), 404
-        total_audio_duration = get_audio_duration(audio_path)
-
-        if not output_path:
-            base = os.path.splitext(os.path.basename(slides_json))[0]
-            output_path = os.path.join('data/uploads', f"{base}.slideshow.avi")
-
-        generate_slideshow_video(slides_json, images_dir, output_path, total_duration=total_audio_duration, resolution=(1080, 1920))
-        return jsonify({
-            'status': 'success',
-            'output_path': output_path
-        })
-    except Exception as e:
-        logger.error(f"Error in generate_slideshow_endpoint: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -3,7 +3,11 @@ import json
 import traceback
 import numpy as np
 import cv2
+import logging
+import subprocess # Added this import
+from config.config import VIDEO_RESOLUTION
 
+logger = logging.getLogger(__name__)
 
 def parse_time(t):
     """Converts '0:00:06.28' to seconds."""
@@ -73,22 +77,96 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     
     return frame_counter # Return updated frame_counter
 
+def get_video_duration(filepath):
+    """Get the duration of a video file using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        filepath
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError) as e:
+        logger.error(f"Error getting video duration for {filepath}: {e}")
+        return 0
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=(576, 1024), fps=30):
+def extract_gif_frames(gif_path, temp_frame_dir, frame_counter_start, duration, resolution, fps=30):
+    """
+    Extracts frames from a GIF and saves them as JPGs in the temp_frame_dir.
+    Handles looping/trimming to match the desired duration.
+    Returns the updated frame_counter.
+    """
+    res_w, res_h = resolution
+    target_num_frames = int(duration * fps)
+
+    # Get GIF duration using ffprobe
+    gif_duration = get_video_duration(gif_path)
+    gif_num_frames = int(gif_duration * fps)
+
+    if gif_num_frames == 0:
+        logger.warning(f"Could not determine duration or extract frames from GIF: {gif_path}. Skipping.")
+        return frame_counter_start
+
+    # Use ffmpeg to extract frames
+    # We'll extract more frames than needed and then trim/loop in Python
+    # This is to ensure we have enough frames if the GIF is short
+    output_pattern = os.path.join(temp_frame_dir, "gif_temp_frame_%05d.jpg")
+    ffmpeg_extract_cmd = [
+        "ffmpeg",
+        "-i", gif_path,
+        "-vf", f"scale={res_w}:{res_h}:force_original_aspect_ratio=decrease,pad={res_w}:{res_h}:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-vsync", "0", # Ensure all frames are extracted
+        output_pattern
+    ]
+    try:
+        subprocess.run(ffmpeg_extract_cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg failed to extract frames from GIF {gif_path}: {e.stderr}")
+        return frame_counter_start
+
+    extracted_frames = sorted([f for f in os.listdir(temp_frame_dir) if f.startswith("gif_temp_frame_") and f.endswith(".jpg")])
+    if not extracted_frames:
+        logger.warning(f"No frames extracted from GIF: {gif_path}. Skipping.")
+        return frame_counter_start
+
+    current_frame_idx = 0
+    frames_written = 0
+    for i in range(target_num_frames):
+        if current_frame_idx >= len(extracted_frames):
+            # Loop the GIF if it's shorter than the desired duration
+            current_frame_idx = 0
+
+        src_frame_path = os.path.join(temp_frame_dir, extracted_frames[current_frame_idx])
+        dest_frame_path = os.path.join(temp_frame_dir, f"frame_{frame_counter_start + frames_written:05d}.jpg")
+        
+        # Copy the frame to the main sequence
+        os.rename(src_frame_path, dest_frame_path) # Use rename for efficiency if within same filesystem
+
+        frames_written += 1
+        current_frame_idx += 1
+    
+    # Clean up any remaining gif_temp_frame_ files
+    for f in os.listdir(temp_frame_dir):
+        if f.startswith("gif_temp_frame_"):
+            os.remove(os.path.join(temp_frame_dir, f))
+
+    return frame_counter_start + frames_written
+
+
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30):
     """Generates the final slideshow video using OpenCV."""
     resolution = sanitize_size(resolution)
     res_w, res_h = resolution
 
-    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    # writer = cv2.VideoWriter(output_path, fourcc, fps, (res_w, res_h), isColor=True)
     frames_written = 0
     total_output_frames = int(total_duration * fps)
-    print(f"Expected total output frames: {total_output_frames}")
-    
+    logger.info(f"Target total frames: {total_output_frames} for a duration of {total_duration:.2f}s at {fps} fps.")
+
     temp_frame_dir = os.path.join(os.path.dirname(output_path), "temp_frames")
     os.makedirs(temp_frame_dir, exist_ok=True)
-
-    print(f"Initial total_duration: {total_duration:.2f}s")
 
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
@@ -102,10 +180,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=(576
             last_slide_end_time = max(last_slide_end_time, end)
 
             img_path = None
-            for ext in ["jpg", "png", "jpeg"]:
+            for ext in ["jpg", "png", "jpeg", "gif"]:
                 for style in ["9x16", "16x9"]:
-                    candidate = os.path.join(
-                        image_dir, f"slide_{idx+1}_{style}.{ext}")
+                    candidate = os.path.join(image_dir, f"slide_{idx+1}_{style}.{ext}")
                     if os.path.exists(candidate):
                         img_path = candidate
                         break
@@ -113,114 +190,74 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=(576
                     break
 
             if not img_path:
-                fallback_path = os.path.join(
-                    image_dir, f"slide_{idx+1}_fallback.jpg")
-                if os.path.exists(fallback_path):
-                    img_path = fallback_path
-                else:
-                    continue
-
-            frames_written = apply_panoramic_pan(temp_frame_dir, frames_written, img_path, duration,
-                                resolution, idx, fps)
-
-        except Exception as e:
-            traceback.print_exc()
-
-    current_video_duration = last_slide_end_time
-    print(f"Initial current_video_duration (after first pass): {current_video_duration:.2f}s")
-    slide_idx_counter = 0  # To keep track of overall slides processed for pan direction
-
-    while frames_written < total_output_frames:
-        print(f"Loop start: frames_written={frames_written}, total_output_frames={total_output_frames}")
-        # Cycle through the original slides
-        original_slide_index = slide_idx_counter % len(slides)
-        slide = slides[original_slide_index]
-
-        try:
-            start = parse_time(slide["start_time"])
-            end = parse_time(slide["end_time"])
-            original_slide_duration = end - start
-
-            remaining_frames_to_fill = total_output_frames - frames_written
-            # Calculate duration for this segment based on remaining frames
-            duration_for_this_segment = min(original_slide_duration, remaining_frames_to_fill / fps)
-
-            if duration_for_this_segment <= 0:
-                print("Duration for this segment is zero or negative, breaking loop.")
-                break  # No more duration to fill
-
-            img_path = None
-            # The image path logic needs to use the original slide index for filename
-            for ext in ["jpg", "png", "jpeg"]:
-                for style in ["9x16", "16x9"]:
-                    candidate = os.path.join(
-                        image_dir, f"slide_{original_slide_index+1}_{style}.{ext}")
-                    if os.path.exists(candidate):
-                        img_path = candidate
+                # Check for fallback images with both .jpg and .png extensions
+                for ext in ["jpg", "png"]:
+                    fallback_path = os.path.join(image_dir, f"slide_{idx+1}_fallback.{ext}")
+                    if os.path.exists(fallback_path):
+                        img_path = fallback_path
+                        logger.info(f"Using fallback image for slide {idx+1} with extension .{ext}.")
                         break
-                if img_path:
-                    break
-
-            if not img_path:
-                fallback_path = os.path.join(
-                    image_dir, f"slide_{original_slide_index+1}_fallback.jpg")
-                if os.path.exists(fallback_path):
-                    img_path = fallback_path
-                else:
-                    # If image is missing, we still need to advance frames to avoid infinite loop
-                    frames_written += int(duration_for_this_segment * fps) # Approximate advance
-                    slide_idx_counter += 1
-                    print(f"Image not found for original slide {original_slide_index+1}, skipping this segment. Advanced frames_written to {frames_written}")
+                if not img_path:
+                    logger.warning(f"Image for slide {idx+1} not found, and no fallback available. Skipping this slide.")
                     continue
 
-            print(f"  Processing segment: original_slide_duration={original_slide_duration:.2f}s, remaining_frames_to_fill={remaining_frames_to_fill}, duration_for_this_segment={duration_for_this_segment:.2f}s")
-            frames_generated_this_segment = int(duration_for_this_segment * fps)
-            frames_written = apply_panoramic_pan(
-                temp_frame_dir, frames_written, img_path, duration_for_this_segment, resolution, slide_idx_counter, fps)
-            slide_idx_counter += 1
-            print(f"  After segment: frames_written updated to {frames_written}")
+            if img_path.lower().endswith(".gif"):
+                logger.info(f"Processing GIF: {img_path}")
+                frames_written = extract_gif_frames(img_path, temp_frame_dir, frames_written, duration, resolution, fps)
+            else:
+                frames_written = apply_panoramic_pan(temp_frame_dir, frames_written, img_path, duration, resolution, idx, fps)
 
         except Exception as e:
+            logger.error(f"Error processing slide {idx+1}: {e}")
             traceback.print_exc()
-            # To prevent infinite loops on error, advance frames by a small amount
-            frames_written += fps  # Advance by 1 second worth of frames
-            slide_idx_counter += 1
 
-    print(f"Total frames written: {frames_written}")
+    logger.info(f"Frames written after initial pass: {frames_written}")
 
-    total_output_frames = int(total_duration * fps)
-    print(f"Expected total output frames: {total_output_frames}")
+    # Padding logic to ensure the video reaches the total_duration
+    if frames_written < total_output_frames:
+        padding_needed = total_output_frames - frames_written
+        logger.info(f"Padding needed for {padding_needed} frames.")
+
+        # Create a blank frame to use for padding
+        blank_frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
+        blank_frame_path = os.path.join(temp_frame_dir, "blank_frame.jpg")
+        cv2.imwrite(blank_frame_path, blank_frame)
+
+        for i in range(padding_needed):
+            frame_path = os.path.join(temp_frame_dir, f"frame_{frames_written + i:05d}.jpg")
+            # For simplicity, we just copy the blank frame. A more advanced implementation could repeat the last slide.
+            cv2.imwrite(frame_path, blank_frame)
+        frames_written += padding_needed
+
+    logger.info(f"Total frames written after padding: {frames_written}")
 
     # Use ffmpeg to stitch frames into a video
     ffmpeg_command = [
         "ffmpeg",
-        "-y",  # Overwrite output file if it exists
-        "-f", "image2",  # Input format
-        "-framerate", str(fps),  # Input frame rate
-        "-i", os.path.join(temp_frame_dir, "frame_%05d.jpg"),  # Input image sequence
-        "-vframes", str(total_output_frames), # Process only the required number of frames
-        "-c:v", "libx264",  # Video codec
-        "-r", str(fps),  # Output frame rate
-        "-vf", f"format=yuv420p",  # Video filter for pixel format
-        "-pix_fmt", "yuv420p",  # Pixel format for wider compatibility
-        "-crf", "23",  # Constant Rate Factor (quality)
+        "-y",
+        "-framerate", str(fps),
+        "-i", os.path.join(temp_frame_dir, "frame_%05d.jpg"),
+        "-vframes", str(frames_written),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-r", str(fps),
         output_path
     ]
 
-    print(f"Running FFmpeg command: {' '.join(ffmpeg_command)}")
+    logger.info(f"Running FFmpeg command: {' '.join(ffmpeg_command)}")
     try:
         import subprocess
-        subprocess.run(ffmpeg_command, check=True)
-        print(f"Video successfully generated at {output_path}")
+        subprocess.run(ffmpeg_command, check=True, capture_output=True, text=True)
+        logger.info(f"Video successfully generated at {output_path}")
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg command failed: {e}")
-        print(f"FFmpeg stderr: {e.stderr.decode()}")
+        logger.error(f"FFmpeg command failed: {e}")
+        logger.error(f"FFmpeg stderr: {e.stderr}")
         raise
     finally:
-        # Clean up temporary frames
         import shutil
-        shutil.rmtree(temp_frame_dir)
-        print(f"Cleaned up temporary frame directory: {temp_frame_dir}")
+        if os.path.exists(temp_frame_dir):
+            shutil.rmtree(temp_frame_dir)
+            logger.info(f"Cleaned up temporary frame directory: {temp_frame_dir}")
 
 
 if __name__ == "__main__":
@@ -236,8 +273,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--duration", type=float, default=None, help="Total duration for the video. If provided, it will be padded."
     )
-    parser.add_argument("--resolution", type=str, default="576x1024",
-                        help="Video resolution as WxH (e.g., 576x1024)")
+    parser.add_argument("--resolution", type=str, default=f"{VIDEO_RESOLUTION[0]}x{VIDEO_RESOLUTION[1]}",
+                        help=f"Video resolution as WxH (e.g., {VIDEO_RESOLUTION[0]}x{VIDEO_RESOLUTION[1]})")
     parser.add_argument("--fps", type=int, default=30,
                         help="Frames per second for the output video.")
 

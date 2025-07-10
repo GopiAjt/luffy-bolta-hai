@@ -6,13 +6,9 @@ import logging
 from pathlib import Path
 from pydub import AudioSegment
 import ffmpeg
+from config.config import UPLOADS_DIR, MAX_FILE_SIZE, ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
-
-# Constants
-UPLOADS_DIR = Path(__file__).parent.parent.parent / "data" / "uploads"
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-ALLOWED_EXTENSIONS = {"mp3", "wav"}
 
 def create_uploads_dir():
     """Create uploads directory if it doesn't exist."""
@@ -36,10 +32,11 @@ def save_audio_file(file, filename: str) -> str:
     if not allowed_file(filename):
         raise ValueError(f"Invalid file type. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}")
     
-    if len(file.read()) > MAX_FILE_SIZE:
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+    if file_size > MAX_FILE_SIZE:
         raise ValueError(f"File too large. Maximum size: {MAX_FILE_SIZE/1024/1024:.1f}MB")
-    
-    file.seek(0)  # Reset file pointer
     
     # Generate unique filename
     unique_id = uuid.uuid4()

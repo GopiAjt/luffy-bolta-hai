@@ -98,6 +98,20 @@ def get_gemini_image_description(start, end, summary):
         raise
 
 
+def parse_time(t):
+    """Converts '0:00:06.28' to seconds."""
+    h, m, s = t.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def format_time(seconds):
+    """Converts seconds to 'H:MM:SS.ms' format."""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours}:{minutes:02d}:{secs:05.2f}"
+
+
 def filter_irrelevant_summaries(slides):
     # List of phrases that indicate a slide should be merged with the previous
     skip_phrases = [
@@ -117,7 +131,41 @@ def filter_irrelevant_summaries(slides):
     return filtered
 
 
-def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = None) -> str:
+def fill_gaps_in_slides(slides: List[Dict], total_duration: float) -> List[Dict]:
+    filled_slides = []
+    current_time = 0.0
+
+    for slide in slides:
+        slide_start = parse_time(slide["start_time"])
+        slide_end = parse_time(slide["end_time"])
+
+        # If there's a gap before the current slide, fill it
+        if slide_start > current_time:
+            gap_duration = slide_start - current_time
+            # Create a blank slide for the gap
+            filled_slides.append({
+                "start_time": format_time(current_time),
+                "end_time": format_time(slide_start),
+                "summary": "Silence/Transition",
+                "image_search_query": "One Piece scenery calm"  # Generic query for silent parts
+            })
+
+        filled_slides.append(slide)
+        current_time = slide_end
+
+    # Ensure the last slide extends to the total_duration
+    if current_time < total_duration:
+        filled_slides.append({
+            "start_time": format_time(current_time),
+            "end_time": format_time(total_duration),
+            "summary": "Ending/Outro",
+            "image_search_query": "One Piece outro credits"  # Generic query for the end
+        })
+
+    return filled_slides
+
+
+def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
     # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
     groups = group_dialogues(dialogues)
@@ -128,17 +176,33 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = 
             f"[{group['start']} - {group['end']}] {group['text']}")
     all_segments = "\n".join(prompt_segments)
     prompt = (
-        "You are an expert video content designer. Your task is to map subtitle segments to suggested Google image search queries, structured in JSON.\n"
+        "You are an expert video content designer. Your task is to map subtitle segments to suggested Google image search queries, structured in JSON format.\n\n"
+
         f"Here are the grouped subtitle segments for a short video:\n{all_segments}\n\n"
-        "Generate a JSON array where each object has:\n- start_time (string, e.g. '0:00:00')\n- end_time\n- summary (short subtitle text)\n- image_search_query (a concise, highly relevant Google image search string for a One Piece slide, including character names, powers, and the term 'One Piece')\n\n"
-        "IMPORTANT TIMING RULES:\n"
-        "- PRESERVE the exact start_time and end_time from the original subtitle segments\n"
-        "- Do NOT extend or modify timing to cover gaps or filler words\n"
-        "- Only create objects for meaningful, content-rich One Piece-specific narration\n"
-        "- SKIP generic/filler segments entirely (e.g., 'get this', 'trick question', 'but here's the question', 'it's both', 'wait', 'and', 'so', 'then', 'but that's not all', or any line with less than 4 words)\n"
-        "- Natural gaps between segments should be preserved as-is for pacing\n"
-        "- Each object should represent ONE complete thought/concept with its original timing\n\n"
-        "Use the exact schema below.\n\nSchema:\n[\n  {\n    \"start_time\": \"string\",\n    \"end_time\": \"string\",\n    \"summary\": \"string\",\n    \"image_search_query\": \"string\"\n  }\n]"
+
+        "Your goal is to generate a JSON array where each object includes:\n"
+        "- start_time (string, e.g., '0:00:00')\n"
+        "- end_time\n"
+        "- summary (short subtitle text that captures the essence of the segment)\n"
+        "- image_search_query (a concise, highly relevant Google image search string for a One Piece slide — include character names, abilities, settings, or iconic moments, and always include the term 'One Piece')\n\n"
+
+        "🕒 IMPORTANT TIMING RULES:\n"
+        "- MERGE consecutive subtitle segments that form a continuous narrative or a meaningful unit of dialogue.\n"
+        "- The start_time of a merged slide should be the start_time of the first segment, and the end_time should be from the last segment in the merge.\n"
+        "- Include even short or filler subtitle lines *if* they are part of an introduction, transition, or build-up to a key idea.\n"
+        "- Ensure the generated slides cover the entire duration of the provided subtitle segments — no gaps.\n"
+        "- Each object must represent one complete thought or concept, even if it spans multiple subtitle lines.\n\n"
+
+        "Output your result as valid JSON using this schema:\n"
+        "[\n"
+        "  {\n"
+        "    \"start_time\": \"string\",\n"
+        "    \"end_time\": \"string\",\n"
+        "    \"summary\": \"string\",\n"
+        "    \"image_search_query\": \"string\"\n"
+        "  },\n"
+        "  ...\n"
+        "]"
     )
 
     try:
@@ -155,6 +219,7 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = 
             try:
                 slides = _json.loads(text)
                 slides = filter_irrelevant_summaries(slides)
+                slides = fill_gaps_in_slides(slides, total_duration)
             except Exception as parse_err:
                 logger.error(
                     f"Failed to parse Gemini response as JSON: {response.text}")
@@ -173,11 +238,11 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, image_dir: str = 
     return out_path
 
 
-def generate_image_slides(ass_path: str, out_path: str, image_dir: str = None) -> str:
+def generate_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
     """
     Backward-compatible alias for generate_gemini_image_slides.
     """
-    return generate_gemini_image_slides(ass_path, out_path, image_dir)
+    return generate_gemini_image_slides(ass_path, out_path, total_duration, image_dir)
 
 
 def google_image_search(query, api_key=None, cse_id=None, num_results=10):
@@ -212,6 +277,7 @@ def download_image(url, save_path):
         logger.error(f"Failed to download image from {url}: {e}")
         raise
 
+
 def download_images_for_slides(json_path, out_dir):
     # Clear the output directory before downloading new images
     if os.path.exists(out_dir):
@@ -231,9 +297,10 @@ def download_images_for_slides(json_path, out_dir):
         try:
             if "one piece" not in search_query.lower():
                 search_query = f"{search_query} One Piece Luffy"
-            
+
             items = google_image_search(search_query, num_results=10)
-            logger.info(f"[Slide {idx+1}] Google image search returned {len(items)} results.")
+            logger.info(
+                f"[Slide {idx+1}] Google image search returned {len(items)} results.")
 
             # Filter for actual images with correct aspect ratio
             valid_images = []
@@ -244,64 +311,81 @@ def download_images_for_slides(json_path, out_dir):
                 item_height = item.get('image', {}).get('height', 0)
 
                 if 'image' not in item_mime:
-                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {item_link}")
+                    logger.debug(
+                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {item_link}")
                     continue
-                
+
                 if not item_width or not item_height:
-                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Missing dimensions ({item_width}x{item_height}) - {item_link}")
+                    logger.debug(
+                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Missing dimensions ({item_width}x{item_height}) - {item_link}")
                     continue
 
                 aspect_ratio = item_width / item_height
-                if abs(aspect_ratio - 16/9) / (16/9) < 0.10: # 10% tolerance
+                if abs(aspect_ratio - 16/9) / (16/9) < 0.10:  # 10% tolerance
                     valid_images.append(item)
-                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Accepted: Aspect ratio {aspect_ratio:.2f} - {item_link}")
+                    logger.debug(
+                        f"[Slide {idx+1} - Item {item_idx+1}] Accepted: Aspect ratio {aspect_ratio:.2f} - {item_link}")
                 else:
-                    logger.debug(f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Aspect ratio mismatch ({aspect_ratio:.2f} vs 16/9) - {item_link}")
+                    logger.debug(
+                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Aspect ratio mismatch ({aspect_ratio:.2f} vs 16/9) - {item_link}")
 
             downloaded_successfully = False
             if valid_images:
-                logger.debug(f"[Slide {idx+1}] Found {len(valid_images)} 16:9 images. Attempting download.")
+                logger.debug(
+                    f"[Slide {idx+1}] Found {len(valid_images)} 16:9 images. Attempting download.")
                 for item_idx, best_image in enumerate(valid_images):
                     img_url = best_image['link']
                     ext = os.path.splitext(img_url)[-1].split("?")[0] or ".jpg"
-                    save_path = os.path.join(out_dir, f"slide_{idx+1}_16x9{ext}")
+                    save_path = os.path.join(
+                        out_dir, f"slide_{idx+1}_16x9{ext}")
                     try:
-                        logger.info(f"[Slide {idx+1}] Attempting to download 16:9 image {item_idx+1}: {img_url}")
+                        logger.info(
+                            f"[Slide {idx+1}] Attempting to download 16:9 image {item_idx+1}: {img_url}")
                         download_image(img_url, save_path)
                         print(f"Downloaded: {save_path}")
                         logger.info(f"Downloaded: {save_path}")
                         downloaded_successfully = True
-                        break # Exit loop if download is successful
+                        break  # Exit loop if download is successful
                     except Exception as download_e:
-                        logger.warning(f"[Slide {idx+1}] Failed to download 16:9 image {item_idx+1} from {img_url}: {download_e}")
-            
+                        logger.warning(
+                            f"[Slide {idx+1}] Failed to download 16:9 image {item_idx+1} from {img_url}: {download_e}")
+
             if not downloaded_successfully and items:
-                logger.warning(f"[Slide {idx+1}] No suitable 16:9 image downloaded. Attempting fallback to any image.")
+                logger.warning(
+                    f"[Slide {idx+1}] No suitable 16:9 image downloaded. Attempting fallback to any image.")
                 for item_idx, fallback_item in enumerate(items):
                     img_url_fallback = fallback_item['link']
                     item_mime = fallback_item.get('mime', '')
                     if 'image' not in item_mime:
-                        logger.debug(f"[Slide {idx+1} - Fallback Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {img_url_fallback}")
+                        logger.debug(
+                            f"[Slide {idx+1} - Fallback Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {img_url_fallback}")
                         continue
-                    
-                    ext = os.path.splitext(img_url_fallback)[-1].split("?")[0] or ".jpg"
-                    save_path_fallback = os.path.join(out_dir, f"slide_{idx+1}_fallback{ext}") # Use a different name for fallback
+
+                    ext = os.path.splitext(
+                        img_url_fallback)[-1].split("?")[0] or ".jpg"
+                    # Use a different name for fallback
+                    save_path_fallback = os.path.join(
+                        out_dir, f"slide_{idx+1}_fallback{ext}")
                     try:
-                        logger.info(f"[Slide {idx+1}] Attempting to download fallback image {item_idx+1}: {img_url_fallback}")
+                        logger.info(
+                            f"[Slide {idx+1}] Attempting to download fallback image {item_idx+1}: {img_url_fallback}")
                         download_image(img_url_fallback, save_path_fallback)
                         print(f"Downloaded (fallback): {save_path_fallback}")
-                        logger.info(f"Downloaded (fallback): {save_path_fallback}")
+                        logger.info(
+                            f"Downloaded (fallback): {save_path_fallback}")
                         downloaded_successfully = True
-                        break # Exit loop if download is successful
+                        break  # Exit loop if download is successful
                     except Exception as fallback_e:
-                        logger.warning(f"[Slide {idx+1}] Failed to download fallback image {item_idx+1} from {img_url_fallback}: {fallback_e}")
+                        logger.warning(
+                            f"[Slide {idx+1}] Failed to download fallback image {item_idx+1} from {img_url_fallback}: {fallback_e}")
 
             if not downloaded_successfully:
-                logger.error(f"[Slide {idx+1}] No image could be downloaded for query: {search_query}")
+                logger.error(
+                    f"[Slide {idx+1}] No image could be downloaded for query: {search_query}")
                 print(f"No image could be downloaded for slide {idx+1}")
 
         except Exception as e:
             print(f"Failed to download for slide {idx+1}: {e}")
             logger.error(f"Failed to download for slide {idx+1}: {e}")
         finally:
-            time.sleep(1) # Rate limit our requests
+            time.sleep(1)  # Rate limit our requests

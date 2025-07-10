@@ -1,5 +1,6 @@
 import os
 from app.api.main import app
+from config.config import HOST, PORT, DEBUG
 
 if __name__ == '__main__':
     # Load environment variables
@@ -7,7 +8,7 @@ if __name__ == '__main__':
     load_dotenv()
     
     # Get port from environment variable or use default
-    port = int(os.getenv('FLASK_PORT', '5050'))
+    port = int(os.getenv('FLASK_PORT', PORT))
     
     # Start Flask server
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host=HOST, port=port, debug=DEBUG)

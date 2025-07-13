@@ -423,13 +423,27 @@ export class LuffyBoltHaiApp {
             const expressionsFile = await getLatestExpressionsFile();
             console.log('Latest expressions file:', expressionsFile);
             
+            // Get the latest image slides JSON if it exists
+            const imageSlidesResponse = await fetch('/api/v1/latest-image-slides');
+            let slidesJson = null;
+            if (imageSlidesResponse.ok) {
+                const data = await imageSlidesResponse.json();
+                if (data && data.path) {
+                    slidesJson = data.path;
+                    console.log('Found existing image slides:', slidesJson);
+                }
+            }
+
             const requestData = {
                 audio_id: this.currentAudioId,
                 subtitle_file: subtitleFile.path,
                 expressions_file: expressionsFile && expressionsFile.path ? expressionsFile.path : null,
-                force_regenerate_slides: false,  // Don't regenerate slides, use existing ones
-                use_existing_slides: true       // Use existing image slides
+                force_regenerate_slides: false,  // Don't force regenerate slides
+                slides_json: slidesJson,         // Pass the existing slides JSON if available
+                use_existing_slides: true        // Indicate we want to use existing slides
             };
+            
+            console.log('Request data for final video generation:', JSON.stringify(requestData, null, 2));
             
             if (!requestData.expressions_file) {
                 console.warn('No expressions file found. Video will be generated without expressions.');

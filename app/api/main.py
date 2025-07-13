@@ -615,34 +615,64 @@ def generate_final_video_endpoint():
             logger.error(error_msg)
             return jsonify({'status': 'error', 'message': error_msg}), 400
 
-        # Find or generate slides JSON
+        # Handle slides generation based on parameters
+        use_existing_slides = data.get('use_existing_slides', True)
         slides_json = data.get('slides_json')
-        logger.info(f"Current slides_json: {slides_json}")
         
-        if not slides_json or force_regenerate:
-            logger.info("Generating new slides...")
+        logger.info(f"Slides generation parameters - use_existing_slides: {use_existing_slides}, force_regenerate: {force_regenerate}, provided_slides: {slides_json is not None}")
+        
+        # If we're forcing regeneration or don't have existing slides to use
+        if force_regenerate or not use_existing_slides or not slides_json or not os.path.exists(slides_json):
+            if force_regenerate:
+                logger.info("Forcing regeneration of slides as requested...")
+            elif not use_existing_slides:
+                logger.info("Generating new slides as use_existing_slides is False...")
+            else:
+                logger.info("Existing slides not found or invalid, generating new slides...")
+                
             try:
-                # Generate new slides
-                slides_result = generate_image_slides_endpoint()
-                if isinstance(slides_result, tuple):  # If there was an error
-                    logger.error(f"Error generating slides: {slides_result[0].get_json()}")
-                    return slides_result
+                # Generate new slides with the current audio_id
+                from flask import jsonify as flask_jsonify
                 
-                slides_data = slides_result.get_json()
-                slides_json = slides_data.get('output_path')
-                logger.info(f"Generated new slides at: {slides_json}")
-                
-                if not slides_json or not os.path.exists(slides_json):
-                    error_msg = f'Failed to generate slides. Output path not found: {slides_json}'
-                    logger.error(error_msg)
-                    return jsonify({'status': 'error', 'message': error_msg}), 500
+                # Create a new request context to call the endpoint
+                with app.test_request_context(
+                    '/api/v1/generate-image-slides',
+                    method='POST',
+                    json={'audio_id': audio_id, 'ass_path': 'auto'}
+                ):
+                    # Call the endpoint function directly with the test context
+                    slides_result = generate_image_slides_endpoint()
+                    
+                    if isinstance(slides_result, tuple):  # If there was an error
+                        logger.error(f"Error generating slides: {slides_result[0].get_json()}")
+                        return slides_result
+                    
+                    # Get the JSON response
+                    if hasattr(slides_result, 'get_json'):
+                        slides_data = slides_result.get_json()
+                        slides_json = slides_data.get('output_path')
+                        logger.info(f"Generated new slides at: {slides_json}")
+                        
+                        if not slides_json or not os.path.exists(slides_json):
+                            error_msg = f'Failed to generate slides. Output path not found: {slides_json}'
+                            logger.error(error_msg)
+                            return jsonify({'status': 'error', 'message': error_msg}), 500
+                    else:
+                        error_msg = 'Invalid response format from generate_image_slides_endpoint'
+                        logger.error(error_msg)
+                        return jsonify({'status': 'error', 'message': error_msg}), 500
                     
             except Exception as e:
                 error_msg = f'Error generating slides: {str(e)}'
                 logger.error(error_msg, exc_info=True)
                 return jsonify({'status': 'error', 'message': error_msg}), 500
         else:
-            logger.info(f"Using existing slides: {slides_json}")
+            logger.info(f"Using existing slides from: {slides_json}")
+            # Verify the slides file exists
+            if not os.path.exists(slides_json):
+                error_msg = f'Specified slides file not found: {slides_json}'
+                logger.error(error_msg)
+                return jsonify({'status': 'error', 'message': error_msg}), 400
 
         logger.info("Starting final video generation...")
         try:
@@ -788,10 +818,68 @@ def _find_latest_expressions_file():
 def get_latest_expressions_file():
     """
     Returns the path to the latest .expressions.json file in data/uploads.
+    
+    Returns:
+        JSON: { "path": str, "exists": bool, "status": str }
     """
     try:
-        latest_file = _find_latest_expressions_file()
-        return jsonify({'path': latest_file})
+        expressions_file = _find_latest_expressions_file()
+        if expressions_file and os.path.exists(expressions_file):
+            return jsonify({
+                'status': 'success',
+                'path': expressions_file,
+                'exists': True
+            })
+        
+        return jsonify({
+            'status': 'not_found',
+            'message': 'No expressions file found',
+            'exists': False
+        })
     except Exception as e:
-        logger.error(f"Error in get_latest_expressions_file: {str(e)}")
-        return jsonify({'path': None, 'error': str(e)}), 500
+        error_msg = f'Error getting latest expressions file: {str(e)}'
+        logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': error_msg,
+            'exists': False
+        }), 500
+
+
+@app.route('/api/v1/latest-image-slides', methods=['GET'])
+def get_latest_image_slides():
+    """
+    Returns the path to the latest .image_slides.json file in data/uploads.
+    
+    Returns:
+        JSON: { "path": str, "exists": bool, "status": str }
+    """
+    try:
+        # Get the JSON response from get_latest_image_slides_json
+        response = get_latest_image_slides_json()
+        
+        # If we got a response and it has a path
+        if response and 'path' in response.get_json():
+            image_slides_file = response.get_json()['path']
+            
+            if image_slides_file and os.path.exists(image_slides_file):
+                return jsonify({
+                    'status': 'success',
+                    'path': image_slides_file,
+                    'exists': True
+                })
+        
+        # If we get here, no valid file was found
+        return jsonify({
+            'status': 'not_found',
+                'message': 'No image slides file found',
+                'exists': False
+            })
+    except Exception as e:
+        error_msg = f'Error getting latest image slides: {str(e)}'
+        logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': error_msg,
+            'exists': False
+        }), 500

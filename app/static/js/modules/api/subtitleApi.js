@@ -64,6 +64,10 @@ export const getLatestSubtitleFile = async () => {
  * Fetches the latest expressions file from the server
  * @returns {Promise<Object>} Object containing the path to the latest expressions file or null if not found
  */
+/**
+ * Fetches the latest expressions file from the server
+ * @returns {Promise<Object>} Object containing the path to the latest expressions file or null if not found
+ */
 export const getLatestExpressionsFile = async () => {
     console.log('=== getLatestExpressionsFile called ===');
     try {
@@ -74,7 +78,7 @@ export const getLatestExpressionsFile = async () => {
         if (!response.ok) {
             if (response.status === 404) {
                 console.log('No expressions file found, returning null');
-                return { path: null };
+                return { path: null, exists: false };
             }
             const errorText = await response.text();
             console.error('Error response:', errorText);
@@ -83,10 +87,36 @@ export const getLatestExpressionsFile = async () => {
         
         const data = await parseJsonResponse(response);
         console.log('Latest expressions file data:', data);
-        return data;
+        
+        // Handle different response formats
+        if (data && data.path) {
+            return { 
+                path: data.path, 
+                exists: data.exists || false,
+                status: data.status || 'success'
+            };
+        } else if (data && data.status === 'not_found') {
+            console.log('No expressions file found (not_found status)');
+            return { path: null, exists: false, status: 'not_found' };
+        } else if (typeof data === 'string') {
+            // Handle case where response is just a path string
+            return { 
+                path: data, 
+                exists: true,
+                status: 'success'
+            };
+        }
+        
+        console.warn('Unexpected response format for expressions file:', data);
+        return { path: null, exists: false, status: 'unknown_format' };
     } catch (error) {
         console.error('Error in getLatestExpressionsFile:', error);
         // Return null instead of throwing to allow video generation to continue without expressions
-        return { path: null };
+        return { 
+            path: null, 
+            exists: false, 
+            status: 'error',
+            error: error.message 
+        };
     }
 };

@@ -1,185 +1,79 @@
-# Luffy Bolta Hai - One Piece Subtitle Analysis & Narration Video Pipeline
+# Luffy Bolta Hai - One Piece AI Voice & Video Generator
 
-A Python project for processing, analyzing, and translating One Piece anime subtitles, and for generating narration videos with clean, phrase-based subtitles.
+This project is a web application that uses AI to generate video clips of the anime character Luffy, with user-provided audio and subtitles. The application leverages Retrieval-Augmented Generation (RAG) to create scripts and map character expressions to the dialogue.
 
 ## Features
 
-- Process and clean subtitle files (SRT format)
-- Extract character dialogue and speaking patterns
-- Analyze subtitle statistics and trends
-- Translate Japanese subtitles to English using Google Cloud Translation API
-- Generate visualizations for character interactions and episode patterns
-- **NEW:** Generate narration videos with:
-  - Script generation (random or topic-based)
-  - Audio alignment using WhisperX (word-level timestamps)
-  - Phrase-based, bold, clean subtitles (max 5 words/line, no effects)
-  - Subtitles well-synced to audio using silence gap detection and word count
-  - Burned-in subtitles on vertical (9:16) videos (1080x1920)
+*   **AI-powered script generation:** Creates scripts based on user prompts using a RAG model trained on One Piece subtitles.
+*   **Audio-to-video synchronization:** Generates a video slideshow that matches the duration of the user-uploaded audio.
+*   **Dynamic expression mapping:** Analyzes the script and maps Luffy's facial expressions to the dialogue.
+*   **Subtitle generation:** Creates subtitles from the generated script and synchronizes them with the audio.
+*   **Web-based interface:** Provides a user-friendly interface for generating and previewing videos.
 
 ## Project Structure
 
-```
-luffy-bolta-hai/
-├── data/
-│   ├── raw/              # Raw subtitle files (not tracked in git)
-│   ├── processed/        # Processed subtitle files (not tracked in git)
-│   └── analysis/         # Analysis results and visualizations (not tracked in git)
-├── scripts/
-│   ├── process_subtitles.py    # Subtitle processing script
-│   ├── analyze_subtitles.py    # Subtitle statistics analysis
-│   ├── analyze_dialogue.py     # Dialogue analysis
-│   ├── analyze_characters.py   # Character analysis
-│   └── translate_subtitles.py  # Subtitle translation
-├── credentials/          # Google Cloud credentials (not tracked in git)
-├── requirements.txt      # Python dependencies
-└── README.md            # Project documentation
-```
+The project is organized as follows:
 
-## Setup
+*   `app/`: Contains the main Flask application.
+    *   `api/`: Defines the API endpoints for the web application.
+    *   `core/`: Core logic for PDF processing, RAG models, and text processing.
+    *   `static/`: Frontend assets (HTML, CSS, JavaScript).
+    *   `utils/`: Utility scripts for audio processing, video generation, etc.
+*   `config/`: Configuration files.
+*   `credentials/`: API keys and other credentials.
+*   `data/`: Raw and processed data, including subtitles and vector databases.
+*   `scripts/`: Standalone scripts for data analysis, model training, and video generation.
+*   `tests/`: Test files.
 
-1. Clone the repository:
+## Setup and Running
 
-```bash
-git clone https://github.com/yourusername/luffy-bolta-hai.git
-cd luffy-bolta-hai
-```
+1.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-2. Create and activate a virtual environment:
+2.  **Set up credentials:**
+    *   Place your Google Cloud credentials in a file named `google_cloud_credentials.json` inside the `credentials/` directory.
 
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+3.  **Process data and train the RAG model:**
+    *   Run the scripts in the `scripts/` directory to process subtitles, analyze characters and dialogue, and build the RAG model.
 
-3. Install dependencies:
+4.  **Start the server:**
+    ```bash
+    python run_server.py
+    ```
 
-```bash
-pip install -r requirements.txt
-```
+5.  **Access the application:**
+    *   Open your web browser and navigate to `http://127.0.0.1:5000`.
 
-4. Set up Google Cloud credentials:
+## API Endpoints
 
-   - Create a Google Cloud project
-   - Enable the Cloud Translation API
-   - Create a service account and download the credentials JSON file
-   - Create a `credentials` directory in the project root
-   - Place your credentials file in the `credentials` directory
-   - Rename it to `google_cloud_credentials.json`
+The following API endpoints are available:
 
-5. Prepare your data:
-   - Place your raw subtitle files in `data/raw/`
-   - The processed files will be saved in `data/processed/`
-   - Analysis results will be saved in `data/analysis/`
+*   `POST /api/v1/generate-script`: Generates a script from a user prompt.
+*   `POST /api/v1/upload-audio`: Uploads an audio file.
+*   `POST /api/v1/generate-subtitles`: Generates subtitles for the uploaded audio and script.
+*   `POST /api/v1/generate-final-video`: Creates the final video with audio, subtitles, and expressions.
+*   `GET /api/v1/latest-ass-file`: Returns the path to the latest generated subtitle file.
+*   `GET /api/v1/latest-expressions-file`: Returns the path to the latest generated expressions file.
+*   `GET /api/v1/download/<filename>`: Downloads a generated file.
 
-## Usage
+## Scripts
 
-### Subtitle & Analysis Scripts
+The `scripts/` directory contains various standalone scripts for data processing, analysis, and model training:
 
-1. Process subtitles:
+*   `analyze_characters.py`: Analyzes character dialogues and relationships.
+*   `analyze_dialogue.py`: Analyzes dialogue patterns and emotional content.
+*   `analyze_subtitles.py`: Performs statistical analysis on subtitle files.
+*   `expression_mapper.py`: Maps character expressions to dialogue.
+*   `generate_script.py`: Generates a script using the RAG model.
+*   `generate_video_with_expressions.py`: Generates a video with character expressions.
+*   `process_subtitles.py`: Processes raw subtitle files into a structured format.
+*   `setup.py`: Sets up the project environment.
+*   `test_rag.py`: Tests the RAG model.
+*   `translate_subtitles.py`: Translates subtitles to English.
+*   `translate_subtitles_libre.py`: Translates subtitles using the LibreTranslate API.
 
-```bash
-python scripts/process_subtitles.py
-```
+## RAG Model
 
-2. Analyze subtitles:
-
-```bash
-python scripts/analyze_subtitles.py
-```
-
-3. Analyze dialogue:
-
-```bash
-python scripts/analyze_dialogue.py
-```
-
-4. Analyze characters:
-
-```bash
-python scripts/analyze_characters.py
-```
-
-5. Translate subtitles:
-
-```bash
-python scripts/translate_subtitles.py
-```
-
-### Narration Video Generation Pipeline (WhisperX-based)
-
-1. **Generate a script** (random or topic-based):
-
-   - Use the FastAPI backend or the provided script generator utility.
-
-2. **Generate audio narration** for the script (TTS or upload your own).
-
-3. **Generate word-level timestamps** using WhisperX:
-
-   - The pipeline uses WhisperX to transcribe and align audio, producing accurate word-level timestamps.
-   - No need for aeneas; WhisperX is now fully integrated.
-
-4. **Group words into subtitle phrases**:
-
-   - Phrases are grouped by silence gaps (using pydub) and a max word count (default: 5 words/line).
-   - Subtitles are formatted as clean, bold, ASS files (no effects/tags).
-
-5. **Burn subtitles into a vertical (9:16) video**:
-
-   - The video generator uses the phrase-based ASS file and the audio to create a 1080x1920 video with burned-in subtitles.
-
-6. **Preview or download the video** via the FastAPI backend or static output directory.
-
-#### Example (CLI):
-
-```bash
-# (Assuming you have a script and audio ready)
-python app/utils/subtitle_generator.py --audio path/to/audio.mp3 --script path/to/script.txt --output path/to/output.ass
-# Then use the video generator to burn subtitles
-python app/utils/video_generator.py --audio path/to/audio.mp3 --sub path/to/output.ass --output path/to/video.mp4
-```
-
-#### Example (API):
-
-- Use the `/api/generate` endpoint to trigger the full pipeline from script to video.
-
-### Requirements for WhisperX Pipeline
-
-- Python 3.8+
-- torch (see WhisperX docs for compatible versions)
-- whisperx
-- pydub
-- ffmpeg (system dependency)
-
-#### Troubleshooting
-
-- If you see float16 errors on CPU, WhisperX is forced to use `compute_type="float32"`.
-- Ensure ffmpeg is installed and in your PATH.
-- For best results, use a GPU (but CPU is supported).
-
-## Dependencies
-
-- Python 3.8+
-- pandas
-- numpy
-- matplotlib
-- seaborn
-- japanize-matplotlib
-- networkx
-- wordcloud
-- google-cloud-translate
-- torch
-- whisperx
-- pydub
-- ffmpeg (system)
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+The project uses a Retrieval-Augmented Generation (RAG) model to generate scripts. The RAG model is built using `langchain` and `llama-index` and is trained on a large corpus of One Piece subtitles. The core logic for the RAG model can be found in `app/core/rag_processor.py` and `app/core/subtitle_rag.py`.

@@ -4,16 +4,16 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  * API client for video operations
  */
 
-export const generateVideo = async (audioId, subtitleFileId, slideshowVideoId) => {
-    const response = await fetch('/api/v1/generate-video', {
+export const generateVideo = async (audioId, subtitleFile, slidesJsonPath) => {
+    const response = await fetch('/api/v1/generate-final-video', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
             audio_id: audioId,
-            subtitle_id: subtitleFileId,
-            slideshow_video_id: slideshowVideoId
+            subtitle_file: subtitleFile,
+            slides_json: slidesJsonPath
         })
     });
 
@@ -28,12 +28,16 @@ export const getVideoStatus = async (videoId) => {
 };
 
 export const generateSlideshow = async (audioId) => {
-    const response = await fetch('/api/v1/generate-slideshow', {
+    const response = await fetch('/api/v1/generate-image-slides', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ audio_id: audioId })
+        body: JSON.stringify({ 
+            audio_id: audioId,
+            // We'll let the server determine the latest ASS file
+            ass_path: 'auto' 
+        })
     });
 
     await handleApiError(response);

@@ -37,10 +37,13 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     res_w, res_h = resolution
     num_frames = int(duration * fps)
     
+    # Log the panning direction for debugging
+    direction = "left→right" if idx % 2 == 0 else "right→left"
+    logger.info(f"Processing slide {img_path} with index {idx}, panning {direction}")
 
     img = cv2.imread(img_path)
     if img is None:
-        print(f"Warning: Could not read image at {img_path}. Skipping.")
+        logger.warning(f"Could not read image at {img_path}. Skipping.")
         return frame_counter # Return current frame_counter
 
     # 1. Scale image so its height matches video height
@@ -60,15 +63,27 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
 
     # 2. For each frame, compute horizontal crop window
     frames_actually_written = 0
+    
+    # Calculate the maximum possible x position (0 if image is narrower than video width)
+    max_x = max(0, scaled_w - res_w)
+    
     for i in range(num_frames):
         # fraction from 0.0→1.0
-        t = i / (num_frames - 1) if num_frames > 1 else 0
-        if idx % 2 == 0:
-            # left → right
-            x = int(t * (scaled_w - res_w))
+        t = i / (num_frames - 1) if num_frames > 1 else 0.0
+        
+        # Only apply panning if the image is wider than the video
+        if max_x > 0:
+            if idx % 2 == 0:
+                # left → right
+                x = int(t * max_x)
+            else:
+                # right → left
+                x = int((1 - t) * max_x)
         else:
-            # right → left
-            x = int((1 - t) * (scaled_w - res_w))
+            # Center the image if it's not wide enough to pan
+            x = 0
+            
+        logger.debug(f"Frame {i}: x={x}, t={t:.2f}, max_x={max_x}, direction={'left→right' if idx % 2 == 0 else 'right→left'}")
 
         frame = scaled[:, x: x + res_w]
         cv2.imwrite(os.path.join(temp_frame_dir, f"frame_{frame_counter:05d}.jpg"), frame)
@@ -172,12 +187,19 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         slides = json.load(f)
 
     last_slide_end_time = 0
+    # Track the actual number of slides processed for panning direction
+    slides_processed = 0
+    
+    logger.info(f"Starting to process {len(slides)} slides...")
+    
     for idx, slide in enumerate(slides):
         try:
             start = parse_time(slide["start_time"])
             end = parse_time(slide["end_time"])
             duration = end - start
             last_slide_end_time = max(last_slide_end_time, end)
+            
+            logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): start={start:.2f}s, end={end:.2f}s, duration={duration:.2f}s")
 
             img_path = None
             for ext in ["jpg", "png", "jpeg", "gif"]:
@@ -204,8 +226,16 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             if img_path.lower().endswith(".gif"):
                 logger.info(f"Processing GIF: {img_path}")
                 frames_written = extract_gif_frames(img_path, temp_frame_dir, frames_written, duration, resolution, fps)
+                slides_processed += 1
             else:
-                frames_written = apply_panoramic_pan(temp_frame_dir, frames_written, img_path, duration, resolution, idx, fps)
+                # Log the slide number and panning direction before processing
+                direction = "left→right" if slides_processed % 2 == 0 else "right→left"
+                logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): panning {direction}")
+                
+                # Use slides_processed for panning direction
+                frames_written = apply_panoramic_pan(temp_frame_dir, frames_written, img_path, 
+                                                  duration, resolution, slides_processed, fps)
+                slides_processed += 1
 
         except Exception as e:
             logger.error(f"Error processing slide {idx+1}: {e}")

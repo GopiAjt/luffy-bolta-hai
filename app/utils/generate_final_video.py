@@ -30,6 +30,7 @@ def generate_final_video(
     images_dir: str = str(IMAGE_SLIDES_DIR),
     expressions_path: str = None,
     output_filename: str = None,
+    generate_slides: bool = True,  # New parameter to control slides generation
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -56,15 +57,20 @@ def generate_final_video(
 
         # 2. Generate the slideshow video (as a temporary file)
         slideshow_output_path = COMPILED_VIDEO_DIR / f"slideshow_temp_{Path(audio_id).stem}.mp4"
-        logger.info(f"Generating slideshow video at: {slideshow_output_path}")
-        generate_slideshow_video(
-            json_path=slides_json_path,
-            image_dir=images_dir,
-            output_path=str(slideshow_output_path),
-            total_duration=total_audio_duration,
-            resolution=VIDEO_RESOLUTION,
-        )
-        logger.info("Slideshow video generated successfully.")
+        
+        # Only generate slides if needed or if file doesn't exist
+        if generate_slides or not slideshow_output_path.exists():
+            logger.info(f"Generating slideshow video at: {slideshow_output_path}")
+            generate_slideshow_video(
+                json_path=slides_json_path,
+                image_dir=images_dir,
+                output_path=str(slideshow_output_path),
+                total_duration=total_audio_duration,
+                resolution=VIDEO_RESOLUTION,
+            )
+            logger.info("Slideshow video generated successfully.")
+        else:
+            logger.info("Using existing slideshow video")
 
         # 3. Initialize the VideoGenerator
         video_generator = VideoGenerator()
@@ -79,7 +85,33 @@ def generate_final_video(
         # 5. Generate the final video with audio, subtitles, and expressions
         logger.info("Generating final video with audio, subtitles, and expressions...")
         if expressions_path and Path(expressions_path).exists():
-            logger.info("Expressions file found, generating video with expressions.")
+            logger.info(f"Expressions file found at: {expressions_path}")
+            logger.info(f"Expressions directory: {EXPRESSIONS_DIR}")
+            logger.info(f"Background video path: {slideshow_output_path}")
+            logger.info(f"Output path: {final_output_path}")
+            
+            # Log expressions file content for debugging
+            try:
+                with open(expressions_path, 'r', encoding='utf-8') as f:
+                    expressions_data = json.load(f)
+                    logger.info(f"Loaded {len(expressions_data)} expressions from {expressions_path}")
+                    logger.debug(f"Expressions data: {json.dumps(expressions_data, indent=2, ensure_ascii=False)}")
+            except Exception as e:
+                logger.error(f"Error reading expressions file: {e}", exc_info=True)
+            
+            # Log available expression images
+            try:
+                if EXPRESSIONS_DIR.exists():
+                    available_images = list(EXPRESSIONS_DIR.glob('*.png'))
+                    logger.info(f"Found {len(available_images)} expression images in {EXPRESSIONS_DIR}")
+                    logger.debug(f"Available expression images: {[img.name for img in available_images]}")
+                else:
+                    logger.error(f"Expressions directory not found: {EXPRESSIONS_DIR}")
+            except Exception as e:
+                logger.error(f"Error listing expression images: {e}", exc_info=True)
+            
+            # Generate video with expressions
+            logger.info("Starting video generation with expressions...")
             final_video_path = video_generator.generate_video_with_expressions(
                 audio_path=str(audio_path),
                 subtitle_path=subtitle_path,

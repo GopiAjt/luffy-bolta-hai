@@ -293,14 +293,21 @@ class VideoGenerator:
             # Load expressions
             with open(expressions_path, 'r', encoding='utf-8') as f:
                 expressions = json.load(f)
+                
+            logger.info(f"Loaded {len(expressions)} expressions from {expressions_path}")
+            logger.debug(f"Expressions data: {json.dumps(expressions, indent=2, ensure_ascii=False)}")
+            
             # Group intervals by label
             label_intervals = {}
             for expr in expressions:
                 label = expr['expression'].lower()
                 if label not in label_intervals:
                     label_intervals[label] = []
-                label_intervals[label].append(
-                    (self._parse_time(expr['start']), self._parse_time(expr['end'])))
+                start_time = self._parse_time(expr['start'])
+                end_time = self._parse_time(expr['end'])
+                label_intervals[label].append((start_time, end_time))
+                
+            logger.info(f"Processed expression labels: {list(label_intervals.keys())}")
             # Merge intervals for each label
             for label in label_intervals:
                 label_intervals[label] = self._merge_intervals(
@@ -329,12 +336,25 @@ class VideoGenerator:
                 input_idx = 1  # First overlay image will be input 1
 
             # For each label and interval, add a separate image input and overlay (no fade/transition)
+            logger.info(f"Expression images directory: {expr_img_dir}")
+            available_images = os.listdir(expr_img_dir)
+            logger.info(f"Available expression images: {available_images}")
+            
             for label, intervals in label_intervals.items():
-                img_path = os.path.join(expr_img_dir, f"{label}.png")
+                img_filename = f"{label}.png"
+                img_path = os.path.join(expr_img_dir, img_filename)
+                
                 if not os.path.exists(img_path):
-                    logger.warning(
-                        f"Image for expression '{label}' not found: {img_path}")
-                    continue
+                    logger.warning(f"Image for expression '{label}' not found: {img_path}")
+                    logger.warning(f"Looking for: {img_filename}, available images: {available_images}")
+                    # Try to find a case-insensitive match
+                    matching_files = [f for f in available_images if f.lower() == img_filename.lower()]
+                    if matching_files:
+                        img_path = os.path.join(expr_img_dir, matching_files[0])
+                        logger.info(f"Found case-insensitive match: {img_path}")
+                    else:
+                        logger.error(f"No matching image found for expression: {label}")
+                        continue
                 for fade_idx, (start, end) in enumerate(intervals):
                     if end <= start:
                         logger.warning(
@@ -360,10 +380,16 @@ class VideoGenerator:
             # Clean filtergraph: remove newlines only (do not escape double quotes)
             filter_complex_clean = filter_complex.replace('\n', '')
 
+            # Log the filter graph for debugging
+            logger.info("FFmpeg filter graph:")
+            for i, step in enumerate(filter_steps, 1):
+                logger.info(f"  Step {i}: {step}")
+                
             # Write filter_complex to a temporary file as-is (preserve newlines and formatting)
             with tempfile.NamedTemporaryFile('w+', suffix='.ffmpeg', delete=False) as fscript:
                 fscript.write(filter_complex)
                 fscript_path = fscript.name
+                logger.info(f"Wrote filter graph to temporary file: {fscript_path}")
 
             # Build ffmpeg command using -filter_complex <string> (pass as string, not file)
             # audio_input_idx will be the index of the audio input stream
@@ -384,8 +410,17 @@ class VideoGenerator:
                     audio_path).lower().endswith('.mp3') else 'copy',
                 '-b:a', '192k', '-shortest', str(output_path)
             ]
-            logger.info(
-                f"Generating video with expressions: {' '.join(map(str, cmd))}")
+            
+            # Log the full command and filter graph for debugging
+            logger.info("FFmpeg command with arguments:")
+            for i, arg in enumerate(cmd):
+                logger.info(f"  Arg {i}: {arg}")
+                
+            logger.info("Filter graph steps:")
+            for i, step in enumerate(filter_steps, 1):
+                logger.info(f"  Step {i}: {step}")
+                
+            logger.info(f"Final filter complex string: {filter_complex_clean}")
             result = subprocess.run(
                 cmd,
                 check=True,
@@ -396,22 +431,36 @@ class VideoGenerator:
             # Clean up temp filter script
             try:
                 os.remove(fscript_path)
+                logger.debug(f"Removed temporary filter script: {fscript_path}")
             except Exception as e:
                 logger.warning(f"Failed to remove temp filter script: {e}")
+                # Keep the file for debugging if removal fails
+                logger.info(f"Temporary filter script kept at: {fscript_path}")
+
+            # Verify the output file was created
+            if not os.path.exists(output_path):
+                logger.error(f"Output video file was not created: {output_path}")
+                raise FileNotFoundError(f"Output video file was not created: {output_path}")
+            
+            output_size = os.path.getsize(output_path)
+            if output_size == 0:
+                logger.error(f"Output video file is empty: {output_path}")
+                raise RuntimeError(f"Output video file is empty: {output_path}")
+                
+            # Convert to MP4 if needed
             if convert_to_mp4 and output_path.lower().endswith('.mkv'):
                 mp4_path = output_path.rsplit('.', 1)[0] + '.mp4'
                 if self._convert_mkv_to_mp4(output_path, mp4_path):
                     try:
                         os.remove(output_path)
-                        logger.info(
-                            f"Removed temporary MKV file: {output_path}")
+                        logger.info(f"Removed temporary MKV file: {output_path}")
                     except OSError as e:
-                        logger.warning(
-                            f"Failed to remove temporary MKV file: {e}")
+                        logger.warning(f"Failed to remove temporary MKV file: {e}")
                     output_path = mp4_path
                 else:
-                    logger.warning(
-                        "Failed to convert MKV to MP4, keeping MKV file")
+                    logger.warning("Failed to convert MKV to MP4, keeping MKV file")
+            
+            logger.info(f"Successfully generated video with expressions: {output_path}")
             return output_path
         except subprocess.CalledProcessError as e:
             logger.error(f"FFmpeg error: {e.stderr}")

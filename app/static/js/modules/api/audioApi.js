@@ -5,6 +5,7 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  */
 
 export const uploadAudio = async (file, onProgress) => {
+    console.log('Starting audio upload for file:', file.name, 'size:', file.size, 'type:', file.type);
     const formData = new FormData();
     formData.append('audio', file);
 
@@ -21,10 +22,22 @@ export const uploadAudio = async (file, onProgress) => {
         xhr.onload = async () => {
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
+                    // Parse the headers string into an object
+                    const headers = new Headers();
+                    const headersString = xhr.getAllResponseHeaders();
+                    const headerPairs = headersString.trim().split(/[\r\n]+/);
+                    
+                    headerPairs.forEach(line => {
+                        const parts = line.split(': ');
+                        const header = parts.shift();
+                        const value = parts.join(': ');
+                        if (header) headers.append(header, value);
+                    });
+                    
                     const response = new Response(xhr.responseText, {
                         status: xhr.status,
                         statusText: xhr.statusText,
-                        headers: new Headers(xhr.getAllResponseHeaders())
+                        headers: headers
                     });
                     const data = await parseJsonResponse(response);
                     resolve(data);

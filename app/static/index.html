@@ -190,6 +190,23 @@
                             </div>
                         </div>
                     </div>
+                    <div class="mb-3">
+                        <label for="subtitleStyleSelector" class="form-label">Subtitle Style/Effect</label>
+                        <select class="form-select" id="subtitleStyleSelector">
+                            <option value="karaoke">Karaoke (Default)</option>
+                            <option value="color">Color Highlight</option>
+                            <option value="underline">Underline</option>
+                            <option value="font_size">Font Size Animation</option>
+                            <option value="shadow">Shadow Animation</option>
+                            <option value="fade">Fade In/Out Per Word</option>
+                            <option value="pop">Word Pop/Bounce</option>
+                            <option value="background">Background Box/Highlight</option>
+                            <option value="scroll">Scrolling Text</option>
+                            <option value="wave">Wave/Shake</option>
+                            <option value="glow">Fade/Glow</option>
+                            <option value="entrance">Animated Entrance</option>
+                        </select>
+                    </div>
                     <div class="d-grid gap-2">
                         <button id="generateSubtitlesButton" class="btn btn-primary">
                             <i class="bi bi-text-paragraph me-2"></i>Generate Subtitles
@@ -211,8 +228,8 @@
             <h2 class="text-center mb-4"><i class="bi bi-camera-video me-2"></i>Video Preview</h2>
             <div id="videoPreviewContainer" class="text-center" style="display: none;">
                 <h3 class="h4 mb-3">Generated Video</h3>
-                <div class="video-container">
-                    <video id="videoPreview" controls class="w-100">
+                <div class="w-55 mx-auto d-block">
+                    <video id="videoPreview" controls class="w-55 mx-auto d-block">
                         Your browser does not support the video tag.
                     </video>
                 </div>

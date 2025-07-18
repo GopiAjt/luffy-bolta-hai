@@ -362,7 +362,13 @@ export class LuffyBoltHaiApp {
         }
         
         try {
-            const result = await generateSubtitles(this.currentAudioId, scriptInput.value);
+            // Get selected subtitle style
+            const subtitleStyleSelector = document.getElementById('subtitleStyleSelector');
+            let subtitleStyle = 'karaoke';
+            if (subtitleStyleSelector && subtitleStyleSelector.value) {
+                subtitleStyle = subtitleStyleSelector.value;
+            }
+            const result = await generateSubtitles(this.currentAudioId, scriptInput.value, subtitleStyle);
             subtitleOutput.textContent = 'Subtitles generated successfully!';
             subtitleOutput.style.display = 'block';
             

@@ -1,11 +1,41 @@
 import os
 import subprocess
 import logging
-from typing import Optional
+import sys
+import traceback
+from typing import Optional, Dict, Any, List, Tuple, Union
 from pathlib import Path
 import tempfile
+import json
 
+# Log MoviePy import attempts
+try:
+    from moviepy.editor import VideoFileClip, ColorClip, CompositeVideoClip, AudioFileClip, TextClip
+    MOVIEPY_AVAILABLE = True
+except ImportError as e:
+    logging.error(f"Failed to import MoviePy: {str(e)}")
+    logging.error(f"Python path: {sys.path}")
+    try:
+        import moviepy
+        logging.error(f"MoviePy path: {moviepy.__file__}")
+        logging.error(f"MoviePy version: {getattr(moviepy, '__version__', 'unknown')}")
+    except Exception as ie:
+        logging.error(f"Could not get MoviePy info: {str(ie)}")
+    MOVIEPY_AVAILABLE = False
+
+from app.utils.subtitle_generator import SubtitleGenerator
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/tmp/moviepy_debug.log')
+    ]
+)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class VideoGenerator:
@@ -51,104 +81,182 @@ class VideoGenerator:
         subtitle_path: str,
         output_path: str,
         background_video_path: Optional[str] = None,
-        resolution: str = '1080x1920',  # Changed from '1920x1080' to '1080x1920' for 9:16
+        resolution: str = '1080x1920',  
         color: str = 'green',
         fps: int = 30,
+        subtitle_effect: str = 'fade',  
+        font_size: int = 72,          
+        font: str = 'Roboto',          
         convert_to_mp4: bool = True
     ) -> str:
         """
-        Generate a video with audio and burned-in subtitles on a colored background.
+        Generate a video with audio and animated subtitles using MoviePy.
 
         Args:
             audio_path: Path to the audio file
-            subtitle_path: Path to the ASS subtitle file
+            subtitle_path: Path to the ASS subtitle file (or JSON with phrase/word timing)
             output_path: Path where the output video will be saved
-            resolution: Video resolution (default: '1920x1080')
+            resolution: Video resolution (default: '1080x1920')
             color: Background color (default: 'green')
             fps: Frames per second (default: 30)
+            subtitle_effect: Effect for subtitles ('fade' or 'pop')
+            font_size: Base font size for subtitles
+            font: Font name for subtitles
 
         Returns:
             Path to the generated video file
         """
+        if not MOVIEPY_AVAILABLE:
+            raise ImportError("MoviePy is not available. Please check the installation and logs.")
+
+        logger.info("=" * 80)
+        logger.info("STARTING VIDEO GENERATION")
+        logger.info(f"Audio: {audio_path}")
+        logger.info(f"Subtitles: {subtitle_path}")
+        logger.info(f"Output: {output_path}")
+        logger.info(f"Background: {background_video_path or 'Color: ' + color}")
+        logger.info(f"Resolution: {resolution}, FPS: {fps}, Effect: {subtitle_effect}")
+        logger.info("=" * 80)
+
         try:
-            # Get audio duration
-            duration = self.get_audio_duration(audio_path)
-            os.makedirs(os.path.dirname(
-                os.path.abspath(output_path)), exist_ok=True)
+            # Parse resolution
+            try:
+                res_x, res_y = map(int, resolution.lower().split('x'))
+                logger.debug(f"Parsed resolution: {res_x}x{res_y}")
+            except Exception as e:
+                logger.warning(f"Invalid resolution '{resolution}', defaulting to 1080x1920. Error: {e}")
+                res_x, res_y = 1080, 1920
 
-            # Build ffmpeg command for burning in subtitles and explicit stream mapping
-            if background_video_path:
-                cmd = [
-                    self.ffmpeg,
-                    '-y',
-                    # Input 0: background video
-                    '-i', str(background_video_path),
-                    '-i', str(audio_path),  # Input 1: audio
-                    '-vf', f"subtitles='{subtitle_path}'",  # Burn in subtitles
-                    '-map', '0:v',  # Explicitly map video from background video
-                    '-map', '1:a',  # Explicitly map audio from audio file
-                    '-c:v', 'libx264',
-                    '-preset', 'medium',
-                    '-crf', '23',
-                    '-pix_fmt', 'yuv420p',
-                    '-c:a', 'libmp3lame' if not str(
-                        audio_path).lower().endswith('.mp3') else 'copy',
-                    '-b:a', '192k',
-                    '-shortest',  # Stop encoding when the shortest input ends
-                    str(output_path)
-                ]
+            # Load audio
+            logger.info(f"Loading audio from {audio_path}")
+            try:
+                audio_clip = AudioFileClip(audio_path)
+                duration = audio_clip.duration
+                logger.info(f"Audio loaded successfully. Duration: {duration:.2f}s")
+            except Exception as e:
+                logger.error(f"Failed to load audio: {str(e)}")
+                raise
+
+            # Create background
+            if background_video_path and os.path.exists(background_video_path):
+                logger.info(f"Using video background: {background_video_path}")
+                try:
+                    bg_clip = VideoFileClip(background_video_path)
+                    bg_clip = bg_clip.set_duration(duration)
+                    logger.debug(f"Background video loaded. Original duration: {bg_clip.duration:.2f}s, Set to: {duration:.2f}s")
+                except Exception as e:
+                    logger.error(f"Error loading background video: {str(e)}")
+                    raise
             else:
-                cmd = [
-                    self.ffmpeg,
-                    '-y',
-                    '-f', 'lavfi',
-                    '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}',
-                    '-i', str(audio_path),
-                    '-vf', f"subtitles='{subtitle_path}'",  # Burn in subtitles
-                    '-map', '0:v',  # Explicitly map video from color
-                    '-map', '1:a',  # Explicitly map audio from audio file
-                    '-c:v', 'libx264',
-                    '-preset', 'medium',
-                    '-crf', '23',
-                    '-pix_fmt', 'yuv420p',
-                    '-c:a', 'libmp3lame' if not str(
-                        audio_path).lower().endswith('.mp3') else 'copy',
-                    '-b:a', '192k',
-                    '-shortest',  # Stop encoding when the shortest input ends
-                    str(output_path)
+                logger.info(f"Creating solid color background: {color}")
+                try:
+                    bg_clip = ColorClip(size=(res_x, res_y), color=color, duration=duration)
+                    bg_clip = bg_clip.set_fps(fps)
+                    logger.debug(f"Created {color} background. Size: {res_x}x{res_y}, Duration: {duration:.2f}s")
+                except Exception as e:
+                    logger.error(f"Error creating background: {str(e)}")
+                    raise
+
+            # Generate subtitles using MoviePy
+            logger.info("Initializing subtitle generator...")
+            try:
+                # Validate subtitle effect
+                valid_effects = [
+                    'fade', 'pop', 'color', 'underline', 
+                    'font_size', 'shadow', 'background', 'glow', 'wave'
                 ]
+                
+                if subtitle_effect not in valid_effects:
+                    logger.warning(f"Unknown subtitle effect '{subtitle_effect}'. Defaulting to 'fade'.")
+                    subtitle_effect = 'fade'
+                
+                sg = SubtitleGenerator("", audio_path)
+                logger.info("Loading subtitle phrases...")
+                
+                try:
+                    with open(subtitle_path, 'r', encoding='utf-8') as f:
+                        phrases = json.load(f)
+                    logger.info(f"Loaded {len(phrases)} subtitle phrases")
+                except json.JSONDecodeError as je:
+                    logger.error(f"Failed to parse subtitle JSON: {str(je)}")
+                    raise ValueError(f"Invalid subtitle file format: {str(je)}")
+                
+                # Generate animated subtitles
+                logger.info(f"Generating animated subtitles with effect: {subtitle_effect}")
+                try:
+                    subtitle_clip = sg.generate_moviepy_video(
+                        phrases,
+                        "",  
+                        resolution=resolution,
+                        effect=subtitle_effect,
+                        font_size=font_size,
+                        font=font,
+                        fps=fps
+                    )
+                    logger.info("Successfully generated subtitle clip")
+                except Exception as e:
+                    logger.error(f"Error in MoviePy subtitle generation: {str(e)}")
+                    logger.debug(traceback.format_exc())
+                    # Fallback to default effect if there's an error with the selected effect
+                    if subtitle_effect != 'fade':
+                        logger.info("Falling back to 'fade' effect")
+                        subtitle_clip = sg.generate_moviepy_video(
+                            phrases,
+                            "",
+                            resolution=resolution,
+                            effect='fade',
+                            font_size=font_size,
+                            font=font,
+                            fps=fps
+                        )
+                    else:
+                        raise
+            except Exception as e:
+                logger.error(f"Error generating subtitles: {str(e)}\n{traceback.format_exc()}")
+                raise
 
-            logger.info(f"Generating video with command: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            logger.info(f"Successfully generated video at {output_path}")
+            # Composite everything
+            logger.info("Compositing final video...")
+            try:
+                final_clip = CompositeVideoClip([bg_clip, subtitle_clip], size=(res_x, res_y))
+                final_clip = final_clip.set_audio(audio_clip)
+                logger.info("Final clip composition complete")
+            except Exception as e:
+                logger.error(f"Error during composition: {str(e)}")
+                raise
 
-            if convert_to_mp4 and output_path.lower().endswith('.mkv'):
-                mp4_path = output_path.rsplit('.', 1)[0] + '.mp4'
-                if self._convert_mkv_to_mp4(output_path, mp4_path):
-                    try:
-                        os.remove(output_path)
-                        logger.info(
-                            f"Removed temporary MKV file: {output_path}")
-                    except OSError as e:
-                        logger.warning(
-                            f"Failed to remove temporary MKV file: {e}")
-                    output_path = mp4_path
-                else:
-                    logger.warning(
-                        "Failed to convert MKV to MP4, keeping MKV file")
-            return output_path
-        except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error: {e.stderr}")
-            raise RuntimeError(f"Video generation failed: {e.stderr}")
+            # Write to file
+            output_dir = os.path.dirname(os.path.abspath(output_path))
+            os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Writing video to {output_path}...")
+            
+            try:
+                final_clip.write_videofile(
+                    output_path,
+                    fps=fps,
+                    codec="libx264",
+                    audio_codec="aac",
+                    preset="medium",
+                    threads=4,
+                    verbose=True,  # Enable verbose output for debugging
+                    logger='bar' if logger.level <= logging.INFO else None,
+                )
+                logger.info(f"Successfully generated video at {output_path}")
+                return output_path
+            except Exception as e:
+                logger.error(f"Error writing video file: {str(e)}")
+                raise
+
         except Exception as e:
-            logger.error(f"Error generating video: {str(e)}")
-            raise
+            error_msg = f"Error generating video with MoviePy: {str(e)}\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            logger.error(f"Python version: {sys.version}")
+            logger.error(f"MoviePy version: {moviepy.__version__ if 'moviepy' in globals() else 'Not available'}")
+            raise RuntimeError(f"Video generation failed: {error_msg}")
+        finally:
+            logger.info("=" * 80)
+            logger.info("VIDEO GENERATION COMPLETED")
+            logger.info("=" * 80)
 
     def _convert_mkv_to_mp4(self, input_path: str, output_path: str) -> bool:
         """

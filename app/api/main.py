@@ -285,6 +285,7 @@ def generate_subtitles():
         data = request.json
         audio_id = data.get('audio_id')
         script = data.get('script')
+        subtitle_style = data.get('subtitle_style', 'karaoke')
 
         if not audio_id or not script:
             return jsonify({
@@ -329,7 +330,7 @@ def generate_subtitles():
         logger.info(f"Generating ASS file at {ass_path}...")
         # Use the same resolution as the video generator
         subtitle_generator.generate_ass_file(
-            phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
+            phrases, ass_path, resolution=SUBTITLE_RESOLUTION, style=subtitle_style)
 
         # Verify ASS file was created
         if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:

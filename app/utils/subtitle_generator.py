@@ -175,7 +175,8 @@ class SubtitleGenerator:
                 phrases.append({
                     "start": start_time,
                     "end": end_time,
-                    "text": text
+                    "text": text,
+                    "words": chunk  # Include word-level timing for karaoke
                 })
                 logger.info(
                     f"Phrase: {start_time:.2f}-{end_time:.2f}s: '{text}'")
@@ -208,7 +209,236 @@ class SubtitleGenerator:
         seconds = seconds % 60
         return f"{hours}:{minutes:02d}:{seconds:05.2f}".replace('.', '.')
 
-    def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920') -> None:
+    # ========================= MoviePy Rendering =========================
+    def _apply_text_effect(self, text_clip, effect_name, word_duration, **kwargs):
+        """Apply a specific text effect to a clip.
+        
+        Args:
+            text_clip: The MoviePy TextClip to apply the effect to
+            effect_name: Name of the effect to apply
+            word_duration: Duration of the word in seconds
+            **kwargs: Additional parameters for the effect
+            
+        Returns:
+            Modified TextClip with the effect applied
+        """
+        import moviepy.video.fx.all as vfx
+        from moviepy.editor import concatenate_videoclips
+        
+        dur = max(0.001, word_duration)
+        
+        if effect_name == "fade":
+            return text_clip.crossfadein(0.2)
+            
+        elif effect_name == "pop":
+            # Scale from 0.5 to 1 in first 60% of the word duration
+            def pop_resize(t, total=dur):
+                progress = min(1, t / (total * 0.6))
+                return 0.5 + 0.5 * progress
+            return text_clip.fx(vfx.resize, pop_resize)
+            
+        elif effect_name == "color":
+            # Cycle through colors for each word
+            colors = ['#FF5733', '#33FF57', '#3357FF', '#F3FF33', '#FF33F5']
+            color_idx = kwargs.get('word_idx', 0) % len(colors)
+            return text_clip.set_color(colors[color_idx])
+            
+        elif effect_name == "underline":
+            # Add underline effect
+            from moviepy.editor import ColorClip, CompositeVideoClip
+            
+            # Create underline bar
+            underline = ColorClip(
+                size=(text_clip.w, 4),  # 4px height
+                color='white',
+                duration=dur
+            ).set_start(text_clip.start)
+            
+            # Position underline below text
+            underline = underline.set_position(('center', text_clip.h + 2))
+            
+            # Combine text and underline
+            return CompositeVideoClip([text_clip, underline])
+            
+        elif effect_name == "font_size":
+            # Animate font size
+            def size_effect(t):
+                # Bounce effect: 80% -> 120% -> 100%
+                progress = t / dur
+                if progress < 0.5:
+                    return 0.8 + 0.8 * progress  # 80% to 120%
+                else:
+                    return 1.6 - 0.6 * progress  # 120% to 100%
+                    
+            return text_clip.fx(vfx.resize, size_effect)
+            
+        elif effect_name == "shadow":
+            # Add drop shadow effect
+            shadow = text_clip.copy()
+            shadow = shadow.set_position((5, 5)).set_opacity(0.5)
+            return CompositeVideoClip([shadow, text_clip])
+            
+        elif effect_name == "background":
+            # Add a colored background behind the text
+            from moviepy.editor import ColorClip, CompositeVideoClip
+            
+            bg = ColorClip(
+                size=(text_clip.w + 20, text_clip.h + 10),
+                color=(0, 0, 0, 0.7),  # Semi-transparent black
+                duration=dur
+            ).set_start(text_clip.start)
+            
+            # Center text on background
+            text_clip = text_clip.set_position(('center', 'center'))
+            
+            return CompositeVideoClip([bg, text_clip])
+            
+        elif effect_name == "glow":
+            # Create a blurred version of the text for glow effect
+            from moviepy.video.fx.all import gaussian_blur
+            
+            glow = text_clip.copy()
+            glow = glow.fx(gaussian_blur, sigma=3).set_opacity(0.7)
+            return CompositeVideoClip([glow, text_clip])
+            
+        elif effect_name == "wave":
+            # Wave animation effect
+            def wave_effect(get_frame, t):
+                import numpy as np
+                frame = get_frame(t)
+                h, w = frame.shape[:2]
+                wave = np.sin(t * 10) * 5  # Adjust frequency and amplitude as needed
+                return np.roll(frame, int(wave), axis=0)
+                
+            return text_clip.fl(wave_effect)
+            
+        # Default: no effect
+        return text_clip
+
+    def generate_moviepy_video(
+        self,
+        phrases: List[Dict],
+        output_path: str,
+        resolution: str = "1080x1920",
+        bg_color: tuple | str = (0, 0, 0),
+        font_size: int = 72,
+        font: str = "Roboto",
+        effect: str = "fade",  # Supports multiple effects: 'fade', 'pop', 'color', 'underline', etc.
+        fps: int = 24,
+    ) -> None:
+        """Render a video with per-word animated subtitles using MoviePy.
+
+        Args:
+            phrases: List of phrase dicts (must contain nested word dicts with start/end).
+            output_path: Where to write the resulting MP4.
+            resolution: "WxH" string, e.g. "1080x1920".
+            bg_color: Background colour (RGB tuple or css string).
+            font_size: Base font size.
+            font: Font name (must be available on system or provided via MoviePy).
+            effect: Animation effect per word. Supported values:
+                   - 'fade': Words fade in
+                   - 'pop': Words pop in with scale animation
+                   - 'color': Words change color
+                   - 'underline': Words appear with underline
+                   - 'font_size': Words animate with changing font size
+                   - 'shadow': Words have drop shadow
+                   - 'background': Words have a background box
+                   - 'glow': Words have a glow effect
+                   - 'wave': Words have a wave animation
+            fps: Frames per second for output.
+        """
+        try:
+            from moviepy.editor import (
+                AudioFileClip,
+                ColorClip,
+                CompositeVideoClip,
+                TextClip,
+            )
+            import moviepy.video.fx.all as vfx
+        except ImportError as e:
+            logger.error(
+                "moviepy dependency missing. Install with `pip install moviepy`.")
+            raise
+
+        logger.info(f"Generating video with MoviePy per-word subtitles (effect: {effect})...")
+
+        # Parse resolution
+        try:
+            res_x, res_y = map(int, resolution.lower().split("x"))
+        except Exception:
+            logger.warning(
+                f"Invalid resolution '{resolution}', defaulting to 1080x1920")
+            res_x, res_y = 1080, 1920
+
+        # Ensure phrases have word-level data
+        if not phrases or not any(p.get("words") for p in phrases):
+            raise ValueError("Phrases must include word-level timing data for MoviePy rendering.")
+
+        # Load audio clip
+        audio_clip = AudioFileClip(self.audio_path)
+        duration = audio_clip.duration
+
+        # Background clip
+        bg_clip = ColorClip(size=(res_x, res_y), color=bg_color, duration=duration)
+        bg_clip = bg_clip.set_fps(fps)
+
+        word_clips = []
+        word_idx = 0
+        
+        for phrase in phrases:
+            words = phrase.get("words", [])
+            for word in words:
+                txt = word["word"].strip()
+                start = float(word["start"])
+                end = float(word["end"])
+                
+                if not txt:
+                    continue
+                    
+                # Create base text clip
+                txt_clip = (
+                    TextClip(
+                        txt, 
+                        fontsize=font_size, 
+                        color="white", 
+                        font=font, 
+                        method="caption",
+                        stroke_color='black',
+                        stroke_width=1
+                    )
+                    .set_start(start)
+                    .set_duration(max(0.001, end - start))
+                    .set_position(("center", res_y - font_size * 2))
+                )
+                
+                # Apply the selected effect
+                txt_clip = self._apply_text_effect(
+                    txt_clip, 
+                    effect, 
+                    end - start,
+                    word_idx=word_idx
+                )
+                
+                word_clips.append(txt_clip)
+                word_idx += 1
+
+        final_clip = CompositeVideoClip([bg_clip] + word_clips, size=(res_x, res_y))
+        final_clip = final_clip.set_audio(audio_clip)
+        logger.info(f"Writing MoviePy video to {output_path}…")
+        final_clip.write_videofile(
+            output_path,
+            fps=fps,
+            codec="libx264",
+            audio_codec="aac",
+            preset="medium",
+            threads=4,
+            verbose=False,
+            logger=None,
+        )
+        logger.info("MoviePy video rendering complete.")
+
+    def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920', style: str = 'karaoke') -> None:
+        logger.info(f"Style of ASS {style}")
         """
         Generate a clean, phrase-based ASS subtitle file (no effects, no karaoke, no formatting).
 
@@ -230,50 +460,144 @@ class SubtitleGenerator:
 
         # Strictly use the clean template for header
         header = textwrap.dedent(f"""
-[Script Info]
-Title: Generated Subtitles
-ScriptType: v4.00+
+            [Script Info]
+            Title: Generated Subtitles
+            ScriptType: v4.00+
 
-PlayResX: {res_x}
-PlayResY: {res_y}
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.601
+            PlayResX: {res_x}
+            PlayResY: {res_y}
+            WrapStyle: 0
+            ScaledBorderAndShadow: yes
+            YCbCr Matrix: TV.601
 
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,1,0,0,100,100,0,0,1,2,0,5,30,30,0,1
+            [V4+ Styles]
+            Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+            Style: Default,Roboto,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,1,5,30,30,0,1
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-""")
+            [Events]
+            Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+            """)
         content = [header.strip() + '\n']
 
         if not phrases:
             logger.warning("No phrases provided for subtitle generation")
             return
 
-        # Write each phrase as a single Dialogue line, with bold formatting
+        # Write each phrase as a single Dialogue line, with effect formatting
         last_end = -1
         for i, phrase in enumerate(phrases):
             start = self.seconds_to_ass_format(phrase['start'])
             end = self.seconds_to_ass_format(phrase['end'])
-            # Remove any curly braces, effect tags, or markup
-            text = phrase['text']
-            text = text.replace('{', '').replace('}', '')
-            text = text.replace('\\N', ' ').replace('\\n', ' ')
-            text = text.replace('\n', ' ').replace('\r', ' ')
-            text = text.strip()
-            word_count = len(text.split())
-            logger.info(f"Subtitle line {i+1}: {word_count} words: '{text}'")
-            # Ensure no overlap or duplicate
+            phrase_text = phrase['text']
+            phrase_text = phrase_text.replace('{', '').replace('}', '')
+            phrase_text = phrase_text.replace('\\N', ' ').replace('\\n', ' ')
+            phrase_text = phrase_text.replace('\n', ' ').replace('\r', ' ')
+            phrase_text = phrase_text.strip()
+            word_count = len(phrase_text.split())
+            logger.info(f"Subtitle line {i+1}: {word_count} words: '{phrase_text}'")
             if phrase['start'] < last_end:
-                logger.warning(f"Skipping overlapping phrase: {text}")
+                logger.warning(f"Skipping overlapping phrase: {phrase_text}")
                 continue
-            # Add bold override tags and force middle alignment
-            text = "{\\an5}{\\b1}" + text + "{\\b0}"
+
+            # Style logic
+            effect_text = ""
+            if 'words' in phrase and isinstance(phrase['words'], list) and phrase['words']:
+                words = phrase['words']
+            else:
+                words = [{'word': w, 'start': phrase['start'], 'end': phrase['end']} for w in phrase_text.split()]
+
+            if style == 'karaoke':
+                # Default karaoke
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word'].replace('{', '').replace('}', '').replace('\\N', ' ').replace('\\n', ' ')
+                    effect_text += f"{{\\k{duration}}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'color':
+                # Karaoke timing + color effect per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\c&H00FFFF&}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'underline':
+                # Karaoke timing + underline per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\u1}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'font_size':
+                # Karaoke timing + font size per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\fs90}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'shadow':
+                # Karaoke timing + shadow per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\shad3}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'fade':
+                # Karaoke timing + fade per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\fad(100,100)}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\b1}" + effect_text + "{\\b0}"
+            elif style == 'pop':
+                # Karaoke timing + pop effect per word
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word']
+                    effect_text += f"{{\\k{duration}\\t(0,200,\\fs90)}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'background':
+                # Each word appears yellow as it's spoken (pure effect, no karaoke)
+                for word in words:
+                    clean_word = word['word']
+                    effect_text += f"{{\\be5}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'scroll':
+                # Animate horizontal move for the whole phrase
+                phrase_duration = int(100 * (phrase['end'] - phrase['start']))
+                ass_text = f"{{\\an5\\fad(200,200)\\move(200,900,880,900)}}{phrase_text}{{\\b0}}"
+            elif style == 'wave':
+                for word in words:
+                    clean_word = word['word']
+                    effect_text += f"{{\\t(0,200,\\frz10)}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'glow':
+                for word in words:
+                    clean_word = word['word']
+                    effect_text += f"{{\\be10}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
+            elif style == 'entrance':
+                # Animate entrance from left
+                ass_text = f"{{\\an5\\fad(200,200)\\move(0,900,540,900)}}{phrase_text}{{\\b0}}"
+            else:
+                # fallback: karaoke
+                for word in words:
+                    duration = int(100 * (word['end'] - word['start']))
+                    clean_word = word['word'].replace('{', '').replace('}', '').replace('\\N', ' ').replace('\\n', ' ')
+                    effect_text += f"{{\\k{duration}}}{clean_word} "
+                effect_text = effect_text.strip()
+                ass_text = "{\\an5\\fad(200,200)\\b1}" + effect_text + "{\\b0}"
             content.append(
-                f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+                f"Dialogue: 0,{start},{end},Default,,0,0,0,,{ass_text}\n")
             last_end = phrase['end']
 
         try:

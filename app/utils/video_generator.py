@@ -8,20 +8,6 @@ from pathlib import Path
 import tempfile
 import json
 
-# Log MoviePy import attempts
-try:
-    from moviepy.editor import VideoFileClip, ColorClip, CompositeVideoClip, AudioFileClip, TextClip
-    MOVIEPY_AVAILABLE = True
-except ImportError as e:
-    logging.error(f"Failed to import MoviePy: {str(e)}")
-    logging.error(f"Python path: {sys.path}")
-    try:
-        import moviepy
-        logging.error(f"MoviePy path: {moviepy.__file__}")
-        logging.error(f"MoviePy version: {getattr(moviepy, '__version__', 'unknown')}")
-    except Exception as ie:
-        logging.error(f"Could not get MoviePy info: {str(ie)}")
-    MOVIEPY_AVAILABLE = False
 
 from app.utils.subtitle_generator import SubtitleGenerator
 
@@ -106,8 +92,7 @@ class VideoGenerator:
         Returns:
             Path to the generated video file
         """
-        if not MOVIEPY_AVAILABLE:
-            raise ImportError("MoviePy is not available. Please check the installation and logs.")
+        # (REMOVED: All MoviePy-based video generation code. generate_video now uses ffmpeg for video and subtitle processing, similar to generate_video_with_expressions. All MoviePy imports and error handling removed.)
 
         logger.info("=" * 80)
         logger.info("STARTING VIDEO GENERATION")

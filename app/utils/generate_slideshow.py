@@ -25,7 +25,7 @@ def sanitize_size(size):
         raise
 
 
-def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30):
+def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=5):
     """
     Fits the image height to the video height, then pans horizontally
     so that over the course of `duration` seconds, the window moves
@@ -33,13 +33,24 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
 
     - Even idx: pan left→right
     - Odd  idx: pan right→left
+    
+    Args:
+        temp_frame_dir: Directory to save temporary frames
+        frame_counter: Starting frame number
+        img_path: Path to the source image
+        duration: Duration to display the slide (in seconds)
+        resolution: Tuple of (width, height) for output frames
+        idx: Slide index (used to determine pan direction)
+        fps: Frames per second
+        blur_amount: Radius of the Gaussian blur (0 = no blur, higher = more blur)
     """
     res_w, res_h = resolution
     num_frames = int(duration * fps)
     
-    # Log the panning direction for debugging
+    # Log the panning direction and blur status
     direction = "left→right" if idx % 2 == 0 else "right→left"
-    logger.info(f"Processing slide {img_path} with index {idx}, panning {direction}")
+    blur_status = f"with blur (kernel size: {blur_amount*2 + 1})" if blur_amount > 0 else "without blur"
+    logger.info(f"Processing slide {img_path} with index {idx}, panning {direction} {blur_status}")
 
     img = cv2.imread(img_path)
     if img is None:
@@ -61,6 +72,23 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
             scaled, 0, 0, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
         scaled_w = res_w
 
+    # Apply blur to the entire scaled image if specified
+    if blur_amount > 0:
+        # Ensure kernel size is odd and reasonable
+        kernel_size = max(1, blur_amount * 2 + 1)  # Ensure at least 1x1
+        kernel_size = min(kernel_size, 99)  # Keep kernel size reasonable
+        if kernel_size % 2 == 0:  # Ensure odd kernel size
+            kernel_size += 1
+        
+        # Convert to float32 and normalize to [0,1] for better blur
+        scaled_float = scaled.astype(np.float32) / 255.0
+        
+        # Apply Gaussian blur
+        blurred = cv2.GaussianBlur(scaled_float, (kernel_size, kernel_size), 0)
+        
+        # Convert back to uint8
+        scaled = (blurred * 255).astype(np.uint8)
+    
     # 2. For each frame, compute horizontal crop window
     frames_actually_written = 0
     
@@ -86,6 +114,7 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
         logger.debug(f"Frame {i}: x={x}, t={t:.2f}, max_x={max_x}, direction={'left→right' if idx % 2 == 0 else 'right→left'}")
 
         frame = scaled[:, x: x + res_w]
+            
         cv2.imwrite(os.path.join(temp_frame_dir, f"frame_{frame_counter:05d}.jpg"), frame)
         frame_counter += 1
         frames_actually_written += 1
@@ -171,13 +200,35 @@ def extract_gif_frames(gif_path, temp_frame_dir, frame_counter_start, duration, 
     return frame_counter_start + frames_written
 
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30):
-    """Generates the final slideshow video using OpenCV."""
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5):
+    """
+    Generates the final slideshow video using OpenCV.
+    
+    Args:
+        json_path: Path to the JSON file containing slide timings
+        image_dir: Directory containing slide images
+        output_path: Path where the output video will be saved
+        total_duration: Total duration of the video in seconds
+        resolution: Video resolution as (width, height)
+        fps: Frames per second for the output video
+        blur_amount: Amount of blur to apply (0 = no blur, higher = more blur)
+    """
     resolution = sanitize_size(resolution)
     res_w, res_h = resolution
+    
+    if blur_amount > 0:
+        logger.info(f"Applying blur effect with amount: {blur_amount}")
+        # Ensure blur amount is a positive integer
+        blur_amount = max(0, int(blur_amount))
 
-    frames_written = 0
+    # Calculate total frames needed
+    if total_duration is None:
+        # If no total duration provided, calculate from slides
+        with open(json_path, "r", encoding="utf-8") as f:
+            slides = json.load(f)
+        total_duration = sum(slide['end'] - slide['start'] for slide in slides)
     total_output_frames = int(total_duration * fps)
+    logger.info(f"Total video duration: {total_duration:.2f}s, {total_output_frames} frames")
     logger.info(f"Target total frames: {total_output_frames} for a duration of {total_duration:.2f}s at {fps} fps.")
 
     temp_frame_dir = os.path.join(os.path.dirname(output_path), "temp_frames")
@@ -191,6 +242,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     slides_processed = 0
     
     logger.info(f"Starting to process {len(slides)} slides...")
+    
+    # Initialize frames_written counter
+    frames_written = 0
     
     for idx, slide in enumerate(slides):
         try:
@@ -232,9 +286,17 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 direction = "left→right" if slides_processed % 2 == 0 else "right→left"
                 logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): panning {direction}")
                 
-                # Use slides_processed for panning direction
-                frames_written = apply_panoramic_pan(temp_frame_dir, frames_written, img_path, 
-                                                  duration, resolution, slides_processed, fps)
+                # Use slides_processed for panning direction and apply blur
+                frames_written = apply_panoramic_pan(
+                    temp_frame_dir=temp_frame_dir,
+                    frame_counter=frames_written,
+                    img_path=img_path,
+                    duration=duration,
+                    resolution=resolution,
+                    idx=slides_processed,
+                    fps=fps,
+                    blur_amount=30  # Increased blur amount for more pronounced effect
+                )
                 slides_processed += 1
 
         except Exception as e:

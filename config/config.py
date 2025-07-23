@@ -9,7 +9,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # --- PATHS ---
-UPLOADS_DIR = BASE_DIR / "data" / "uploads"
+UPLOADS_DIR = BASE_DIR / "app" / "output" / "data"
 IMAGE_SLIDES_DIR = BASE_DIR / "app" / "output" / "image_slides"
 EXPRESSIONS_DIR = BASE_DIR / "app" / "static" / "expressions"
 COMPILED_VIDEO_DIR = BASE_DIR / "app" / "output" / "compiled_video"

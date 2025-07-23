@@ -32,6 +32,7 @@ def generate_final_video(
     expressions_path: str = None,
     output_filename: str = None,
     generate_slides: bool = True,  # New parameter to control slides generation
+    blur_amount: int = 5,  # Controls blur effect (0 = no blur, 5 = default blur)
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -68,6 +69,7 @@ def generate_final_video(
                 output_path=str(slideshow_output_path),
                 total_duration=total_audio_duration,
                 resolution=VIDEO_RESOLUTION,
+                blur_amount=blur_amount,
             )
             logger.info("Slideshow video generated successfully.")
         else:
@@ -155,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--images_dir", default=str(IMAGE_SLIDES_DIR), help=f"Directory containing slide images. Defaults to {IMAGE_SLIDES_DIR}")
     parser.add_argument("--expressions_file", default=None, help="Path to the expressions JSON file (optional).")
     parser.add_argument("--output_filename", default=None, help="Name for the final output video file (optional).")
+    parser.add_argument("--blur", type=int, default=5, help="Amount of blur to apply to slides (0 = no blur, 5 = default, higher values = more blur, typical range: 0-10).")
 
     args = parser.parse_args()
 
@@ -181,6 +184,7 @@ if __name__ == "__main__":
             subtitle_path=str(subtitle_full_path),
             expressions_path=str(expressions_full_path) if expressions_full_path else None,
             output_filename=args.output_filename,
+            blur_amount=args.blur,
         )
         print(f"Successfully created final video: {final_path}")
     except Exception as e:

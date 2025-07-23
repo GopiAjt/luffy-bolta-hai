@@ -330,7 +330,7 @@ def generate_subtitles():
         logger.info(f"Generating ASS file at {ass_path}...")
         # Use the same resolution as the video generator
         subtitle_generator.generate_ass_file(
-            phrases, ass_path, resolution=SUBTITLE_RESOLUTION, style=subtitle_style)
+            phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
 
         # Verify ASS file was created
         if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
@@ -479,6 +479,7 @@ def health_check():
 def download_file(filename):
     """
     Download a file from either the uploads or compiled_videos directory.
+    Supports range requests for video files.
     """
     try:
         # Security check to prevent directory traversal
@@ -498,26 +499,66 @@ def download_file(filename):
         if not os.path.exists(file_path):
             logger.error(f"File not found in any directory: {file_path}")
             return jsonify({'error': 'File not found'}), 404
-            return jsonify({'error': 'File not found'}), 404
-        # Get the directory containing the file
-        directory = os.path.dirname(file_path)
-        filename_only = os.path.basename(file_path)
-        
-        # Set appropriate MIME type based on file extension
-        if filename.lower().endswith('.mp4'):
-            mimetype = 'video/mp4'
-        elif filename.lower().endswith('.mkv'):
-            mimetype = 'video/x-matroska'
-        else:
-            mimetype = None
             
+        # Get file size for range requests
+        size = os.path.getsize(file_path)
+        
+        # For video files, handle range requests
+        if filename.lower().endswith(('.mp4', '.mkv')):
+            range_header = request.headers.get('Range', None)
+            if range_header:
+                # Parse the range header
+                try:
+                    range_ = range_header.replace('bytes=', '').split('-')
+                    byte1 = int(range_[0]) if range_[0] else 0
+                    byte2 = int(range_[1]) if len(range_) > 1 and range_[1] else None
+                    
+                    # Calculate length based on range
+                    if byte2 is not None:
+                        length = byte2 - byte1 + 1
+                    else:
+                        length = size - byte1
+                    
+                    # Ensure length is not negative and doesn't exceed file size
+                    if length <= 0 or byte1 >= size:
+                        return jsonify({'error': 'Requested range not satisfiable'}), 416
+                        
+                    # Ensure we don't read past the end of the file
+                    if byte1 + length > size:
+                        length = size - byte1
+                    
+                    # Read the file chunk
+                    data = None
+                    with open(file_path, 'rb') as f:
+                        f.seek(byte1)
+                        data = f.read(length)
+                        
+                except (ValueError, IndexError) as e:
+                    logger.error(f"Invalid range header {range_header}: {str(e)}")
+                    return jsonify({'error': 'Invalid range header'}), 400
+                
+                rv = Response(
+                    data,
+                    206,  # Partial Content
+                    mimetype='video/mp4',
+                    direct_passthrough=True
+                )
+                rv.headers.add('Content-Range', f'bytes {byte1}-{byte1 + length - 1}/{size}')
+                rv.headers.add('Accept-Ranges', 'bytes')
+                rv.headers.add('Content-Length', str(length))
+                rv.headers.add('Content-Disposition', 'attachment', filename=filename)
+                return rv
+        
+        # For non-video files or non-range requests, use send_file
+        mimetype = 'video/mp4' if filename.lower().endswith('.mp4') else \
+                 ('video/x-matroska' if filename.lower().endswith('.mkv') else None)
+                
         logger.info(f"Serving file {file_path} with mimetype {mimetype}")
-        return send_from_directory(
-            directory,
-            filename_only,
+        return send_file(
+            file_path,
             as_attachment=True,
             mimetype=mimetype,
-            download_name=filename_only
+            download_name=filename
         )
     except Exception as e:
         logger.error(f"Error downloading file {filename}: {str(e)}")

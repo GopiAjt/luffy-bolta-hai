@@ -11,7 +11,7 @@ sys.path.append(str(project_root))
 
 from app.core.subtitle_rag import SubtitleRAG
 from app.utils.text_processing import format_dialogue, merge_similar_dialogues
-from config.config import VECTOR_DB_CONFIG
+from app.config import VECTOR_DB_CONFIG
 
 # Configure logging
 logging.basicConfig(

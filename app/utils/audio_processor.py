@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from pydub import AudioSegment
 import ffmpeg
-from config.config import UPLOADS_DIR, MAX_FILE_SIZE, ALLOWED_EXTENSIONS
+from app.config import UPLOADS_DIR, MAX_FILE_SIZE, ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 

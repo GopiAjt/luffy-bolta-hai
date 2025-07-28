@@ -1,6 +1,6 @@
 import os
 from app.api.main import app
-from config.config import HOST, PORT, DEBUG
+from app.config import HOST, PORT, DEBUG
 
 if __name__ == '__main__':
     # Load environment variables

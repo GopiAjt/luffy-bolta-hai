@@ -14,7 +14,7 @@ from app.utils.generate_final_video import generate_final_video
 import re
 import json
 import glob
-from config.config import (
+from app.config import (
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
@@ -493,7 +493,7 @@ def download_file(filename):
         
         # If not found in UPLOADS_DIR, check COMPILED_VIDEO_DIR
         if not os.path.exists(file_path):
-            from config.config import COMPILED_VIDEO_DIR
+            from app.config import COMPILED_VIDEO_DIR
             file_path = os.path.join(COMPILED_VIDEO_DIR, filename)
             
         logger.info(f"Download requested for file: {file_path}")

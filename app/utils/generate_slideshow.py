@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 import logging
 import subprocess # Added this import
-from config.config import VIDEO_RESOLUTION
+from app.config import VIDEO_RESOLUTION
 
 logger = logging.getLogger(__name__)
 

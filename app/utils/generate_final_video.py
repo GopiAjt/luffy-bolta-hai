@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 from app.utils.generate_slideshow import main as generate_slideshow_video
 from app.utils.video_generator import VideoGenerator
 from app.utils.audio_processor import get_audio_duration
-from config.config import (
+from app.config import (
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,

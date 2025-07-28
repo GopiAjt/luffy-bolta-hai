@@ -88,6 +88,49 @@
             margin: 1rem 0;
         }
 
+        /* Dynamic video preview styles */
+        .video-preview-wrapper {
+            position: relative;
+            width: 50%;
+            margin: 0 auto;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .video-preview {
+            width: 100%;
+            height: auto;
+            display: block;
+            background: #000;
+            border-radius: 8px;
+        }
+
+        /* Responsive video sizing */
+        @media (max-width: 768px) {
+            .video-preview-wrapper {
+                max-width: 100%;
+                margin: 0;
+            }
+        }
+
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .video-preview-wrapper {
+                max-width: 600px;
+            }
+        }
+
+        @media (min-width: 1025px) {
+            .video-preview-wrapper {
+                max-width: 700px;
+            }
+        }
+
+        /* Video controls styling */
+        .video-preview::-webkit-media-controls-panel {
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+
         #scriptInput {
             min-height: 150px;
             resize: vertical;
@@ -149,8 +192,19 @@
                 <div>
                     <div class="mb-3">
                         <label for="scriptInput" class="form-label">Paste your script below:</label>
-                        <textarea class="form-control" id="scriptInput" rows="6"
+                        <textarea class="form-control mb-3" id="scriptInput" rows="6"
                             placeholder="Enter your script here..."></textarea>
+
+                        <div class="mb-3">
+                            <label for="subtitleStyle" class="form-label">Subtitle Style:</label>
+                            <select class="form-select" id="subtitleStyle">
+                                <option value="epic">Epic Battles (Recommended)</option>
+                                <option value="dramatic">Dramatic Anime</option>
+                                <option value="manga">Manga-Inspired</option>
+                                <option value="adventure">Adventure Theme</option>
+                            </select>
+                            <div class="form-text">Choose a style for your subtitles</div>
+                        </div>
                     </div>
                     <!-- Audio Upload Section -->
                     <div class="section">
@@ -190,23 +244,6 @@
                             </div>
                         </div>
                     </div>
-                    <div class="mb-3">
-                        <label for="subtitleStyleSelector" class="form-label">Subtitle Style/Effect</label>
-                        <select class="form-select" id="subtitleStyleSelector">
-                            <option value="karaoke">Karaoke (Default)</option>
-                            <option value="color">Color Highlight</option>
-                            <option value="underline">Underline</option>
-                            <option value="font_size">Font Size Animation</option>
-                            <option value="shadow">Shadow Animation</option>
-                            <option value="fade">Fade In/Out Per Word</option>
-                            <option value="pop">Word Pop/Bounce</option>
-                            <option value="background">Background Box/Highlight</option>
-                            <option value="scroll">Scrolling Text</option>
-                            <option value="wave">Wave/Shake</option>
-                            <option value="glow">Fade/Glow</option>
-                            <option value="entrance">Animated Entrance</option>
-                        </select>
-                    </div>
                     <div class="d-grid gap-2">
                         <button id="generateSubtitlesButton" class="btn btn-primary">
                             <i class="bi bi-text-paragraph me-2"></i>Generate Subtitles
@@ -228,8 +265,9 @@
             <h2 class="text-center mb-4"><i class="bi bi-camera-video me-2"></i>Video Preview</h2>
             <div id="videoPreviewContainer" class="text-center" style="display: none;">
                 <h3 class="h4 mb-3">Generated Video</h3>
-                <div class="w-55 mx-auto d-block">
-                    <video id="videoPreview" controls class="w-55 mx-auto d-block">
+
+                <div class="video-preview-wrapper">
+                    <video id="videoPreview" controls class="video-preview">
                         Your browser does not support the video tag.
                     </video>
                 </div>

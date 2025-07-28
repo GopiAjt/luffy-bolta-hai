@@ -299,8 +299,9 @@ def generate_subtitles():
                 'error': f'Audio file not found: {audio_id}'
             }), 404
 
-        # Generate subtitles
-        subtitle_generator = SubtitleGenerator(script, audio_path)
+        # Generate subtitles with the selected style
+        logger.info(f"Generating subtitles with style: {subtitle_style}")
+        subtitle_generator = SubtitleGenerator(script, audio_path, style=subtitle_style)
 
         # Get word-level timestamps
         logger.info("Generating word-level timestamps...")

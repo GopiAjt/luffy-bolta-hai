@@ -363,10 +363,13 @@ export class LuffyBoltHaiApp {
         
         try {
             // Get selected subtitle style
-            const subtitleStyleSelector = document.getElementById('subtitleStyleSelector');
-            let subtitleStyle = 'karaoke';
+            const subtitleStyleSelector = document.getElementById('subtitleStyle');
+            let subtitleStyle = 'epic'; // Default to 'epic' (Epic Battles)
             if (subtitleStyleSelector && subtitleStyleSelector.value) {
                 subtitleStyle = subtitleStyleSelector.value;
+                console.log('Selected subtitle style:', subtitleStyle);
+            } else {
+                console.warn('Subtitle style selector not found, using default style:', subtitleStyle);
             }
             const result = await generateSubtitles(this.currentAudioId, scriptInput.value, subtitleStyle);
             subtitleOutput.textContent = 'Subtitles generated successfully!';

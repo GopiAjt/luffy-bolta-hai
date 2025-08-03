@@ -40,7 +40,20 @@ def build_gemini_prompt(sub_lines):
     sub_lines: list of dicts with 'start', 'end', 'text'
     Returns: prompt string
     """
-    prompt = '''You are an expert video scene analyzer.\nI will provide you with subtitle lines from an `.ass` file, which represent spoken dialogue in a video.\nYour task is to map each subtitle line to the most likely facial expression the speaker would have during that line.\n\nAssume this is for an animated or synthesized video, and your output will be used to drive facial animation.\n\nYour output must be a JSON array where each object contains:\n- "start": timestamp of when the line begins (in seconds or H:MM:SS format)\n- "end": timestamp of when the line ends\n- "text": the spoken line\n- "expression": the facial expression label best suited for this line\n\nUse labels such as: "neutral", "happy", "angry", "surprised", "sad", "smirking", "confident", "serious", "worried", "intense", "excited", "embarrassed" etc.\n\nUse tone, punctuation, emphasis, and keywords to infer emotion. Humor, sarcasm, or rhetorical questions should also influence the expression choice. You may also infer if the narrator is hyped or calm, authoritative or playful.\n\nExample Input:\n[\n  { "start": "0:00:01.00", "end": "0:00:04.00", "text": "Okay, here we go!" },\n  { "start": "0:00:04.00", "end": "0:00:12.00", "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!" }\n]\n\nExpected Output Format:\n[\n  {\n    "start": "0:00:01.00",\n    "end": "0:00:04.00",\n    "text": "Okay, here we go!",\n    "expression": "excited"\n  },\n  {\n    "start": "0:00:04.00",\n    "end": "0:00:12.00",\n    "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!",\n    "expression": "intense"\n  }\n]\n\nNow here are the actual subtitle lines to analyze:\n'''
+    prompt = '''You are an expert video scene analyzer.\n
+    I will provide you with subtitle lines from an `.ass` file, which represent spoken dialogue in a video.\n
+    Your task is to map each subtitle line to the most likely facial expression the speaker would have during that line.\n\n
+    Assume this is for an animated or synthesized video, and your output will be used to drive facial animation.\n\n
+    Your output must be a JSON array where each object contains:\n
+    - "start": timestamp of when the line begins (in seconds or H:MM:SS format)\n
+    - "end": timestamp of when the line ends\n
+    - "text": the spoken line\n
+    - "expression": the facial expression label best suited for this line\n\n
+    Use only these labels: "neutral", "happy", "angry", "surprised", "sad", "smirking", "confident", "serious", "worried", "intense", "excited", "embarrassed" etc.\n\n
+    Use tone, punctuation, emphasis, and keywords to infer emotion. Humor, sarcasm, or rhetorical questions should also influence the expression choice. You may also infer if the narrator is hyped or calm, authoritative or playful.\n\n
+    Example Input:\n[\n  { "start": "0:00:01.00", "end": "0:00:04.00", "text": "Okay, here we go!" },\n  
+    { "start": "0:00:04.00", "end": "0:00:12.00", "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!" }\n]\n\n
+    Expected Output Format:\n[\n  {\n    "start": "0:00:01.00",\n    "end": "0:00:04.00",\n    "text": "Okay, here we go!",\n    "expression": "excited"\n  },\n  {\n    "start": "0:00:04.00",\n    "end": "0:00:12.00",\n    "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!",\n    "expression": "intense"\n  }\n]\n\nNow here are the actual subtitle lines to analyze:\n'''
     prompt += json.dumps(sub_lines, indent=2, ensure_ascii=False)
     return prompt
 

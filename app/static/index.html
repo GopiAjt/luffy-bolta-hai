@@ -12,7 +12,7 @@
     <style>
         /* Custom styles that override or extend Bootstrap */
         body {
-            background-color: #f8f9fa;
+            background-color: #000000;
             padding: 20px 0;
         }
 
@@ -23,39 +23,44 @@
         }
 
         .section {
-            background-color: #fff;
+            background-color: #ffffff18;
             border-radius: 8px;
-            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+            box-shadow: 0 0.125rem 0.25rem rgba(255, 255, 255, 0.175);
             margin-bottom: 1.5rem;
             padding: 1.5rem;
         }
 
         h1 {
-            color: #2c3e50;
+            color: #ffffff;
             margin-bottom: 1.5rem;
             font-weight: 600;
         }
 
         h2 {
-            color: #2c3e50;
+            color: #ffffff;
             margin-bottom: 1.25rem;
             font-size: 1.5rem;
             font-weight: 500;
         }
 
+        #scriptOutput {
+            background-color: #000000;
+            color: #ffffff;
+        }
+
         .btn-primary {
-            background-color: #3498db;
-            border-color: #3498db;
+            background-color: #4e4e4e3b;
+            border-color: #8080803b;
         }
 
         .btn-primary:hover {
-            background-color: #2980b9;
-            border-color: #2980b9;
+            background-color: #2424243b;
+            border-color: #ffffff3b;
         }
 
         .btn-success {
-            background-color: #4CAF50;
-            border-color: #4CAF50;
+            background-color: #00000030;
+            border-color: #00000030;
         }
 
         .btn-warning {
@@ -72,7 +77,7 @@
 
         .form-control:focus,
         .form-select:focus {
-            border-color: #3498db;
+            border-color: #8080803b;
             box-shadow: 0 0 0 0.25rem rgba(52, 152, 219, 0.25);
         }
 
@@ -104,6 +109,17 @@
             display: block;
             background: #000;
             border-radius: 8px;
+        }
+
+        #videoOutput {
+            background-color: #00000025;
+            color: #ffffff;
+        }
+
+        .btn:disabled {
+            background-color: #8080803b;
+            border-color: #8080803b;
+            cursor: not-allowed;
         }
 
         /* Responsive video sizing */
@@ -164,14 +180,14 @@
     <div class="main-container">
         <div class="text-center mb-4">
             <h1 class="display-4">One Piece Script Generator</h1>
-            <p class="lead text-muted">Create amazing One Piece content with AI</p>
+            <p class="lead text-white">Create amazing One Piece content with AI</p>
         </div>
 
         <!-- Script Generation Section -->
         <div class="section">
             <div class="text-center">
                 <h2><i class="bi bi-file-earmark-text me-2"></i>Generate Script</h2>
-                <p class="text-muted mb-4">Click the button to generate a new script about One Piece!</p>
+                <p class="mb-4 text-white">Click the button to generate a new script about One Piece!</p>
                 <button id="generateButton" class="btn btn-success btn-lg">
                     <i class="bi bi-magic me-2"></i>Generate Script
                 </button>
@@ -179,9 +195,9 @@
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    <p class="text-muted">Generating script...</p>
+                    <p class="text-white">Generating script...</p>
                 </div>
-                <div id="scriptOutput" class="mt-3 p-3 bg-light rounded"></div>
+                <div id="scriptOutput" class="mt-3 p-3 bg-dark rounded"></div>
             </div>
         </div>
 
@@ -191,12 +207,12 @@
             <div id="subtitleControls" class="row justify-content-center">
                 <div>
                     <div class="mb-3">
-                        <label for="scriptInput" class="form-label">Paste your script below:</label>
-                        <textarea class="form-control mb-3" id="scriptInput" rows="6"
+                        <label for="scriptInput" class="form-label text-white">Paste your script below:</label>
+                        <textarea class="form-control mb-3 bg-dark text-white" id="scriptInput" rows="6"
                             placeholder="Enter your script here..."></textarea>
 
                         <div class="mb-3">
-                            <label for="subtitleStyle" class="form-label">Subtitle Style:</label>
+                            <label for="subtitleStyle" class="form-label text-white">Subtitle Style:</label>
                             <select class="form-select" id="subtitleStyle">
                                 <option value="epic">Epic Battles (Recommended)</option>
                                 <option value="dramatic">Dramatic Anime</option>
@@ -211,7 +227,7 @@
                         <h2 class="text-center mb-4"><i class="bi bi-mic me-2"></i>Upload Audio</h2>
                         <div class="row justify-content-center">
                             <div class="col-md-8">
-                                <div class="card">
+                                <div class="card bg-dark">
                                     <div class="card-body">
                                         <div class="d-grid gap-2">
                                             <input type="file" id="audioFile" accept="audio/*" class="d-none">
@@ -221,7 +237,7 @@
                                         </div>
 
                                         <div class="mt-3">
-                                            <div id="uploadStatus" class="small text-muted mb-2"></div>
+                                            <div id="uploadStatus" class="small text-white mb-2"></div>
                                             <div id="uploadProgress" class="progress">
                                                 <div class="progress-bar progress-bar-striped progress-bar-animated"
                                                     style="width: 0%">
@@ -234,7 +250,7 @@
                                                 <i class="bi bi-file-earmark-music fs-1 me-3 text-primary"></i>
                                                 <div class="flex-grow-1">
                                                     <div id="audioName" class="fw-bold"></div>
-                                                    <div id="audioDuration" class="text-muted small"></div>
+                                                    <div id="audioDuration" class="text-white small"></div>
                                                 </div>
                                                 <audio id="previewAudio" controls class="w-100 mt-2"></audio>
                                             </div>
@@ -253,9 +269,9 @@
                         <div class="spinner-border text-primary" role="status">
                             <span class="visually-hidden">Loading...</span>
                         </div>
-                        <p class="mt-2 text-muted">Generating subtitles...</p>
+                        <p class="mt-2 text-white">Generating subtitles...</p>
                     </div>
-                    <div id="subtitleOutput" class="mt-3 p-3 bg-light rounded"></div>
+                    <div id="subtitleOutput" class="mt-3 p-3 bg-dark text-white rounded"></div>
                 </div>
             </div>
         </div>
@@ -271,13 +287,13 @@
                         Your browser does not support the video tag.
                     </video>
                 </div>
-                <div id="videoOutput" class="mt-3 p-3 bg-light rounded"></div>
+                <div id="videoOutput" class="mt-3 p-3 bg-dark text-white rounded"></div>
             </div>
             <div id="videoLoading" class="text-center my-4" style="display: none;">
                 <div class="spinner-border text-primary" role="status">
                     <span class="visually-hidden">Loading...</span>
                 </div>
-                <p class="mt-2 text-muted">Generating video... This may take a few minutes.</p>
+                <p class="mt-2 text-white">Generating video... This may take a few minutes.</p>
             </div>
         </div>
 

@@ -195,10 +195,10 @@ export class LuffyBoltHaiApp {
     // Event handlers with error handling
     handleGenerateScript = withErrorHandling(async () => {
         console.log('handleGenerateScript called');
-        const scriptOutput = document.getElementById('scriptOutput');
+        const scriptContainer = document.getElementById('scriptOutput');
         const generateButton = document.getElementById('generateButton');
         
-        if (!scriptOutput) {
+        if (!scriptContainer) {
             throw new Error('scriptOutput element not found');
         }
         if (!generateButton) {
@@ -208,24 +208,46 @@ export class LuffyBoltHaiApp {
         console.log('Showing loading state');
         this.scriptLoading.show();
         generateButton.disabled = true;
-        scriptOutput.textContent = 'Generating script...';
-        scriptOutput.style.display = 'block';
+        scriptContainer.innerHTML = '<div class="text-center">Generating script...</div>';
+        scriptContainer.style.display = 'block';
         
         try {
             console.log('Calling generateScript API');
-            const data = await generateScript();
-            console.log('Received response from generateScript:', data);
+            const scriptData = await generateScript();
+            console.log('Received response from generateScript:', scriptData);
             
-            if (!data || !data.output || !data.output.script) {
+            if (!scriptData || !scriptData.script) {
                 throw new Error('Invalid response format from server');
             }
             
-            scriptOutput.textContent = data.output.script;
+            // Create HTML for the script output
+            let html = `
+                <div class="script-output">
+                    <h3 class="script-title mb-3">${scriptData.title || 'Generated Script'}</h3>
+                    
+                    <div class="script-description mb-3 p-3 bg-light rounded">
+                        ${scriptData.description || ''}
+                    </div>
+                    
+                    <div class="script-content p-3 bg-white border rounded mb-3">
+                        ${scriptData.script.replace(/\n/g, '<br>')}
+                    </div>
+                    
+                    ${scriptData.tags && scriptData.tags.length ? `
+                    <div class="script-tags mb-3">
+                        ${scriptData.tags.map(tag => 
+                            `<span class="badge bg-primary me-1">${tag}</span>`
+                        ).join('')}
+                    </div>` : ''}
+                </div>
+            `;
+            
+            scriptContainer.innerHTML = html;
             
             // Copy script to subtitle input
             const scriptInput = document.getElementById('scriptInput');
             if (scriptInput) {
-                scriptInput.value = data.output.script;
+                scriptInput.value = scriptData.script;
                 const subtitleControls = document.getElementById('subtitleControls');
                 if (subtitleControls) {
                     subtitleControls.style.display = 'block';
@@ -233,7 +255,11 @@ export class LuffyBoltHaiApp {
             }
         } catch (error) {
             console.error('Error in handleGenerateScript:', error);
-            scriptOutput.textContent = `Error: ${error.message}`;
+            scriptContainer.innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <strong>Error:</strong> ${error.message}
+                </div>
+            `;
             throw error;
         } finally {
             console.log('Hiding loading state');

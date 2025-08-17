@@ -325,16 +325,21 @@ def download_images_for_slides(json_path, out_dir):
             logger.info(
                 f"[Slide {idx+1}] Google image search returned {len(items)} results.")
 
-            # Filter for actual images with correct aspect ratio, prioritizing from preferred sites
+            # Filter for actual images, prioritizing One Piece content from preferred sites
             valid_images = []
             for item_idx, item in enumerate(items):
                 item_link = item.get('link', 'N/A')
+                item_title = item.get('title', '').lower()
                 item_mime = item.get('mime', 'N/A')
                 item_width = item.get('image', {}).get('width', 0)
                 item_height = item.get('image', {}).get('height', 0)
                 
                 # Check if the image is from a preferred site
                 is_preferred = any(site in item_link.lower() for site in prioritized_sites)
+                
+                # Check if the content is One Piece related
+                is_onepiece = ('one piece' in item_title or 
+                             any(term in item_title for term in ['luffy', 'zoro', 'mihawk', 'shanks', 'kaido', 'big mom']))
 
                 if 'image' not in item_mime:
                     logger.debug(
@@ -346,33 +351,42 @@ def download_images_for_slides(json_path, out_dir):
                         f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Missing dimensions ({item_width}x{item_height}) - {item_link}")
                     continue
 
+                # Calculate aspect ratio for reference (but don't filter by it)
                 aspect_ratio = item_width / item_height
-                aspect_ratio_ok = abs(aspect_ratio - 16/9) / (16/9) < 0.10  # 10% tolerance
                 
-                # If it's from a preferred site, be more lenient with aspect ratio
-                if is_preferred:
-                    aspect_ratio_tolerance = 0.20  # 20% tolerance for preferred sites
-                    aspect_ratio_ok = abs(aspect_ratio - 16/9) / (16/9) < aspect_ratio_tolerance
+                # Calculate priority score (higher is better)
+                priority = 0
                 
-                if aspect_ratio_ok:
-                    # Add priority score based on site preference and aspect ratio match
-                    priority = 1 if is_preferred else 0
-                    # Slightly prefer better aspect ratio matches
-                    aspect_score = 1 - (abs(aspect_ratio - 16/9) / (16/9))
-                    item['_priority'] = priority + aspect_score
-                    valid_images.append(item)
-                    logger.debug(
-                        f"[Slide {idx+1} - Item {item_idx+1}] Accepted: {'PREFERRED ' if is_preferred else ''}Aspect ratio {aspect_ratio:.2f} - {item_link}")
-                else:
-                    logger.debug(
-                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Aspect ratio mismatch ({aspect_ratio:.2f} vs 16/9) - {item_link}")
+                # Highest priority: One Piece content from preferred sites
+                if is_onepiece and is_preferred:
+                    priority = 3
+                # High priority: One Piece content from any site
+                elif is_onepiece:
+                    priority = 2
+                # Medium priority: Preferred site with any content
+                elif is_preferred:
+                    priority = 1
+                
+                # Slight preference for images closer to 16:9
+                aspect_score = 1 - (abs(aspect_ratio - 16/9) / (16/9)) * 0.5  # Reduced weight of aspect ratio
+                
+                item['_priority'] = priority + aspect_score
+                valid_images.append(item)
+                
+                logger.debug(
+                    f"[Slide {idx+1} - Item {item_idx+1}] Accepted: "
+                    f"{'ONEPIECE ' if is_onepiece else ''}"
+                    f"{'PREFERRED ' if is_preferred else ''}"
+                    f"Aspect: {aspect_ratio:.2f} - {item_link}")
 
             downloaded_successfully = False
             if valid_images:
-                # Sort valid images by priority (preferred sites first, then best aspect ratio match)
+                # Sort valid images by priority (One Piece content and preferred sites first)
                 valid_images.sort(key=lambda x: x.get('_priority', 0), reverse=True)
                 logger.debug(
-                    f"[Slide {idx+1}] Found {len(valid_images)} valid images. Attempting download in order of priority.")
+                    f"[Slide {idx+1}] Found {len(valid_images)} valid images. "
+                    f"Top 3 priorities: {[round(x.get('_priority', 0), 2) for x in valid_images[:3]]}")
+                
                 for item_idx, best_image in enumerate(valid_images):
                     img_url = best_image['link']
                     ext = os.path.splitext(img_url)[-1].split("?")[0] or ".jpg"

@@ -18,13 +18,8 @@ genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
 
-def generate_script() -> dict:
-    """
-    Generate a 30-40s One Piece narration script via Gemini.
-    
-    Returns:
-        dict: A dictionary containing title, script, description, and tags
-    """
+def generate_script() -> str:
+    """Generate a 30–60s One Piece narration script via Gemini."""
     try:
         topics = [
             # CHARACTER RANKINGS & COMPARISONS
@@ -235,80 +230,91 @@ def generate_script() -> dict:
 
         prompt = (
             "You are a creative anime scriptwriter and One Piece expert.\n"
-            f"Create a 30-40 second YouTube Shorts script about: {topic}\n\n"
-            "Return the result in the following JSON format:\n\n"
-            "{\n"
-            "  \"title\": \"string - matches style of: 🌟 ONE PIECE'S MOST UNDERRATED LEGENDS!\",\n"
-            "  \"script\": \"string - the narration only, in same tone & pacing as example\",\n"
-            "  \"description\": \"string - engaging, hype-driven, 2-3 sentences like example\",\n"
-            "  \"tags\": [\n"
-            "    \"#OnePiece\",\n"
-            "    \"#tag2\",\n"
-            "    \"#tag3\",\n"
-            "    \"... more tags like example\"\n"
-            "  ]\n"
-            "}\n\n"
-            "Requirements:\n\n"
-            "1. Title: Must be attention-grabbing, emoji-rich, and in ALL CAPS.\n\n"
-            "2. Script:\n"
-            "   - Pure narration only (no sound effects or directions)\n"
-            "   - Fast-paced, high-energy delivery\n"
-            "   - 30-40 seconds when read aloud (~50 words)\n"
-            "   - End with a call to action\n\n"
-            "3. Description:\n"
-            "   - engaging, hype-driven sentences\n"
-            "   - Include emojis and power scaling terms\n"
-            "   - End with a question to boost engagement\n\n"
-            "4. Tags:\n"
-            "   - Include #OnePiece and 5-7 relevant hashtags\n"
-            "   - Mix popular and niche tags\n"
-            "   - Focus on characters, powers, and current arcs"
+            f"Create engaging content for a YouTube video about: \"{topic}\"\n\n"
+            "You MUST produce all 4 sections fully, in this exact order and format:\n\n"
+
+            "1. TITLE (Clickbait-style, under 70 chars):\n"
+            "- All caps, emojis, questions or teasers.\n\n"
+
+            "2. SCRIPT (30–40 seconds, ~80 words):\n"
+            "- Pure narration only, no SFX or music cues.\n"
+            "- HOOK: Start with contradiction, shocking statistic, or 'What if I told you...'\n"
+            "- Use POWER WORDS: 'devastating', 'impossible', 'forbidden', 'secretly'\n"
+            "- Add SPECIFIC DETAILS: Chapter numbers, exact quotes, precise locations\n"
+            "- Include EMOTIONAL STAKES: 'This broke my heart', 'Fans were FURIOUS'\n"
+            "- Use SENSORY LANGUAGE: Visual, auditory, tactile descriptions\n"
+            "- Add PACING TECHNIQUES: Short punches. Then longer revelations that build tension.\n"
+            "- Insert CREDIBILITY BOOSTERS: 'Oda confirmed', 'Hidden in plain sight', 'Twitter exploded'\n"
+            "- Include FAN CONNECTION: 'You probably missed', 'Most viewers don't realize'\n"
+            "- Add STAKES ESCALATION: 'But that's not even the crazy part...'\n"
+            "- End with one of these + URGENT CTA: 'CLIFFHANGER or URGENT CALL TO ACTION or CHALLENGE or PREDICTION BAIT or COMMUNITY RALLYING or TEASER or CONTROVERSIAL' based on the script\n\n"
+
+            "3. VIDEO DESCRIPTION (under 500 chars):\n"
+            "- START with a shocking statistic, contradiction, or mind-bending question\n"
+            "- Include 1 CONTROVERSIAL statement that will trigger debates\n"
+            "- Add 3-5 punchy reveals with emojis (🤯⚡🔥) and cliffhanger explanations\n"
+            "- Insert FOMO triggers: 'Most fans missed...', '99% got this wrong...'\n"
+            "- Drop manga spoiler warnings or episode references for credibility\n"
+            "- Include community challenges: 'Bet you can't guess...', 'Prove me wrong...'\n"
+            "- Add theory confidence levels: '🔥SPICY THEORY🔥' or '⚠️DANGEROUS PREDICTION⚠️'\n"
+            "- Reference other characters/arcs to expand intrigue\n"
+            "- End with multiple hook questions AND a dare/challenge CTA\n\n"
+
+            "4. HASHTAGS (5–10 relevant hashtags):\n"
+            "- Include #onepiece #anime plus trending topic tags.\n\n"
+            
+            "Format EXACTLY as:\n"
+            "TITLE: [your engaging title]\n\n"
+            "SCRIPT: [your script here]\n\n"
+            "DESCRIPTION: [your engaging description]\n\n"
+            "HASHTAGS: [your hashtags here]"
         )
 
+
         response = model.generate_content(prompt)
-        # Get the first candidate from the response
-        if response.text:
-            try:
-                # Clean and parse the JSON response
-                response_text = response.text.strip()
-                # Handle cases where response might be wrapped in markdown code blocks
-                if '```json' in response_text:
-                    response_text = response_text.split('```json')[1].split('```')[0].strip()
-                elif '```' in response_text:
-                    response_text = response_text.split('```')[1].strip()
-                
-                import json
-                result = json.loads(response_text)
-                
-                # Ensure all required fields are present
-                required_fields = ['title', 'script', 'description', 'tags']
-                if not all(field in result for field in required_fields):
-                    raise ValueError("Missing required fields in the response")
-                    
-                return result
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response: {e}")
-                logger.error(f"Response was: {response_text}")
-                raise ValueError("Invalid JSON response from API")
-        else:
-            raise ValueError("No text generated by Gemini API")
+        if not response.text:
+            raise ValueError("No content generated by Gemini API")
+            
+        # Parse the response
+        result = {
+            'title': '',
+            'script': '',
+            'description': '',
+            'hashtags': ''
+        }
+        
+        # Split the response into sections
+        sections = response.text.split('\n\n')
+        
+        for section in sections:
+            if section.startswith('TITLE:'):
+                result['title'] = section.replace('TITLE:', '').strip()
+            elif section.startswith('SCRIPT:'):
+                result['script'] = section.replace('SCRIPT:', '').strip()
+            elif section.startswith('DESCRIPTION:'):
+                result['description'] = section.replace('DESCRIPTION:', '').strip()
+            elif section.startswith('HASHTAGS:'):
+                result['hashtags'] = section.replace('HASHTAGS:', '').strip()
+        
+        return result
     except Exception as e:
         logger.error(f"Error generating script: {str(e)}")
         raise
 
 
 if __name__ == "__main__":
-    import json
-    script_data = generate_script()
-    print("✅ Script generated successfully!\n")
-    print("Title:", script_data['title'])
-    print("\nScript:")
-    print(script_data['script'])
-    print("\nDescription:", script_data['description'])
-    print("\nTags:", " ".join(script_data['tags']))
-    
-    # Save to file for reference
-    with open('generated_script.json', 'w', encoding='utf-8') as f:
-        json.dump(script_data, f, indent=2, ensure_ascii=False)
-    print("\n✅ Script saved to 'generated_script.json'")
+    try:
+        result = generate_script()
+        print("\n✅ SCRIPT GENERATED!\n")
+        print("📜 SCRIPT:")
+        print("-" * 40)
+        print(result['script'])
+        print("\n📝 DESCRIPTION:")
+        print("-" * 40)
+        print(result['description'])
+        print("\n🏷️  HASHTAGS:")
+        print("-" * 40)
+        print(result['hashtags'])
+        print()
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")

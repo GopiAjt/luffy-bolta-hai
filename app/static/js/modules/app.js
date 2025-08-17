@@ -195,10 +195,10 @@ export class LuffyBoltHaiApp {
     // Event handlers with error handling
     handleGenerateScript = withErrorHandling(async () => {
         console.log('handleGenerateScript called');
-        const scriptContainer = document.getElementById('scriptOutput');
+        const scriptOutput = document.getElementById('scriptOutput');
         const generateButton = document.getElementById('generateButton');
         
-        if (!scriptContainer) {
+        if (!scriptOutput) {
             throw new Error('scriptOutput element not found');
         }
         if (!generateButton) {
@@ -208,46 +208,68 @@ export class LuffyBoltHaiApp {
         console.log('Showing loading state');
         this.scriptLoading.show();
         generateButton.disabled = true;
-        scriptContainer.innerHTML = '<div class="text-center">Generating script...</div>';
-        scriptContainer.style.display = 'block';
+        scriptOutput.textContent = 'Generating script...';
+        scriptOutput.style.display = 'block';
         
         try {
             console.log('Calling generateScript API');
-            const scriptData = await generateScript();
-            console.log('Received response from generateScript:', scriptData);
+            const data = await generateScript();
+            console.log('Received response from generateScript:', data);
             
-            if (!scriptData || !scriptData.script) {
+            if (!data || !data.output || !data.output.script) {
                 throw new Error('Invalid response format from server');
             }
             
-            // Create HTML for the script output
-            let html = `
-                <div class="script-output">
-                    <h3 class="script-title mb-3">${scriptData.title || 'Generated Script'}</h3>
-                    
-                    <div class="script-description mb-3 p-3 bg-light rounded">
-                        ${scriptData.description || ''}
-                    </div>
-                    
-                    <div class="script-content p-3 bg-white border rounded mb-3">
-                        ${scriptData.script.replace(/\n/g, '<br>')}
-                    </div>
-                    
-                    ${scriptData.tags && scriptData.tags.length ? `
-                    <div class="script-tags mb-3">
-                        ${scriptData.tags.map(tag => 
-                            `<span class="badge bg-primary me-1">${tag}</span>`
-                        ).join('')}
-                    </div>` : ''}
-                </div>
-            `;
+            // Update title if available
+            const titleElement = document.getElementById('titleText');
+            const titleContainer = document.getElementById('scriptTitle');
+            if (data.output.title && titleElement && titleContainer) {
+                titleElement.textContent = data.output.title;
+                titleContainer.style.display = 'block';
+                
+                // Also update the page title for better UX
+                document.title = data.output.title + ' | One Piece Script Generator';
+            }
             
-            scriptContainer.innerHTML = html;
+            // Update script output
+            scriptOutput.textContent = data.output.script;
+            
+            // Update description if available
+            const descriptionElement = document.getElementById('descriptionText');
+            const descriptionContainer = document.getElementById('scriptDescription');
+            if (data.output.description && descriptionElement && descriptionContainer) {
+                // Convert newlines to <br> tags for better formatting
+                const formattedDescription = data.output.description.replace(/\n/g, '<br>');
+                descriptionElement.innerHTML = formattedDescription;
+                descriptionContainer.style.display = 'block';
+            }
+            
+            // Update hashtags if available
+            const hashtagsContainer = document.getElementById('hashtagsContainer');
+            const hashtagsElement = document.getElementById('scriptHashtags');
+            if (data.output.hashtags && hashtagsContainer && hashtagsElement) {
+                // Clear existing hashtags
+                hashtagsContainer.innerHTML = '';
+                
+                // Split hashtags by space or comma and create badges for each
+                const hashtags = data.output.hashtags.split(/[\s,]+/).filter(tag => tag.trim() !== '');
+                hashtags.forEach(tag => {
+                    if (!tag.startsWith('#')) {
+                        tag = '#' + tag;
+                    }
+                    const badge = document.createElement('span');
+                    badge.className = 'badge bg-secondary me-1 mb-1';
+                    badge.textContent = tag;
+                    hashtagsContainer.appendChild(badge);
+                });
+                
+                hashtagsElement.style.display = 'block';
+            }
             
             // Copy script to subtitle input
             const scriptInput = document.getElementById('scriptInput');
             if (scriptInput) {
-                scriptInput.value = scriptData.script;
+                scriptInput.value = data.output.script;
                 const subtitleControls = document.getElementById('subtitleControls');
                 if (subtitleControls) {
                     subtitleControls.style.display = 'block';
@@ -255,11 +277,7 @@ export class LuffyBoltHaiApp {
             }
         } catch (error) {
             console.error('Error in handleGenerateScript:', error);
-            scriptContainer.innerHTML = `
-                <div class="alert alert-danger" role="alert">
-                    <strong>Error:</strong> ${error.message}
-                </div>
-            `;
+            scriptOutput.textContent = `Error: ${error.message}`;
             throw error;
         } finally {
             console.log('Hiding loading state');

@@ -105,28 +105,26 @@ def generate_script_endpoint():
     Generate script and subtitles using Gemini AI.
 
     Request:
-    {}
-    
-    Response:
     {
-        "status": "success",
-        "message": "Script generated successfully",
-        "output": {
-            "title": "🌟 ONE PIECE'S MOST UNDERRATED LEGENDS!",
-            "script": "The generated script text...",
-            "description": "Discover the most underrated legends in One Piece history...",
-            "tags": ["#OnePiece", "#Anime", "#Manga"]
-        }
+        "script": "Your script text here",
+        "output_name": "optional_output_name"
     }
     """
     try:
-        # Generate script with title, description, and tags
-        script_data = generate_script()
+        data = request.json
+
+        # Generate script along with description and hashtags
+        result = generate_script()
 
         return jsonify({
             'status': 'success',
             'message': 'Script generated successfully',
-            'output': script_data
+            'output': {
+                'title': result.get('title', ''),
+                'script': result.get('script', ''),
+                'description': result.get('description', ''),
+                'hashtags': result.get('hashtags', '')
+            }
         })
     except Exception as e:
         logger.error(f"Error in generate_script_endpoint: {str(e)}")

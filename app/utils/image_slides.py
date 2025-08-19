@@ -1,13 +1,15 @@
 import re
 import json
 import requests
-from typing import List, Dict
+from typing import List, Dict, Optional, Set, Tuple
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 import logging
 import time
 import shutil
+import hashlib
+from functools import lru_cache
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -134,46 +136,49 @@ def fill_gaps_in_slides(slides: List[Dict], total_duration: float) -> List[Dict]
 def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
     # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
-    groups = group_dialogues(dialogues)
-    # Prepare a single prompt with all grouped segments
-    prompt_segments = []
-    for group in groups:
-        prompt_segments.append(
-            f"[{group['start']} - {group['end']}] {group['text']}")
-    all_segments = "\n".join(prompt_segments)
+    grouped_dialogues = group_dialogues(dialogues)
+    
+    # Prepare the prompt for Gemini
+    all_segments = "\n".join(
+        f"- {d['start']} to {d['end']}: {d['text']}" 
+        for d in grouped_dialogues
+    )
+    
     prompt = (
-        "You are an expert video content designer. Your task is to map subtitle segments to suggested Google image search queries, structured in JSON format.\n\n"
-
+        "You are an expert video content designer specializing in One Piece. "
+        "Your task is to map subtitle segments to suggested Google image search queries, structured in JSON format.\n\n"
         f"Here are the grouped subtitle segments for a short video:\n{all_segments}\n\n"
-
-        "First, scan all segments and determine the single most relevant main topic of the video "
-        "(e.g., an anime like 'One Piece', a TV series, a movie, a historical event, or a sports match). "
-        "If no single clear topic is found, choose the most recurring proper noun, entity, or theme across all segments. "
-        "This topic should be the central subject that appears most frequently in names, settings, or themes. "
-        "Always include this detected topic in every 'image_search_query', along with specific characters, abilities, settings, or iconic moments from that segment.\n\n"
-
+        "Since this content is always about One Piece, always include the term 'One Piece' in every image_search_query. "
+        "Then, add the most relevant characters, events, abilities, locations, or iconic moments mentioned or implied by each segment. "
+        "If a segment is generic or transitional (e.g., silence, intro, outro), default to a neutral One Piece query like 'One Piece scenery' or 'One Piece logo'.\n\n"
         "Your goal is to generate a JSON array where each object includes:\n"
         "- start_time (string, e.g., '0:00:00')\n"
         "- end_time\n"
         "- summary (short subtitle text that captures the essence of the segment)\n"
-        "- image_search_query (a concise, highly relevant Google image search string based on the segment, "
-        "always containing the detected topic and additional details like characters, abilities, locations, or iconic moments)\n\n"
-
-        "🕒 MERGING RULES (Strict):\n"
-        "- Merge subtitle segments into one slide if BOTH of these are true:\n"
-        "    1. The time gap between the end of one segment and the start of the next is ≤ 1.5 seconds.\n"
-        "    2. The combined text length of the merged segments is ≤ 250 characters.\n"
-        "- Do NOT merge if the time gap is greater than 1.5 seconds, unless the segments clearly form a single sentence that was split into multiple lines.\n"
-        "- Treat small interjections (“Yeah”, “Okay”, “Right”) as part of the preceding or following segment if they occur within 1.5 seconds and are related in context.\n"
-        "- If merging causes the segment to exceed 250 characters, split at a natural sentence boundary.\n"
-        "- The start_time of a merged slide should be the start_time of the first segment, and the end_time should be from the last segment in the merge.\n\n"
-
-        "⏳ TIMING COVERAGE RULES:\n"
-        "- Ensure the generated slides cover the entire duration of the provided subtitle segments — no gaps.\n"
-        "- Include even short or filler subtitle lines if they are part of an introduction, transition, or build-up to a key idea.\n"
-        "- Each object must represent one complete thought or concept, even if it spans multiple subtitle lines.\n\n"
-
-        "Output your result as valid JSON using this schema:\n"
+        "- image_search_query (a concise, highly relevant Google image search string that always contains 'One Piece' plus specific context)\n\n"
+        "Example output for a segment about Luffy fighting Kaido and Big Mom:\n"
+        "[\n"
+        "  {\n"
+        "    \"start_time\": \"0:00:10\",\n"
+        "    \"end_time\": \"0:00:20\",\n"
+        "    \"summary\": \"Luffy punches Kaido\",\n"
+        "    \"image_search_query\": \"One Piece Luffy punches Kaido anime\"\n"
+        "  },\n"
+        "  {\n"
+        "    \"start_time\": \"0:00:21\",\n"
+        "    \"end_time\": \"0:00:30\",\n"
+        "    \"summary\": \"Big Mom attacks with lightning\",\n"
+        "    \"image_search_query\": \"One Piece Big Mom lightning attack anime\"\n"
+        "  }\n"
+        "]\n\n"
+        "For generic segments, use something like:\n"
+        "  {\n"
+        "    \"start_time\": \"0:00:00\",\n"
+        "    \"end_time\": \"0:00:10\",\n"
+        "    \"summary\": \"Opening scene\",\n"
+        "    \"image_search_query\": \"One Piece logo\"\n"
+        "  }\n\n"
+        "The JSON output should be an array of objects with the following structure:\n"
         "[\n"
         "  {\n"
         "    \"start_time\": \"string\",\n"
@@ -186,39 +191,51 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
         "Respond ONLY with valid JSON. Do not include any extra commentary, explanations, or code fences."
     )
 
-
-
     try:
         response = model.generate_content(prompt)
-        if response.text:
-            logger.info(f"Gemini raw response: {response.text}")
-            import json as _json
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = text.split('\n', 1)[-1]
-                if text.endswith("```"):
-                    text = text.rsplit('```', 1)[0]
-                text = text.strip()
-            try:
-                slides = _json.loads(text)
-                slides = filter_irrelevant_summaries(slides)
-                slides = fill_gaps_in_slides(slides, total_duration)
-            except Exception as parse_err:
-                logger.error(
-                    f"Failed to parse Gemini response as JSON: {response.text}")
-                raise
-        else:
-            logger.error("No text generated by Gemini API")
-            raise ValueError("No text generated by Gemini API")
+        if not response.text:
+            raise ValueError("Empty response from Gemini API")
+            
+        logger.info(f"Gemini raw response: {response.text}")
+        import json as _json
+        text = response.text.strip()
+        
+        # Clean up the response
+        if text.startswith("```"):
+            text = text.split('\n', 1)[-1]
+            if text.endswith("```"):
+                text = text.rsplit('```', 1)[0]
+            text = text.strip()
+            
+        # Parse the JSON response
+        try:
+            slides = _json.loads(text)
+            slides = filter_irrelevant_summaries(slides)
+            slides = fill_gaps_in_slides(slides, total_duration)
+            
+            # Ensure the output directory exists
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            
+            # Save the slides to a JSON file
+            with open(out_path, 'w', encoding='utf-8') as f:
+                _json.dump(slides, f, indent=2, ensure_ascii=False)
+                
+            logger.info(f"Successfully generated {len(slides)} slides at {out_path}")
+            
+            # Download images if image_dir is provided
+            if image_dir:
+                download_images_for_slides(out_path, image_dir)
+                
+            return out_path
+            
+        except _json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Gemini response as JSON: {e}")
+            logger.error(f"Response text: {response.text}")
+            raise
+            
     except Exception as e:
-        logger.error(f"Error from Gemini API: {str(e)}")
+        logger.error(f"Error in generate_gemini_image_slides: {str(e)}")
         raise
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(slides, f, indent=2)
-    # Automatically download images if image_dir is provided
-    if image_dir:
-        download_images_for_slides(out_path, image_dir)
-    return out_path
 
 
 def generate_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
@@ -228,25 +245,20 @@ def generate_image_slides(ass_path: str, out_path: str, total_duration: float, i
     return generate_gemini_image_slides(ass_path, out_path, total_duration, image_dir)
 
 
-def google_image_search(query, api_key=None, cse_id=None, num_results=10):
-    api_key = api_key or os.getenv("GOOGLE_API_KEY")
-    cse_id = cse_id or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
-    url = "https://www.googleapis.com/customsearch/v1"
+@lru_cache(maxsize=100)
+def _google_image_search_impl(query: str, api_key: str, cse_id: str, num_results: int = 10) -> List[Dict]:
+    """Internal implementation of Google image search with caching.
     
-    # Add site: operators to prioritize specific anime and art websites
-    prioritized_sites = [
-        "onepiece.fandom.com",
-        "zerochan.net",
-        "sakugabooru.com",
-        "artstation.com",
-        "anidb.net",
-        "crunchyroll.com",
-        "myanimelist.net",
-        "deviantart.com"
-    ]
-    if "site:" not in query.lower():
-        sites_query = " OR ".join(f"site:{site}" for site in prioritized_sites)
-        query = f"{query} ({sites_query})"
+    Args:
+        query: Search query string
+        api_key: Google API key
+        cse_id: Custom Search Engine ID
+        num_results: Maximum number of results to return
+        
+    Returns:
+        List of image search results
+    """
+    url = "https://www.googleapis.com/customsearch/v1"
     
     params = {
         "q": query,
@@ -256,190 +268,301 @@ def google_image_search(query, api_key=None, cse_id=None, num_results=10):
         "num": num_results,
         "safe": "active"
     }
-    resp = requests.get(url, params=params)
-    resp.raise_for_status()
-    results = resp.json()
-    if "items" in results and results["items"]:
-        return results["items"]
-    return []
-
-
-def download_image(url, save_path):
-    """Downloads an image from a URL to a given path."""
+    
     try:
-        resp = requests.get(url, stream=True, timeout=10)
+        logger.debug(f"Executing search: {query}")
+        resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
-        with open(save_path, "wb") as f:
-            for chunk in resp.iter_content(1024):
-                f.write(chunk)
+        results = resp.json()
+        return results.get("items", [])
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to download image from {url}: {e}")
-        raise
+        logger.error(f"Google Image Search API error for query '{query}': {str(e)}")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response for query '{query}': {str(e)}")
+        return []
+
+def google_image_search(query: str, api_key: Optional[str] = None, cse_id: Optional[str] = None, num_results: int = 10) -> List[Dict]:
+    """Search for images using Google Custom Search API with caching and retry logic.
+    
+    Args:
+        query: Search query string
+        api_key: Google API key (defaults to GOOGLE_API_KEY env var)
+        cse_id: Custom Search Engine ID (defaults to GOOGLE_SEARCH_ENGINE_ID env var)
+        num_results: Maximum number of results to return
+        
+    Returns:
+        List of image search results
+    """
+    api_key = api_key or os.getenv("GOOGLE_API_KEY")
+    cse_id = cse_id or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
+    
+    if not api_key or not cse_id:
+        logger.error("Missing required API key or CSE ID")
+        return []
+    
+    # Try with the exact query first
+    items = _google_image_search_impl(query, api_key, cse_id, num_results)
+    
+    # If no results, try a broader search by removing any special characters
+    if not items and any(c in query for c in ':"'):
+        simplified_query = re.sub(r'[:"]', '', query)
+        logger.debug(f"No results, trying simplified query: {simplified_query}")
+        items = _google_image_search_impl(simplified_query, api_key, cse_id, num_results)
+    
+    return items
 
 
-def download_images_for_slides(json_path, out_dir):
+def _get_image_hash(image_url: str) -> str:
+    """Generate a hash for an image URL to detect duplicates."""
+    # Remove query parameters and fragments
+    clean_url = image_url.split('?')[0].split('#')[0]
+    # Use MD5 hash of the URL as the image identifier
+    return hashlib.md5(clean_url.encode('utf-8')).hexdigest()
+
+def _is_duplicate_image(item: Dict, downloaded_hashes: Set[str]) -> Tuple[bool, str]:
+    """Check if an image is a duplicate based on its URL hash."""
+    image_url = item.get('link')
+    if not image_url:
+        return True, ""
+        
+    image_hash = _get_image_hash(image_url)
+    return (image_hash in downloaded_hashes, image_hash)
+
+def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
+    """Download an image from a URL to a given path with improved error handling.
+    
+    Args:
+        url: Image URL to download
+        save_path: Local path to save the image
+        timeout: Request timeout in seconds
+        
+    Returns:
+        bool: True if download was successful, False otherwise
+    """
+    # Validate inputs
+    if not url or not isinstance(url, str):
+        logger.error(f"Invalid URL: {url}")
+        return False
+        
+    # Clean up the URL
+    url = url.strip()
+    
+    # Add protocol if missing
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    
+    try:
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # Download the image with a user agent header
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        logger.debug(f"Downloading image from: {url}")
+        with requests.get(url, stream=True, timeout=timeout, headers=headers) as resp:
+            resp.raise_for_status()
+            
+            # Check content type
+            content_type = resp.headers.get('content-type', '').lower()
+            if 'image' not in content_type:
+                logger.error(f"URL does not point to an image: {url} (Content-Type: {content_type})")
+                return False
+                
+            # Get file extension from content type or URL
+            ext = None
+            if 'jpeg' in content_type or 'jpg' in content_type:
+                ext = '.jpg'
+            elif 'png' in content_type:
+                ext = '.png'
+            elif 'gif' in content_type:
+                ext = '.gif'
+            else:
+                # Try to get extension from URL
+                url_path = url.split('?')[0]  # Remove query params
+                url_ext = os.path.splitext(url_path)[1].lower()
+                if url_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                    ext = url_ext
+                else:
+                    ext = '.jpg'  # Default to jpg if unknown
+            
+            # Update save_path with correct extension if needed
+            if ext and not save_path.lower().endswith(ext):
+                save_path = os.path.splitext(save_path)[0] + ext
+            
+            # Download in chunks to handle large files
+            with open(save_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:  # Filter out keep-alive chunks
+                        f.write(chunk)
+            
+            # Verify the file was saved properly
+            if not os.path.exists(save_path):
+                logger.error(f"Failed to save image to {save_path}")
+                return False
+                
+            file_size = os.path.getsize(save_path)
+            if file_size == 0:
+                logger.error(f"Downloaded file is empty: {save_path}")
+                os.remove(save_path)
+                return False
+                
+            logger.info(f"Successfully downloaded {os.path.basename(save_path)} ({file_size/1024:.1f} KB)")
+            return True
+            
+    except requests.exceptions.Timeout:
+        logger.error(f"Request timed out after {timeout} seconds: {url}")
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error {e.response.status_code} for URL: {url}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed for {url}: {str(e)}")
+    except IOError as e:
+        logger.error(f"I/O error saving to {save_path}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error downloading {url}: {str(e)}")
+        logger.debug(f"Error details:", exc_info=True)
+    
+    # Clean up partially downloaded file if it exists
+    if os.path.exists(save_path):
+        try:
+            os.remove(save_path)
+        except OSError as e:
+            logger.warning(f"Failed to clean up partially downloaded file {save_path}: {str(e)}")
+    
+    return False
+
+
+def _generate_fallback_queries(base_query: str) -> List[str]:
+    """Generate fallback search queries if the original query doesn't yield results."""
+    # Remove any special characters and split into words
+    words = re.findall(r'\b\w+\b', base_query.lower())
+    
+    # Common One Piece related terms to try in fallback queries
+    fallbacks = [
+        f"One Piece {base_query}",  # Original with One Piece prefix
+        base_query,  # Original query as is
+    ]
+    
+    # Add character names if detected
+    characters = [w for w in words if w.lower() in [
+        'luffy', 'zoro', 'sanji', 'nami', 'usopp', 'chopper', 
+        'robin', 'franky', 'brook', 'jinbe', 'mihawk', 'shanks',
+        'kaido', 'big mom', 'blackbeard', 'ace', 'sabo'
+    ]]
+    
+    if characters:
+        fallbacks.append(f"One Piece {' '.join(characters)}")
+    
+    # Add variations with different combinations
+    if len(words) > 1:
+        fallbacks.extend([
+            f"One Piece {words[0]} {words[-1]}",  # First and last word
+            f"One Piece {words[0]}",  # Just first word
+        ])
+    
+    # Add a generic fallback if nothing else works
+    fallbacks.append("One Piece")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    return [f for f in fallbacks if not (f in seen or seen.add(f))]
+
+def download_images_for_slides(json_path: str, out_dir: str) -> None:
+    """Download images for slides based on search queries in a JSON file.
+    
+    Args:
+        json_path: Path to the JSON file containing slide data
+        out_dir: Directory to save downloaded images
+    """
     # Clear the output directory before downloading new images
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    print(f"Downloading images to {out_dir} from {json_path}")
-    logger.info(f"Downloading images to {out_dir} from {json_path}")
     
-    # List of prioritized sites
-    prioritized_sites = [
-        # "pinterest.com",
-        "onepiece.fandom.com",
-        "zerochan.net",
-        "sakugabooru.com",
-        "artstation.com",
-        "anidb.net",
-        "crunchyroll.com",
-        "myanimelist.net",
-        "deviantart.com"
-    ]
+    logger.info(f"Downloading images to {out_dir} from {json_path}")
     
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
     
+    # Track downloaded image hashes to avoid duplicates
+    downloaded_hashes = set()
+    
     for idx, slide in enumerate(slides):
         search_query = slide.get("image_search_query")
-        logger.info(f"[Slide {idx+1}] Image search query: {search_query}")
         if not search_query:
-            logger.warning(f"No image_search_query for slide {idx+1}")
+            logger.warning(f"[Slide {idx+1}] No image_search_query")
             continue
-
-        try:
-            # First, try with the original query and prioritized sites
-            if "one piece" not in search_query.lower():
-                search_query = f"{search_query} One Piece Luffy"
-                
-            # Try with prioritized sites first
-            items = google_image_search(search_query, num_results=10)
             
-            # If no results, try a broader search without site restrictions
+        logger.info(f"[Slide {idx+1}] Processing query: {search_query}")
+        
+        # Track if we've successfully downloaded an image
+        downloaded = False
+        
+        # Try the original query and fallbacks
+        for query in [search_query] + _generate_fallback_queries(search_query):
+            if downloaded:
+                break
+                
+            logger.debug(f"[Slide {idx+1}] Trying search: {query}")
+            items = google_image_search(query, num_results=10)
+            
             if not items:
-                logger.info(f"[Slide {idx+1}] No results with prioritized sites, trying broader search...")
-                # Remove any existing site: filters from the query
-                base_query = ' '.join([word for word in search_query.split() if not word.startswith('site:')])
-                items = google_image_search(base_query, num_results=10)
-            logger.info(
-                f"[Slide {idx+1}] Google image search returned {len(items)} results.")
+                logger.debug(f"[Slide {idx+1}] No results for: {query}")
+                continue
+                
+            logger.info(f"[Slide {idx+1}] Found {len(items)} results for: {query}")
 
-            # Filter for actual images, prioritizing One Piece content from preferred sites
-            valid_images = []
-            for item_idx, item in enumerate(items):
-                item_link = item.get('link', 'N/A')
+            # Process search results
+            for item in items:
+                if downloaded:
+                    break
+                    
+                item_link = item.get('link', '')
                 item_title = item.get('title', '').lower()
-                item_mime = item.get('mime', 'N/A')
-                item_width = item.get('image', {}).get('width', 0)
-                item_height = item.get('image', {}).get('height', 0)
+                item_mime = item.get('mime', '')
                 
-                # Check if the image is from a preferred site
-                is_preferred = any(site in item_link.lower() for site in prioritized_sites)
-                
-                # Check if the content is One Piece related
+                # Skip if no link or invalid MIME type
+                if not item_link or not item_mime.startswith('image/'):
+                    continue
+                    
+                # Check for One Piece relevance
                 is_onepiece = ('one piece' in item_title or 
-                             any(term in item_title for term in ['luffy', 'zoro', 'mihawk', 'shanks', 'kaido', 'big mom']))
-
-                if 'image' not in item_mime:
-                    logger.debug(
-                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {item_link}")
+                             any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+                
+                if not is_onepiece:
+                    logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
                     continue
-
-                if not item_width or not item_height:
-                    logger.debug(
-                        f"[Slide {idx+1} - Item {item_idx+1}] Skipping: Missing dimensions ({item_width}x{item_height}) - {item_link}")
+                
+                # Check for duplicates
+                is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
+                if is_duplicate:
+                    logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
                     continue
-
-                # Calculate aspect ratio for reference (but don't filter by it)
-                aspect_ratio = item_width / item_height
                 
-                # Calculate priority score (higher is better)
-                priority = 0
+                # Try to download the image
+                filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
+                save_path = os.path.join(out_dir, filename)
                 
-                # Highest priority: One Piece content from preferred sites
-                if is_onepiece and is_preferred:
-                    priority = 3
-                # High priority: One Piece content from any site
-                elif is_onepiece:
-                    priority = 2
-                # Medium priority: Preferred site with any content
-                elif is_preferred:
-                    priority = 1
-                
-                # Slight preference for images closer to 16:9
-                aspect_score = 1 - (abs(aspect_ratio - 16/9) / (16/9)) * 0.5  # Reduced weight of aspect ratio
-                
-                item['_priority'] = priority + aspect_score
-                valid_images.append(item)
-                
-                logger.debug(
-                    f"[Slide {idx+1} - Item {item_idx+1}] Accepted: "
-                    f"{'ONEPIECE ' if is_onepiece else ''}"
-                    f"{'PREFERRED ' if is_preferred else ''}"
-                    f"Aspect: {aspect_ratio:.2f} - {item_link}")
+                if download_image(item_link, save_path):
+                    downloaded_hashes.add(image_hash)
+                    slide["image_path"] = save_path
+                    downloaded = True
+                    logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
+                    break
+    
+    # Save the updated slides with image paths
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(slides, f, indent=2, ensure_ascii=False)
+    
+    # Log download statistics
+    downloaded_count = sum(1 for slide in slides if "image_path" in slide)
+    logger.info(f"Download complete. Successfully downloaded {downloaded_count}/{len(slides)} images.")
 
-            downloaded_successfully = False
-            if valid_images:
-                # Sort valid images by priority (One Piece content and preferred sites first)
-                valid_images.sort(key=lambda x: x.get('_priority', 0), reverse=True)
-                logger.debug(
-                    f"[Slide {idx+1}] Found {len(valid_images)} valid images. "
-                    f"Top 3 priorities: {[round(x.get('_priority', 0), 2) for x in valid_images[:3]]}")
-                
-                for item_idx, best_image in enumerate(valid_images):
-                    img_url = best_image['link']
-                    ext = os.path.splitext(img_url)[-1].split("?")[0] or ".jpg"
-                    save_path = os.path.join(
-                        out_dir, f"slide_{idx+1}_16x9{ext}")
-                    try:
-                        logger.info(
-                            f"[Slide {idx+1}] Attempting to download 16:9 image {item_idx+1}: {img_url}")
-                        download_image(img_url, save_path)
-                        print(f"Downloaded: {save_path}")
-                        logger.info(f"Downloaded: {save_path}")
-                        downloaded_successfully = True
-                        break  # Exit loop if download is successful
-                    except Exception as download_e:
-                        logger.warning(
-                            f"[Slide {idx+1}] Failed to download 16:9 image {item_idx+1} from {img_url}: {download_e}")
-
-            if not downloaded_successfully and items:
-                logger.warning(
-                    f"[Slide {idx+1}] No suitable 16:9 image downloaded. Attempting fallback to any image.")
-                for item_idx, fallback_item in enumerate(items):
-                    img_url_fallback = fallback_item['link']
-                    item_mime = fallback_item.get('mime', '')
-                    if 'image' not in item_mime:
-                        logger.debug(
-                            f"[Slide {idx+1} - Fallback Item {item_idx+1}] Skipping: Not an image MIME type ({item_mime}) - {img_url_fallback}")
-                        continue
-
-                    ext = os.path.splitext(
-                        img_url_fallback)[-1].split("?")[0] or ".jpg"
-                    # Use a different name for fallback
-                    save_path_fallback = os.path.join(
-                        out_dir, f"slide_{idx+1}_fallback{ext}")
-                    try:
-                        logger.info(
-                            f"[Slide {idx+1}] Attempting to download fallback image {item_idx+1}: {img_url_fallback}")
-                        download_image(img_url_fallback, save_path_fallback)
-                        print(f"Downloaded (fallback): {save_path_fallback}")
-                        logger.info(
-                            f"Downloaded (fallback): {save_path_fallback}")
-                        downloaded_successfully = True
-                        break  # Exit loop if download is successful
-                    except Exception as fallback_e:
-                        logger.warning(
-                            f"[Slide {idx+1}] Failed to download fallback image {item_idx+1} from {img_url_fallback}: {fallback_e}")
-
-            if not downloaded_successfully:
-                logger.error(
-                    f"[Slide {idx+1}] No image could be downloaded for query: {search_query}")
-                print(f"No image could be downloaded for slide {idx+1}")
-
-        except Exception as e:
-            print(f"Failed to download for slide {idx+1}: {e}")
-            logger.error(f"Failed to download for slide {idx+1}: {e}")
-        finally:
-            time.sleep(1)  # Rate limit our requests
+    # Clean up any temporary attributes we added
+    for slide in slides:
+        if '_priority' in slide:
+            del slide['_priority']
+    
+    return downloaded_count

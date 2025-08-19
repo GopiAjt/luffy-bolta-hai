@@ -255,27 +255,44 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             
             logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): start={start:.2f}s, end={end:.2f}s, duration={duration:.2f}s")
 
-            img_path = None
-            for ext in ["jpg", "png", "jpeg", "gif"]:
-                for style in ["9x16", "16x9"]:
-                    candidate = os.path.join(image_dir, f"slide_{idx+1}_{style}.{ext}")
-                    if os.path.exists(candidate):
-                        img_path = candidate
+            # First try to get the image path from the slide data if it exists
+            img_path = slide.get('image_path')
+            
+            # If not in slide data, try to find the image with the new naming convention
+            if not img_path or not os.path.exists(img_path):
+                # Look for images with the new naming convention
+                img_path = None
+                for ext in ["jpg", "png", "jpeg"]:
+                    # Try both the main image and fallback naming patterns
+                    candidates = [
+                        os.path.join(image_dir, f"slide_{idx+1:03d}_{slide.get('image_hash', '')[:8]}.{ext}"),
+                        os.path.join(image_dir, f"slide_{idx+1:03d}.{ext}")
+                    ]
+                    for candidate in candidates:
+                        if os.path.exists(candidate):
+                            img_path = candidate
+                            logger.info(f"Found image for slide {idx+1} at: {img_path}")
+                            break
+                    if img_path:
                         break
-                if img_path:
-                    break
-
-            if not img_path:
-                # Check for fallback images with both .jpg and .png extensions
-                for ext in ["jpg", "png"]:
-                    fallback_path = os.path.join(image_dir, f"slide_{idx+1}_fallback.{ext}")
-                    if os.path.exists(fallback_path):
-                        img_path = fallback_path
-                        logger.info(f"Using fallback image for slide {idx+1} with extension .{ext}.")
+            
+            # If still no image found, try the old naming convention as fallback
+            if not img_path or not os.path.exists(img_path):
+                for ext in ["jpg", "png", "jpeg"]:
+                    for style in ["16x9", "9x16"]:
+                        candidate = os.path.join(image_dir, f"slide_{idx+1}_{style}.{ext}")
+                        if os.path.exists(candidate):
+                            img_path = candidate
+                            logger.info(f"Found image for slide {idx+1} using old naming convention: {img_path}")
+                            break
+                    if img_path:
                         break
-                if not img_path:
-                    logger.warning(f"Image for slide {idx+1} not found, and no fallback available. Skipping this slide.")
-                    continue
+            
+            # If still no image found, log a warning and skip this slide
+            if not img_path or not os.path.exists(img_path):
+                logger.warning(f"Image for slide {idx+1} not found in {image_dir}. Tried multiple naming patterns. Skipping this slide.")
+                logger.debug(f"Searched for patterns: slide_{idx+1:03d}_*.{{jpg,png,jpeg}}, slide_{idx+1}*.{{jpg,png,jpeg}}")
+                continue
 
             if img_path.lower().endswith(".gif"):
                 logger.info(f"Processing GIF: {img_path}")

@@ -212,34 +212,38 @@ export class LuffyBoltHaiApp {
         scriptOutput.style.display = 'block';
         
         try {
-            console.log('Calling generateScript API');
-            const data = await generateScript();
+            // Get selected style from the UI
+            const styleSelector = document.getElementById('scriptStyle');
+            const selectedStyle = styleSelector ? styleSelector.value : 'maximum_engagement';
+            
+            console.log('Calling generateScript API with style:', selectedStyle);
+            const data = await generateScript(selectedStyle);
             console.log('Received response from generateScript:', data);
             
-            if (!data || !data.output || !data.output.script) {
+            if (!data || !data.script) {
                 throw new Error('Invalid response format from server');
             }
             
             // Update title if available
             const titleElement = document.getElementById('titleText');
             const titleContainer = document.getElementById('scriptTitle');
-            if (data.output.title && titleElement && titleContainer) {
-                titleElement.textContent = data.output.title;
+            if (data.title && titleElement && titleContainer) {
+                titleElement.textContent = data.title;
                 titleContainer.style.display = 'block';
                 
                 // Also update the page title for better UX
-                document.title = data.output.title + ' | One Piece Script Generator';
+                document.title = data.title + ' | One Piece Script Generator';
             }
             
             // Update script output
-            scriptOutput.textContent = data.output.script;
+            scriptOutput.textContent = data.script;
             
             // Update description if available
             const descriptionElement = document.getElementById('descriptionText');
             const descriptionContainer = document.getElementById('scriptDescription');
-            if (data.output.description && descriptionElement && descriptionContainer) {
+            if (data.description && descriptionElement && descriptionContainer) {
                 // Convert newlines to <br> tags for better formatting
-                const formattedDescription = data.output.description.replace(/\n/g, '<br>');
+                const formattedDescription = data.description.replace(/\n/g, '<br>');
                 descriptionElement.innerHTML = formattedDescription;
                 descriptionContainer.style.display = 'block';
             }
@@ -247,12 +251,12 @@ export class LuffyBoltHaiApp {
             // Update hashtags if available
             const hashtagsContainer = document.getElementById('hashtagsContainer');
             const hashtagsElement = document.getElementById('scriptHashtags');
-            if (data.output.hashtags && hashtagsContainer && hashtagsElement) {
+            if (data.hashtags && hashtagsContainer && hashtagsElement) {
                 // Clear existing hashtags
                 hashtagsContainer.innerHTML = '';
                 
                 // Split hashtags by space or comma and create badges for each
-                const hashtags = data.output.hashtags.split(/[\s,]+/).filter(tag => tag.trim() !== '');
+                const hashtags = data.hashtags.split(/[\s,]+/).filter(tag => tag.trim() !== '');
                 hashtags.forEach(tag => {
                     if (!tag.startsWith('#')) {
                         tag = '#' + tag;
@@ -269,7 +273,7 @@ export class LuffyBoltHaiApp {
             // Copy script to subtitle input
             const scriptInput = document.getElementById('scriptInput');
             if (scriptInput) {
-                scriptInput.value = data.output.script;
+                scriptInput.value = data.script;
                 const subtitleControls = document.getElementById('subtitleControls');
                 if (subtitleControls) {
                     subtitleControls.style.display = 'block';

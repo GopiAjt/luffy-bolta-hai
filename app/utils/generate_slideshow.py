@@ -3,6 +3,8 @@ import json
 import traceback
 import numpy as np
 import cv2
+from PIL import Image
+import io
 import logging
 import subprocess # Added this import
 from app.config import VIDEO_RESOLUTION
@@ -25,7 +27,26 @@ def sanitize_size(size):
         raise
 
 
-def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=5):
+def apply_blur(image, blur_amount):
+    """Apply Gaussian blur to an image.
+    
+    Args:
+        image: Input image as a numpy array
+        blur_amount: Radius of the Gaussian blur (must be odd and positive)
+        
+    Returns:
+        Blurred image as a numpy array
+    """
+    if blur_amount > 0:
+        # Ensure blur_amount is odd and at least 1
+        blur_amount = max(1, blur_amount)
+        if blur_amount % 2 == 0:
+            blur_amount += 1  # Make it odd
+        return cv2.GaussianBlur(image, (blur_amount, blur_amount), 0)
+    return image
+
+
+def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=50):
     """
     Fits the image height to the video height, then pans horizontally
     so that over the course of `duration` seconds, the window moves
@@ -52,11 +73,12 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     blur_status = f"with blur (kernel size: {blur_amount*2 + 1})" if blur_amount > 0 else "without blur"
     logger.info(f"Processing slide {img_path} with index {idx}, panning {direction} {blur_status}")
 
+    # Read the image and apply blur
     img = cv2.imread(img_path)
     if img is None:
-        logger.warning(f"Could not read image at {img_path}. Skipping.")
-        return frame_counter # Return current frame_counter
-
+        logger.error(f"Failed to load image: {img_path}")
+        return frame_counter
+    
     # 1. Scale image so its height matches video height
     img_h, img_w = img.shape[:2]
     scale = res_h / img_h
@@ -74,20 +96,8 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
 
     # Apply blur to the entire scaled image if specified
     if blur_amount > 0:
-        # Ensure kernel size is odd and reasonable
-        kernel_size = max(1, blur_amount * 2 + 1)  # Ensure at least 1x1
-        kernel_size = min(kernel_size, 99)  # Keep kernel size reasonable
-        if kernel_size % 2 == 0:  # Ensure odd kernel size
-            kernel_size += 1
-        
-        # Convert to float32 and normalize to [0,1] for better blur
-        scaled_float = scaled.astype(np.float32) / 255.0
-        
-        # Apply Gaussian blur
-        blurred = cv2.GaussianBlur(scaled_float, (kernel_size, kernel_size), 0)
-        
-        # Convert back to uint8
-        scaled = (blurred * 255).astype(np.uint8)
+        # Use the standard blur function for consistency
+        scaled = apply_blur(scaled, blur_amount)
     
     # 2. For each frame, compute horizontal crop window
     frames_actually_written = 0
@@ -137,70 +147,51 @@ def get_video_duration(filepath):
         logger.error(f"Error getting video duration for {filepath}: {e}")
         return 0
 
-def extract_gif_frames(gif_path, temp_frame_dir, frame_counter_start, duration, resolution, fps=30):
-    """
-    Extracts frames from a GIF and saves them as JPGs in the temp_frame_dir.
-    Handles looping/trimming to match the desired duration.
-    Returns the updated frame_counter.
-    """
-    res_w, res_h = resolution
-    target_num_frames = int(duration * fps)
-
-    # Get GIF duration using ffprobe
-    gif_duration = get_video_duration(gif_path)
-    gif_num_frames = int(gif_duration * fps)
-
-    if gif_num_frames == 0:
-        logger.warning(f"Could not determine duration or extract frames from GIF: {gif_path}. Skipping.")
-        return frame_counter_start
-
-    # Use ffmpeg to extract frames
-    # We'll extract more frames than needed and then trim/loop in Python
-    # This is to ensure we have enough frames if the GIF is short
-    output_pattern = os.path.join(temp_frame_dir, "gif_temp_frame_%05d.jpg")
-    ffmpeg_extract_cmd = [
-        "ffmpeg",
-        "-i", gif_path,
-        "-vf", f"scale={res_w}:{res_h}:force_original_aspect_ratio=decrease,pad={res_w}:{res_h}:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-vsync", "0", # Ensure all frames are extracted
-        output_pattern
-    ]
-    try:
-        subprocess.run(ffmpeg_extract_cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg failed to extract frames from GIF {gif_path}: {e.stderr}")
-        return frame_counter_start
-
-    extracted_frames = sorted([f for f in os.listdir(temp_frame_dir) if f.startswith("gif_temp_frame_") and f.endswith(".jpg")])
-    if not extracted_frames:
-        logger.warning(f"No frames extracted from GIF: {gif_path}. Skipping.")
-        return frame_counter_start
-
-    current_frame_idx = 0
-    frames_written = 0
-    for i in range(target_num_frames):
-        if current_frame_idx >= len(extracted_frames):
-            # Loop the GIF if it's shorter than the desired duration
-            current_frame_idx = 0
-
-        src_frame_path = os.path.join(temp_frame_dir, extracted_frames[current_frame_idx])
-        dest_frame_path = os.path.join(temp_frame_dir, f"frame_{frame_counter_start + frames_written:05d}.jpg")
-        
-        # Copy the frame to the main sequence
-        os.rename(src_frame_path, dest_frame_path) # Use rename for efficiency if within same filesystem
-
-        frames_written += 1
-        current_frame_idx += 1
+def convert_to_jpg(image_path, quality=95):
+    """Convert any image to JPG format.
     
-    # Clean up any remaining gif_temp_frame_ files
-    for f in os.listdir(temp_frame_dir):
-        if f.startswith("gif_temp_frame_"):
-            os.remove(os.path.join(temp_frame_dir, f))
+    Args:
+        image_path: Path to the input image
+        quality: JPEG quality (1-100)
+        
+    Returns:
+        Path to the converted JPG file or None if conversion fails
+    """
+    try:
+        # If already a JPG, return as is
+        if image_path.lower().endswith(('.jpg', '.jpeg')):
+            return image_path
+            
+        # Generate output path with .jpg extension
+        base_path = os.path.splitext(image_path)[0]
+        output_path = f"{base_path}.jpg"
+        
+        # Skip if already converted
+        if os.path.exists(output_path):
+            return output_path
+            
+        # Open and convert the image
+        with Image.open(image_path) as img:
+            # Convert to RGB if necessary (e.g., for PNG with transparency)
+            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[-1])
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+                
+            # Save as JPG
+            img.save(output_path, 'JPEG', quality=quality, optimize=True)
+            
+        logger.info(f"Converted {image_path} to JPG format")
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Error converting {image_path} to JPG: {e}")
+        return None
 
-    return frame_counter_start + frames_written
 
-
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5):
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=50):
     """
     Generates the final slideshow video using OpenCV.
     
@@ -258,17 +249,30 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             # First try to get the image path from the slide data if it exists
             img_path = slide.get('image_path')
             
-            # If not in slide data, try to find the image with the new naming convention
+            # If not in slide data or path doesn't exist, try to find the image
             if not img_path or not os.path.exists(img_path):
-                # Look for images with the new naming convention
+                # Get the image hash if available
+                image_hash = slide.get('image_hash', '')[:8] if 'image_hash' in slide else ''
+                
+                # List of possible extensions to try
+                extensions = ["jpg", "jpeg", "png"]
+                
+                # Try different naming patterns in order of preference
+                patterns = [
+                    f"slide_{idx+1:03d}_{image_hash}.{{ext}}" if image_hash else None,  # With hash
+                    f"slide_{idx+1:03d}.{{ext}}",                                        # Just number
+                    f"slide_{idx+1}_{image_hash}.{{ext}}" if image_hash else None,      # Old format with hash
+                    f"slide_{idx+1}.{{ext}}"                                            # Old format just number
+                ]
+                
+                # Try each pattern with each extension
                 img_path = None
-                for ext in ["jpg", "png", "jpeg"]:
-                    # Try both the main image and fallback naming patterns
-                    candidates = [
-                        os.path.join(image_dir, f"slide_{idx+1:03d}_{slide.get('image_hash', '')[:8]}.{ext}"),
-                        os.path.join(image_dir, f"slide_{idx+1:03d}.{ext}")
-                    ]
-                    for candidate in candidates:
+                for pattern in patterns:
+                    if not pattern:
+                        continue
+                        
+                    for ext in extensions:
+                        candidate = os.path.join(image_dir, pattern.format(ext=ext))
                         if os.path.exists(candidate):
                             img_path = candidate
                             logger.info(f"Found image for slide {idx+1} at: {img_path}")
@@ -276,17 +280,32 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     if img_path:
                         break
             
-            # If still no image found, try the old naming convention as fallback
+            # If still no image found, try to find any file starting with the slide number
             if not img_path or not os.path.exists(img_path):
-                for ext in ["jpg", "png", "jpeg"]:
-                    for style in ["16x9", "9x16"]:
-                        candidate = os.path.join(image_dir, f"slide_{idx+1}_{style}.{ext}")
-                        if os.path.exists(candidate):
-                            img_path = candidate
-                            logger.info(f"Found image for slide {idx+1} using old naming convention: {img_path}")
-                            break
-                    if img_path:
-                        break
+                try:
+                    # List all files in the directory
+                    all_files = os.listdir(image_dir)
+                    # Look for files that start with the slide number
+                    for f in all_files:
+                        if f.startswith(f"slide_{idx+1}"):
+                            candidate = os.path.join(image_dir, f)
+                            if os.path.isfile(candidate):
+                                img_path = candidate
+                                logger.info(f"Found image for slide {idx+1} using fallback pattern: {img_path}")
+                                break
+                    
+                    # If still not found, try with zero-padded number
+                    if not img_path and idx + 1 < 100:  # Only try if it makes sense to pad
+                        padded_num = f"{idx+1:03d}"  # 1 -> 001, 12 -> 012
+                        for f in all_files:
+                            if f.startswith(f"slide_{padded_num}"):
+                                candidate = os.path.join(image_dir, f)
+                                if os.path.isfile(candidate):
+                                    img_path = candidate
+                                    logger.info(f"Found image for slide {idx+1} using padded fallback: {img_path}")
+                                    break
+                except Exception as e:
+                    logger.warning(f"Error while searching for slide {idx+1}: {e}")
             
             # If still no image found, log a warning and skip this slide
             if not img_path or not os.path.exists(img_path):
@@ -294,27 +313,27 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 logger.debug(f"Searched for patterns: slide_{idx+1:03d}_*.{{jpg,png,jpeg}}, slide_{idx+1}*.{{jpg,png,jpeg}}")
                 continue
 
-            if img_path.lower().endswith(".gif"):
-                logger.info(f"Processing GIF: {img_path}")
-                frames_written = extract_gif_frames(img_path, temp_frame_dir, frames_written, duration, resolution, fps)
-                slides_processed += 1
-            else:
-                # Log the slide number and panning direction before processing
-                direction = "left→right" if slides_processed % 2 == 0 else "right→left"
-                logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): panning {direction}")
-                
-                # Use slides_processed for panning direction and apply blur
-                frames_written = apply_panoramic_pan(
-                    temp_frame_dir=temp_frame_dir,
-                    frame_counter=frames_written,
-                    img_path=img_path,
-                    duration=duration,
-                    resolution=resolution,
-                    idx=slides_processed,
-                    fps=fps,
-                    blur_amount=30  # Increased blur amount for more pronounced effect
-                )
-                slides_processed += 1
+            # Convert image to JPG if it's not already
+            _, ext = os.path.splitext(img_path)
+            ext = ext.lower()
+            if ext != '.jpg' and ext != '.jpeg':
+                jpg_path = convert_to_jpg(img_path)
+                if jpg_path and jpg_path != img_path:
+                    logger.info(f"Using converted JPG: {jpg_path}")
+                    img_path = jpg_path
+
+            logger.info(f"Processing image: {img_path}")
+            frames_written = apply_panoramic_pan(
+                temp_frame_dir=temp_frame_dir,
+                frame_counter=frames_written,
+                img_path=img_path,
+                duration=duration,
+                resolution=resolution,
+                idx=slides_processed,
+                fps=fps,
+                blur_amount=blur_amount
+            )
+            slides_processed += 1
 
         except Exception as e:
             logger.error(f"Error processing slide {idx+1}: {e}")

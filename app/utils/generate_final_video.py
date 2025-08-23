@@ -32,7 +32,7 @@ def generate_final_video(
     expressions_path: str = None,
     output_filename: str = None,
     generate_slides: bool = True,  # New parameter to control slides generation
-    blur_amount: int = 5,  # Controls blur effect (0 = no blur, 5 = default blur)
+    blur_amount: int = 50,  # Controls blur effect (0 = no blur, higher = more blur)
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.

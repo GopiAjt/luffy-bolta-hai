@@ -106,24 +106,15 @@ def generate_script_endpoint():
 
     Request:
     {
-        "style": "style_name",  # Optional: One of: maximum_engagement, community_focused, 
-                               # theory_specialist, viral_formula, psychological_warfare
-        "script": "Your script text here",  # Optional: Custom prompt if style is not provided
+        "script": "Your script text here",
         "output_name": "optional_output_name"
     }
     """
     try:
-        data = request.json or {}
-        style = data.get('style')
-        custom_prompt = data.get('script')
+        data = request.json
 
-        # Generate script with the specified style or custom prompt
-        if custom_prompt and not style:
-            # If custom prompt is provided without a style, use it directly
-            result = generate_script()  # This will use the default style with the custom prompt
-        else:
-            # Use the specified style (or default if none specified)
-            result = generate_script(style=style)
+        # Generate script along with description and hashtags
+        result = generate_script()
 
         return jsonify({
             'status': 'success',
@@ -132,13 +123,11 @@ def generate_script_endpoint():
                 'title': result.get('title', ''),
                 'script': result.get('script', ''),
                 'description': result.get('description', ''),
-                'hashtags': result.get('hashtags', ''),
-                'style': result.get('style', 'maximum_engagement'),
-                'topic': result.get('topic', '')
+                'hashtags': result.get('hashtags', '')
             }
         })
     except Exception as e:
-        logger.error(f"Error in generate_script_endpoint: {str(e)}", exc_info=True)
+        logger.error(f"Error in generate_script_endpoint: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': str(e),

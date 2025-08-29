@@ -185,40 +185,24 @@
 
         <!-- Script Generation Section -->
         <div class="section">
-            <h2 class="text-center mb-4"><i class="bi bi-pencil-square me-2"></i>Generate Script</h2>
-            <div class="mb-3">
-                <label for="scriptStyle" class="form-label text-white">Script Style</label>
-                <select class="form-select" id="scriptStyle" aria-label="Select script style">
-                    <option value="maximum_engagement" selected>Maximum Engagement</option>
-                    <option value="community_focused">Community Focused</option>
-                    <option value="theory_specialist">Theory Specialist</option>
-                    <option value="viral_formula">Viral Formula</option>
-                    <option value="psychological_warfare">Psychological Warfare</option>
-                </select>
-                <div class="form-text text-white-50">Choose a style for your script</div>
-            </div>
-            <div class="d-grid gap-2">
-                <button id="generateButton" class="btn btn-primary btn-lg">
+            <div class="text-center">
+                <h2><i class="bi bi-file-earmark-text me-2"></i>Generate Script</h2>
+                <p class="mb-4 text-white">Click the button to generate a new script about One Piece!</p>
+                <button id="generateButton" class="btn btn-success btn-lg">
                     <i class="bi bi-magic me-2"></i>Generate Script
                 </button>
-            </div>
-            <div id="loading" class="text-center mt-3" style="display: none;">
-                <div class="spinner-border text-light" role="status">
-                    <span class="visually-hidden">Loading...</span>
+                <div id="loading" class="mt-3" style="display: none;">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-white">Generating script...</p>
                 </div>
-                <p class="text-light mt-2">Generating script, please wait...</p>
-            </div>
-            <div id="scriptTitle" class="mt-3 p-3 bg-dark rounded" style="display: none;">
-                <h3 id="titleText" class="text-warning"></h3>
-            </div>
-            <div id="scriptOutput" class="mt-3 p-3 bg-dark rounded"></div>
-            <div id="scriptDescription" class="mt-3 p-3 bg-dark rounded" style="display: none;">
-                <h4 class="text-white">Video Description</h4>
-                <p id="descriptionText" class="text-white-50"></p>
-            </div>
-            <div id="scriptHashtags" class="mt-3 p-3 bg-dark rounded" style="display: none;">
-                <h4 class="text-white">Hashtags</h4>
-                <div id="hashtagsContainer" class="d-flex flex-wrap gap-2"></div>
+                <div id="scriptTitle" class="mt-3 p-3 bg-dark rounded" style="display: none;">
+                    <h3 id="titleText" class="text-warning"></h3>
+                </div>
+                <div id="scriptOutput" class="mt-3 p-3 bg-dark rounded"></div>
+                <div id="scriptDescription" class="mt-3 p-3 bg-dark rounded" style="display: none;">
+                    <h4 class="text-white">Video Description</h4>
                     <p id="descriptionText" class="text-white-50"></p>
                 </div>
                 <div id="scriptHashtags" class="mt-3 p-3 bg-dark rounded" style="display: none;">

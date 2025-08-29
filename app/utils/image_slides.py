@@ -371,6 +371,11 @@ def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
                 logger.error(f"URL does not point to an image: {url} (Content-Type: {content_type})")
                 return False
                 
+            # Skip GIF files
+            if 'gif' in content_type:
+                logger.info(f"Skipping GIF file: {url}")
+                return False
+                
             # Get file extension from content type or URL
             ext = None
             if 'jpeg' in content_type or 'jpg' in content_type:
@@ -378,13 +383,17 @@ def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
             elif 'png' in content_type:
                 ext = '.png'
             elif 'gif' in content_type:
-                ext = '.gif'
+                logger.info(f"Skipping GIF file (content-type): {url}")
+                return False
             else:
                 # Try to get extension from URL
                 url_path = url.split('?')[0]  # Remove query params
                 url_ext = os.path.splitext(url_path)[1].lower()
-                if url_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                if url_ext in ['.jpg', '.jpeg', '.png', '.webp']:
                     ext = url_ext
+                elif url_ext == '.gif':
+                    logger.info(f"Skipping GIF file (URL extension): {url}")
+                    return False
                 else:
                     ext = '.jpg'  # Default to jpg if unknown
             

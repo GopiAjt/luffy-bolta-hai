@@ -295,16 +295,16 @@ class SubtitleGenerator:
             },
             'manga': {
                 'name': 'Manga-Inspired',
-                'default': {'size': 100, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': 'FFFFFF'},
-                'character': {'size': 125, 'bold': True, 'italic': True, 'font': 'Arial-Black', 'color': 'FFFFFF', 'outline': '000000', 'outline_width': 3},
-                'power': {'size': 110, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': '00FFFF', 'shadow': '000000'},
-                'location': {'size': 102, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': 'FFCC99'},
-                'title': {'size': 120, 'bold': True, 'italic': True, 'font': 'Arial-Black', 'color': 'FFD700', 'outline': '000000'},
-                'emotion': {'size': 110, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': 'FF69B4'},
-                'proper_noun': {'size': 125, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': 'FFFFFF', 'outline': '000000'},
-                'verb': {'size': 100, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': 'FFFFFF'},
-                'noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': 'FFFFFF'},
-                'other': {'size': 95, 'bold': True, 'italic': False, 'font': 'NimbusSansNarrow-Bold', 'color': 'FFFFFF'}
+                'default': {'size': 100, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': '000000', 'outline': 'FFFFFF'},
+                'character': {'size': 125, 'bold': True, 'italic': True, 'font': 'Arial-Black', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 3},
+                'power': {'size': 110, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': '00FFFF', 'shadow': 'FFFFFF'},
+                'location': {'size': 102, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': 'FFCC99', 'outline': 'FFFFFF'},
+                'title': {'size': 120, 'bold': True, 'italic': True, 'font': 'Arial-Black', 'color': 'FFD700', 'outline': 'FFFFFF'},
+                'emotion': {'size': 110, 'bold': True, 'italic': True, 'font': 'NimbusSans-BoldItalic', 'color': 'FF69B4', 'outline': 'FFFFFF'},
+                'proper_noun': {'size': 125, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': '000000', 'outline': 'FFFFFF'},
+                'verb': {'size': 100, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': '000000', 'outline': 'FFFFFF'},
+                'noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': '000000', 'outline': 'FFFFFF'},
+                'other': {'size': 95, 'bold': True, 'italic': False, 'font': 'NimbusSansNarrow-Bold', 'color': '000000', 'outline': 'FFFFFF'}
             },
             'adventure': {
                 'name': 'Adventure Theme',

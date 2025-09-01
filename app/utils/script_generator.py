@@ -226,11 +226,11 @@ def generate_script() -> str:
             "Funny Translation Errors",
             "Community Memes Explained"
         ]
-        topic = random.choice(topics)
+        # topic = random.choice(topics)
 
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
-            f"Create engaging content for a YouTube video about: \"{topic}\"\n\n"
+            f"Create engaging content for a YouTube video about: [Search a recent trending 'one piece' topic from the internet]\n\n"
             "You MUST produce all 4 sections fully, in this exact order and format:\n\n"
 
             "1. TITLE (Clickbait-style, under 70 chars):\n"
@@ -240,37 +240,57 @@ def generate_script() -> str:
 
             "2. SCRIPT (30–40 seconds, ~70 words):\n"
             "- PURE narration only, no SFX or music cues.\n"
-            "- HUMANIZATION LAYER (MANDATORY):\n"
-            "  * Frame as personal discovery\n"
-            "  * Include emotional vulnerability\n"
-            "  * Add conversational elements\n"
-            "  * Show uncertainty\n"
-            "  * Use incomplete thoughts\n"
-            "- RANDOMLY SELECT opening hook (vary each time):\n"
-            "  * Personal contradiction\n"
-            "  * Discovery moment\n"
-            "  * Shocking realization\n"
-            "  * Revelation setup\n"
-            "  * Hidden truth\n"
-            "  * Time bomb\n"
-            "- POWER WORDS (use exactly 2-3)\n"
-            "- SPECIFIC DETAILS (use 1-2): Chapter/Episode numbers, exact quotes with quotation marks, precise arc names\n"
-            "- EMOTIONAL STAKES (use 1)\n"
-            "- SENSORY DESCRIPTION (use exactly 1): Visual, audio, physical, or atmospheric details that feel personal.\n"
-            "- NATURAL PACING: Mix short punchy sentences with longer rambling revelations, include natural hesitations.\n"
-            "- CREDIBILITY BOOSTER (use 1)\n"
-            "- VIEWER CONNECTION (use 1-2)\n"
-            "- MID-ESCALATION with human touch (use exactly 1)\n"
-            "- HUMAN-LIKE CLOSING (randomly select):\n"
-            "  * VULNERABLE CLIFFHANGER\n"
-            "  * URGENT PERSONAL\n"
-            "  * CONFIDENT CHALLENGE\n"
-            "  * EMOTIONAL PREDICTION\n"
-            "  * COMMUNITY RALLY\n"
-            "  * NERVOUS TEASER\n"
-            "  * CONTROVERSIAL UNCERTAINTY\n\n"
+            "- Open with ONE short, high-impact hook (5–9 words).\n"
+            "- Keep a fast pace, vary sentence length.\n"
+            "- Add emotional or surprising details.\n"
+            "- Use vivid, sensory language IN THE FIRST 15 SECONDS.\n"
+            "- End with a curiosity-driven teaser or CTA (8–12 words max).\n"
 
-            "3. VIDEO DESCRIPTION (under 500 chars, bullet format):\n"
+            "- HUMANIZATION LAYER (MANDATORY):\n"
+            "* Frame as personal discovery\n"
+            "* Include emotional vulnerability\n"
+            "* Add conversational elements\n"
+            "* Show uncertainty\n"
+            "* Use incomplete thoughts\n"
+
+            "- RANDOMLY SELECT opening hook (vary each time):\n"
+            "* Personal contradiction\n"
+            "* Discovery moment\n"
+            "* Shocking realization\n"
+            "* Revelation setup\n"
+            "* Hidden truth\n"
+            "* Time bomb\n"
+
+            "- POWER WORDS (use exactly 2-3):\n"
+            "* Place 1 in the hook, 1–2 mid-escalation.\n"
+
+            "- SPECIFIC DETAILS (use 1-2):\n"
+            "* Use either an exact quote OR a precise chapter/episode reference.\n"
+
+            "- EMOTIONAL STAKES (use 1):\n"
+            "* Show why this matters to you personally.\n"
+
+            "- SENSORY DESCRIPTION (use exactly 1):\n"
+            "* Describe what you saw, heard, or felt physically.\n"
+
+            "- NATURAL PACING:\n"
+            "* Mix short punchy lines with longer rambling revelations.\n"
+            "* Include natural hesitations: “Wait—no… hold on…”\n"
+
+            "- CREDIBILITY BOOSTER (use 1):\n"
+            "* Mention research, rewatch, or reread to sound authentic.\n"
+
+            "- VIEWER CONNECTION (use 1-2):\n"
+            "* Speak directly: “Did you catch this too?” or “Am I crazy?”\n"
+
+            "- MID-ESCALATION with human touch (use exactly 1):\n"
+            "* Confusion, excitement, fear, or disbelief rising naturally.\n"
+
+            "- HUMAN-LIKE CLOSING (randomly select):\n"
+            "* Vulnerable cliffhanger, urgent personal, confident challenge, emotional prediction,\n"
+            "* community rally, nervous teaser, controversial uncertainty.\n"
+
+            "3. VIDEO DESCRIPTION (under 500 chars, bullet points):\n"
             "- PERSONAL HOOK: Start with personal discovery moment, shocking realization, or vulnerable admission.\n"
             "- CONTROVERSY: Include 1 statement that will trigger debates in comments.\n"
             "- REVEALS: Add 3-5 personal discoveries with emojis (🤯⚡🔥💀🚨😱) and cliffhanger explanations.\n"

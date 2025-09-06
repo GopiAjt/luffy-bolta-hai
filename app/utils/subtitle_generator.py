@@ -306,18 +306,116 @@ class SubtitleGenerator:
                 'noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'NimbusSans-Bold', 'color': '000000', 'outline': 'FFFFFF'},
                 'other': {'size': 95, 'bold': True, 'italic': False, 'font': 'NimbusSansNarrow-Bold', 'color': '000000', 'outline': 'FFFFFF'}
             },
+            'cyberpunk': {
+                'name': 'Cyberpunk Neon',
+                'default': {'size': 95, 'bold': False, 'italic': False, 'font': 'Eurostile', 'color': 'E0E0E0'},
+                'character': {'size': 120, 'bold': True, 'italic': True, 'font': 'Eurostile-Bold', 'color': '00FFFF', 'outline': 'FF00FF', 'glow': 70},
+                'power': {'size': 112, 'bold': True, 'italic': True, 'font': 'Eurostile-Bold', 'color': 'FF0080', 'shadow': '000000'},
+                'location': {'size': 105, 'bold': True, 'italic': True, 'font': 'Eurostile-Bold', 'color': 'FFCC00', 'outline': '000000'},
+                'title': {'size': 115, 'bold': True, 'italic': True, 'font': 'Eurostile-Bold', 'color': '00FF99', 'outline': 'FF00FF'},
+                'emotion': {'size': 108, 'bold': True, 'italic': True, 'font': 'Eurostile-Bold', 'color': 'FF00FF', 'glow': 60},
+                'proper_noun': {'size': 115, 'bold': True, 'italic': False, 'font': 'Eurostile', 'color': '00FFFF', 'outline': 'FF00FF'},
+                'verb': {'size': 100, 'bold': False, 'italic': False, 'font': 'Eurostile', 'color': 'FFFFFF'},
+                'noun': {'size': 102, 'bold': False, 'italic': False, 'font': 'Eurostile', 'color': 'E0E0E0'},
+                'other': {'size': 95, 'bold': False, 'italic': False, 'font': 'Eurostile', 'color': 'A0A0A0'}
+            },
+            'retro': {
+                'name': 'Retro 80s',
+                'default': {'size': 92, 'bold': False, 'italic': False, 'font': 'BrushScriptMT', 'color': 'FFFFFF'},
+                'character': {'size': 118, 'bold': True, 'italic': True, 'font': 'BrushScriptMT', 'color': 'FF00FF', 'outline': '000000'},
+                'power': {'size': 110, 'bold': True, 'italic': True, 'font': 'BrushScriptMT', 'color': '00FFFF', 'shadow': '000000'},
+                'location': {'size': 105, 'bold': True, 'italic': True, 'font': 'BrushScriptMT', 'color': 'FFFF00', 'outline': '000000'},
+                'title': {'size': 115, 'bold': True, 'italic': True, 'font': 'BrushScriptMT', 'color': 'FF8000', 'outline': '000000'},
+                'emotion': {'size': 108, 'bold': True, 'italic': True, 'font': 'BrushScriptMT', 'color': 'FF69B4', 'glow': 50},
+                'proper_noun': {'size': 115, 'bold': True, 'italic': False, 'font': 'BrushScriptMT', 'color': 'FFFFFF', 'outline': '000000'},
+                'verb': {'size': 100, 'bold': False, 'italic': False, 'font': 'BrushScriptMT', 'color': 'FFFFFF'},
+                'noun': {'size': 100, 'bold': False, 'italic': False, 'font': 'BrushScriptMT', 'color': 'FFFFFF'},
+                'other': {'size': 92, 'bold': False, 'italic': False, 'font': 'BrushScriptMT', 'color': 'CCCCCC'}
+            },
+            'fantasy': {
+                'name': 'High Fantasy',
+                'default': {'size': 96, 'bold': False, 'italic': False, 'font': 'Garamond', 'color': 'FFF8DC'},
+                'character': {'size': 120, 'bold': True, 'italic': True, 'font': 'Garamond-BoldItalic', 'color': 'FFD700', 'outline': '000000'},
+                'power': {'size': 112, 'bold': True, 'italic': True, 'font': 'Garamond-BoldItalic', 'color': '8A2BE2'},
+                'location': {'size': 105, 'bold': True, 'italic': True, 'font': 'Garamond-Italic', 'color': '228B22', 'outline': '000000'},
+                'title': {'size': 118, 'bold': True, 'italic': True, 'font': 'Garamond-BoldItalic', 'color': 'DC143C', 'outline': 'FFD700'},
+                'emotion': {'size': 108, 'bold': True, 'italic': True, 'font': 'Garamond-Italic', 'color': 'FF69B4'},
+                'proper_noun': {'size': 115, 'bold': True, 'italic': False, 'font': 'Garamond-Bold', 'color': 'FFF8DC', 'outline': '000000'},
+                'verb': {'size': 102, 'bold': False, 'italic': False, 'font': 'Garamond', 'color': 'FFF8DC'},
+                'noun': {'size': 104, 'bold': False, 'italic': False, 'font': 'Garamond', 'color': 'FFF8DC'},
+                'other': {'size': 95, 'bold': False, 'italic': False, 'font': 'Garamond', 'color': 'EEE8AA'}
+            },
+            'gritty': {
+                'name': 'Gritty Noir',
+                'default': {'size': 90, 'bold': False, 'italic': False, 'font': 'Impact', 'color': 'DDDDDD'},
+                'character': {'size': 115, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF', 'outline': '000000'},
+                'power': {'size': 108, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FF0000'},
+                'location': {'size': 105, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'AAAAAA'},
+                'title': {'size': 112, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFD700', 'outline': '000000'},
+                'emotion': {'size': 106, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FF69B4'},
+                'proper_noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF', 'outline': '000000'},
+                'verb': {'size': 100, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF'},
+                'noun': {'size': 100, 'bold': False, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF'},
+                'other': {'size': 90, 'bold': False, 'italic': False, 'font': 'Impact', 'color': 'CCCCCC'}
+            },
             'adventure': {
                 'name': 'Adventure Theme',
                 'default': {'size': 95, 'bold': False, 'italic': False, 'font': 'URWGothic-Book', 'color': 'EEEEEE'},
                 'character': {'size': 112, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': '0099FF'},
                 'power': {'size': 108, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': '0000FF'},
-                'location': {'size': 105, 'bold': True, 'italic': True, 'font': 'URWGothic-BookOblique', 'color': 'FF6600'},
-                'title': {'size': 110, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': 'FF9900'},
-                'emotion': {'size': 106, 'bold': True, 'italic': True, 'font': 'URWGothic-BookOblique', 'color': '00FFFF', 'glow': 60},
-                'proper_noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'URWGothic-Demi', 'color': '0099FF'},
+                'location': {'size': 105, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': '00AA00'},
+                'title': {'size': 110, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': 'FFD700'},
+                'emotion': {'size': 104, 'bold': True, 'italic': True, 'font': 'URWGothic-DemiOblique', 'color': 'FF69B4'},
+                'proper_noun': {'size': 108, 'bold': True, 'italic': False, 'font': 'URWGothic-Demi', 'color': '00D4FF'},
                 'verb': {'size': 100, 'bold': True, 'italic': False, 'font': 'URWGothic-Demi', 'color': 'FFFFFF'},
-                'noun': {'size': 100, 'bold': False, 'italic': False, 'font': 'URWGothic-Book', 'color': 'FFFFFF'},
-                'other': {'size': 90, 'bold': False, 'italic': False, 'font': 'URWGothic-Book', 'color': 'EEEEEE'}
+                'noun': {'size': 102, 'bold': False, 'italic': False, 'font': 'URWGothic-Book', 'color': 'FFFFFF'},
+                'other': {'size': 92, 'bold': False, 'italic': False, 'font': 'URWGothic-Book', 'color': 'DDDDDD'}
+            },
+            "steampunk": {
+                'name': 'Steampunk Theme',
+                'default': {"color": "D2B48C", "bold": False, "italic": False, "font": "Bookman, 'Bookman Old Style', serif", "size": 90},
+                "character": {"color": "A0522D", "outline": "FFD700", "bold": True, "font": "Copperplate, 'Copperplate Gothic Light', serif", "size": 95},
+                "power": {"color": "8B4513", "outline": "DAA520", "bold": True, "font": "Copperplate, 'Copperplate Gothic Light', serif", "size": 100},
+                "location": {"color": "CD853F", "outline": "8B4513", "italic": True, "font": "Bookman, 'Bookman Old Style', serif", "size": 90},
+                "title": {"color": "FFD700", "outline": "8B4513", "bold": True, "font": "Copperplate, 'Copperplate Gothic Light', serif", "size": 100},
+                "emotion": {"color": "FF8C00", "outline": "8B4513", "bold": True, "font": "Copperplate, 'Copperplate Gothic Light', serif", "size": 105},
+                "verb": {"color": "DAA520", "outline": "8B4513", "bold": True, "font": "Copperplate, 'Copperplate Gothic Light', serif", "size": 95},
+                "noun": {"color": "CD853F", "outline": "8B4513", "bold": False, "font": "Bookman, 'Bookman Old Style', serif", "size": 95},
+                "other": {"color": "D2B48C", "outline": "8B4513", "bold": False, "font": "Bookman, 'Bookman Old Style', serif", "size": 90}
+            },
+            "samurai": {
+                'name': 'Samurai Theme',
+                'default': {"color": "A0522D", "bold": False, "italic": False, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 90},
+                "character": {"color": "800000", "outline": "FFDAB9", "bold": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 95},
+                "power": {"color": "B22222", "outline": "FFD700", "bold": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 105},
+                "location": {"color": "8B0000", "outline": "EEE8AA", "italic": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 90},
+                "title": {"color": "FFD700", "outline": "8B0000", "bold": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 100},
+                "emotion": {"color": "FF6347", "outline": "8B0000", "bold": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 110},
+                "verb": {"color": "B22222", "outline": "FFDAB9", "bold": True, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 95},
+                "noun": {"color": "8B0000", "outline": "EEE8AA", "bold": False, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 95},
+                "other": {"color": "A0522D", "outline": "FFDAB9", "bold": False, "font": "'MS Mincho', 'MS PMincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif", "size": 90}
+            },
+            "cartoon": {
+                'name': 'Cartoon Theme',
+                "character": {"color": "FF69B4", "outline": "000000", "bold": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 100},
+                "power": {"color": "00CED1", "outline": "000000", "bold": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 105},
+                "location": {"color": "ADFF2F", "outline": "000000", "italic": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 95},
+                "title": {"color": "FFD700", "outline": "000000", "bold": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 110},
+                "emotional": {"color": "FF4500", "outline": "000000", "bold": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 115},
+                "verb": {"color": "FF69B4", "outline": "000000", "bold": True, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 100},
+                "noun": {"color": "00CED1", "outline": "000000", "bold": False, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 100},
+                "other": {"color": "FFFFFF", "outline": "000000", "bold": False, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 95}
+            },
+            "horror": {
+                'name': 'Horror Theme',
+                "character": {"color": "FF0000", "outline": "000000", "bold": True, "font": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif", "size": 100},
+                "verb": {"color": "FF0000", "outline": "000000", "bold": True, "font": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif", "size": 100},
+                "noun": {"color": "CC0000", "outline": "000000", "bold": False, "font": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif", "size": 105},
+                "other": {"color": "888888", "outline": "000000", "bold": False, "font": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif", "size": 95},
+                "power": {"color": "8B0000", "outline": "222222", "bold": True, "font": "Impact", "size": 110},
+                "location": {"color": "444444", "outline": "000000", "italic": True, "font": "Impact", "size": 95},
+                "title": {"color": "FFFFFF", "outline": "000000", "bold": True, "font": "Impact", "size": 115},
+                "emotional": {"color": "FF6347", "outline": "000000", "bold": True, "font": "Impact", "size": 120}
             }
         }
         

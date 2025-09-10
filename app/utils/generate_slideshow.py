@@ -46,7 +46,7 @@ def apply_blur(image, blur_amount):
     return image
 
 
-def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=0):
+def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=50):
     """
     Fits the image height to the video height, then pans horizontally
     so that over the course of `duration` seconds, the window moves

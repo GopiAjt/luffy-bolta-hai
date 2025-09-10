@@ -1,7 +1,7 @@
 import re
 import json
 import requests
-from typing import List, Dict, Optional, Set, Tuple, Any
+from typing import List, Dict, Optional, Set, Tuple
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -10,17 +10,6 @@ import time
 import shutil
 import hashlib
 from functools import lru_cache
-from collections import defaultdict
-import nltk
-from nltk.corpus import stopwords
-
-# Download NLTK data if not already present
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('stopwords')
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -41,41 +30,113 @@ genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
 
-def parse_ass_dialogues(ass_path: str) -> List[Dict]:
-    dialogues = []
-    dialogue_re = re.compile(
-        r"Dialogue: [^,]*,([^,]*),([^,]*),[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(.*)")
-    with open(ass_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.startswith('Dialogue:'):
-                match = dialogue_re.match(line)
-                if match:
-                    start, end, text = match.groups()
-                    text = re.sub(
-                        r'{.*?}', '', text).replace('\n', ' ').strip()
-                    dialogues.append(
-                        {'start': start.strip(), 'end': end.strip(), 'text': text})
-    return dialogues
+def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
+    """Parse .ass file and extract dialogues with timestamps.
+    
+    Args:
+        ass_path: Path to the .ass subtitle file
+        min_words: Minimum number of words to consider a line complete (lines with fewer words will be grouped)
+    """
+    raw_dialogues = []
+    
+    with open(ass_path, 'r', encoding='utf-8-sig') as f:
+        lines = f.readlines()
+    
+    # Find the [Events] section
+    events_start = False
+    for line in lines:
+        line = line.strip()
+        if line.lower() == '[events]':
+            events_start = True
+            continue
+        if not events_start:
+            continue
+            
+        # Parse dialogue lines (format: Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text)
+        if line.lower().startswith('dialogue:'):
+            parts = line.split(',', 9)  # Split into max 10 parts
+            if len(parts) >= 10:
+                start_time = parts[1].strip()
+                end_time = parts[2].strip()
+                text = parts[9].strip()
+                # Remove override tags and special formatting
+                text = re.sub(r'\{.*?\}', '', text)  # Remove {\an8} and similar
+                text = re.sub(r'\\[nNh]', ' ', text)  # Replace newlines with spaces
+                text = re.sub(r'\\N', ' ', text)  # Replace \N with space
+                text = re.sub(r'\\n', ' ', text)  # Replace \n with space
+                text = re.sub(r'\\h', ' ', text)  # Replace \h with space
+                text = re.sub(r'\\[^ ]*', '', text)  # Remove other backslash commands
+                text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+                
+                if text:  # Only add non-empty dialogues
+                    raw_dialogues.append({
+                        'start': start_time,
+                        'end': end_time,
+                        'text': text,
+                        'word_count': len(text.split())
+                    })
+    
+    # Group short lines with adjacent lines
+    grouped_dialogues = []
+    i = 0
+    n = len(raw_dialogues)
+    
+    while i < n:
+        current = raw_dialogues[i].copy()
+        
+        # If current line is short, try to group with next lines
+        if current['word_count'] < min_words and i < n - 1:
+            j = i + 1
+            # Keep adding next lines until we have enough words or reach end
+            while j < n and len(current['text'].split()) < min_words:
+                next_dialogue = raw_dialogues[j]
+                current['text'] += ' ' + next_dialogue['text']
+                current['end'] = next_dialogue['end']  # Update end time to the last grouped line
+                current['word_count'] = len(current['text'].split())
+                j += 1
+            i = j  # Skip the lines we've grouped
+        else:
+            i += 1
+            
+        grouped_dialogues.append({
+            'start': current['start'],
+            'end': current['end'],
+            'text': current['text']
+        })
+    
+    return grouped_dialogues
 
 
 def group_dialogues(dialogues: List[Dict]) -> List[Dict]:
-    groups = []
-    current = None
-    for dlg in dialogues:
-        if not current:
-            current = {'start': dlg['start'],
-                       'end': dlg['end'], 'text': dlg['text']}
-        else:
-            if re.search(r'[.!?]$', current['text']) or (dlg['text'].lower().startswith('but') or dlg['text'].lower().startswith('and')):
-                groups.append(current)
-                current = {'start': dlg['start'],
-                           'end': dlg['end'], 'text': dlg['text']}
-            else:
-                current['end'] = dlg['end']
-                current['text'] += ' ' + dlg['text']
-    if current:
-        groups.append(current)
-    return groups
+    """Return the original dialogues without any grouping.
+    
+    This function preserves the original subtitle lines and their timestamps
+    exactly as they appear in the input file.
+    """
+    if not dialogues:
+        return []
+    
+    # Just ensure no overlaps in timestamps
+    for i in range(len(dialogues) - 1):
+        current_end = parse_time(dialogues[i]['end'])
+        next_start = parse_time(dialogues[i + 1]['start'])
+        
+        # If current end is after next start, adjust it to avoid overlap
+        if current_end > next_start:
+            # Set current end to be just before next start (1ms before)
+            adjusted_end = next_start - 0.001
+            dialogues[i]['end'] = format_time(adjusted_end)
+    
+    # Return the original dialogues with only the necessary adjustments
+    return [
+        {
+            'start': d['start'],
+            'end': d['end'],
+            'text': d['text'].strip()
+        }
+        for d in dialogues
+        if d['text'].strip()  # Skip empty lines
+    ]
 
 def parse_time(t):
     """Converts '0:00:06.28' to seconds."""
@@ -144,266 +205,149 @@ def fill_gaps_in_slides(slides: List[Dict], total_duration: float) -> List[Dict]
     return filled_slides
 
 
-def _detect_emotional_tone(text: str) -> str:
-    """Detect the emotional tone of the given text."""
-    text_lower = text.lower()
-    emotional_indicators = {
-        'happy': ['laugh', 'happy', 'joy', 'excite', 'celebrate', 'smile'],
-        'sad': ['cry', 'tear', 'sad', 'grief', 'loss', 'death', 'die'],
-        'angry': ['angry', 'rage', 'fury', 'yell', 'scream', 'fight', 'battle'],
-        'shocked': ['shock', 'surprise', 'reveal', 'betray', 'betrayal', 'secret']
-    }
-    
-    for emotion, indicators in emotional_indicators.items():
-        if any(indicator in text_lower for indicator in indicators):
-            return emotion
-    return 'neutral'
-
-def _is_transition_segment(text: str) -> bool:
-    """Check if the segment is likely a transition or silence."""
-    text_lower = text.lower()
-    transition_indicators = {
-        '...', '--', 'silence', 'pause', 'beat', 'moment', 'scene',
-        'cut to', 'fade', 'meanwhile', 'later', 'after', 'before'
-    }
-    
-    # Check for very short text or transition indicators
-    if len(text_lower.split()) < 3:
-        return True
-        
-    return any(indicator in text_lower for indicator in transition_indicators)
-
 def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
-    # Read and group all dialogues
+    # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
     grouped_dialogues = group_dialogues(dialogues)
     
-    # Initialize context tracking
-    context = {
-        'characters': set(),
-        'locations': set(),
-        'current_arc': None,
-        'recent_events': [],
-        'emotional_tone': 'neutral',
-        'previous_segment': None
-    }
-    
-    # Prepare segments with context
-    segments_with_context = []
-    for i, d in enumerate(grouped_dialogues):
-        is_transition = _is_transition_segment(d['text'])
-        emotional_tone = _detect_emotional_tone(d['text'])
-        
-        # Update context
-        context['emotional_tone'] = emotional_tone
-        context['previous_segment'] = d['text']
-        
-        # Extract potential characters and locations
-        key_terms = _extract_key_terms(d['text'])
-        characters = [t for t in key_terms if _is_character_name(t)]
-        locations = [t for t in key_terms if _is_location(t)]
-        
-        if characters:
-            context['characters'].update(characters[:2])  # Keep only top 2 characters
-        
-        if locations:
-            context['locations'].update(locations[:1])  # Keep only the main location
-        
-        segments_with_context.append({
+    # Store the original timestamps
+    timestamped_dialogues = [
+        {
             'start': d['start'],
             'end': d['end'],
-            'text': d['text'],
-            'is_transition': is_transition,
-            'emotional_tone': emotional_tone,
-            'characters': characters,
-            'locations': locations,
-            'context': context.copy()  # Store a snapshot of the current context
-        })
+            'text': d['text'].strip()
+        }
+        for d in grouped_dialogues
+    ]
     
-    # Prepare the prompt for Gemini with context
-    all_segments = "\n".join(
-        f"- {d['start']} to {d['end']}: {d['text']} "
-        f"[Context: {'Transition' if d['is_transition'] else 'Content'}, "
-        f"Tone: {d['emotional_tone']}, "
-        f"Chars: {', '.join(d['characters']) if d['characters'] else 'None'}, "
-        f"Loc: {', '.join(d['locations']) if d['locations'] else 'None'}]"
-        for d in segments_with_context
-    )
-    
-    # Prepare context summary for the prompt
-    context_summary = (
-        "CONTEXT SUMMARY:\n"
-        f"- Current emotional tone: {context['emotional_tone']}\n"
-        f"- Recent characters: {', '.join(context['characters']) if context['characters'] else 'None'}\n"
-        f"- Recent locations: {', '.join(context['locations']) if context['locations'] else 'None'}\n"
-    )
+    # Prepare the prompt for Gemini with raw subtitles and timestamps
+    raw_subtitles = "\n".join(f"{d['start']} - {d['end']}: {d['text']}" for d in timestamped_dialogues)
+    logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     prompt = (
         "You are an expert video content designer specializing in One Piece. "
-        "Your task is to map subtitle segments to suggested Google image search queries, structured in JSON format.\n\n"
-        "CONTEXT AND GUIDELINES:\n"
-        "1. Always include 'One Piece' in every image_search_query\n"
-        "2. Priority order for query terms: characters > actions > locations > objects\n"
-        "3. For multi-character scenes, include up to 2 main characters\n"
-        "4. For fight/action scenes, include both characters and the action\n\n"
-        "HANDLING DIFFERENT SCENE TYPES (based on context tags):\n\n"
-        "For TRANSITION segments (marked as [Context: Transition]):\n"
-        "- If between related scenes: 'One Piece [character/location] transition'\n"
-        "- If after an intense scene: 'One Piece [character] reaction [emotion]'\n"
-        "- If introducing a new location: 'One Piece [location] scenery'\n"
-        "- For emotional transitions: 'One Piece [character] [emotion] moment'\n\n"
-        "For ACTION scenes (contains fight/battle/attack terms):\n"
-        "- Format: 'One Piece [character1] [action] [character2/object] [location]'\n"
-        "- Example: 'One Piece Luffy punches Kaido Onigashima'\n"
-        "- Include power-ups/transformations: 'One Piece Luffy Gear 5 vs Kaido'\n\n"
-        "For DIALOGUE scenes (conversation-focused):\n"
-        "- Focus on character expressions and relationships\n"
-        "- Example: 'One Piece Luffy and Law talking Wano serious'\n"
-        "- Include emotional tone: 'One Piece Nami crying emotional scene'\n\n"
-        f"{context_summary}\n"
-        "SEGMENT ANALYSIS:\n"
-        "Each segment is annotated with context in square brackets:\n"
-        "- [Context: Transition/Content] - Whether this is a transition or content segment\n"
-        "- [Tone: emotion] - The emotional tone of the segment\n"
-        "- [Chars: character1, character2] - Characters mentioned in the segment\n"
-        "- [Loc: location] - Locations mentioned in the segment\n\n"
-        f"Here are the grouped subtitle segments with context for a short video:\n{all_segments}\n\n"
-        "OUTPUT FORMAT (JSON array of objects):\n"
+        "Your job is to map subtitle segments to visually engaging image search queries, "
+        "structured in JSON format.\n\n"
+
+        "CRITICAL RULES:\n"
+        "1. Every query MUST contain at least one One Piece character or location. "
+        "Never leave a query as just raw subtitle text.\n"
+        "2. Always include 'One Piece anime' in every image_search_query.\n"
+        "3. If the subtitle is too short (e.g., 1–2 words like 'prove', 'because', 'right?'), "
+        "merge it with adjacent subtitles into a meaningful sentence before generating a query.\n"
+        "   - Example: 'prove' + 'me wrong' + 'because' → 'Prove me wrong because...'\n"
+        "4. Priority for terms: characters > actions > locations > emotions > objects.\n"
+        "5. Queries must always describe a VISUAL moment (character pose, emotion, action, or setting). "
+        "Never just copy text from the subtitle.\n\n"
+
+        "MERGE RULE:\n"
+        "- If a subtitle is shorter than 4 words or is incomplete (e.g., \"prove\", \"me wrong\", \"because\", \"right?\"),\n"
+        "  ALWAYS merge it with its nearest neighbors into one meaningful sentence before producing an image_search_query.\n"
+        "- Never output an image_search_query that contains only filler or fragment text.\n\n"
+
+        "VISUAL VARIETY:\n"
+        "- Avoid repeating the same character/emotion more than twice in a row.\n"
+        "- Rotate between Straw Hats, side characters, and relevant locations when possible.\n"
+        "- Favor visually distinct frames (group shots, landscapes, dramatic poses).\n\n"
+
+        "HANDLING SCENE TYPES:\n"
+        "For ACTION scenes: 'One Piece anime [character1] [action] [character2] [location]'\n"
+        "For DIALOGUE/EMOTION scenes: 'One Piece anime [character] [emotion/expression] close up'\n"
+        "For REVEALS/MYSTERIES: 'One Piece anime [character] shocked [arc/location]'\n"
+        "For TRANSITIONS: 'One Piece anime [location] scenery dramatic'\n\n"
+
+        "TIMING RULES:\n"
+        "1. Segments must form a continuous timeline with NO gaps or overlaps. "
+        "The end_time of one segment should equal the start_time of the next.\n"
+        "2. If a merged segment is shorter than 2.5 seconds, merge it with the nearest neighbor "
+        "unless it represents a deliberate dramatic pause.\n"
+        "3. Standalone lines like 'Think about it', 'Now, consider Chapter 967', or 'Right?' "
+        "should ALWAYS be merged with the following segment.\n\n"
+
+        "OUTPUT RULES:\n"
+        "1. Input subtitles are timestamped. You may MERGE consecutive subtitles into larger segments "
+        "if they clearly form one sentence/thought.\n"
+        "2. For each merged segment, output JSON with:\n"
+        "   - start_time (from first subtitle)\n"
+        "   - end_time (from last subtitle)\n"
+        "   - summary: concise paraphrase of the line(s)\n"
+        "   - image_search_query: refined search query following rules above\n\n"
+
+        "OUTPUT FORMAT (JSON array only, no commentary):\n"
         "[\n"
         "  {\n"
         "    \"start_time\": \"0:00:00\",\n"
-        "    \"end_time\": \"0:00:10\",\n"
-        "    \"summary\": \"Concise description of scene\",\n"
-        "    \"image_search_query\": \"One Piece [relevant_terms]\"\n"
+        "    \"end_time\": \"0:00:05\",\n"
+        "    \"summary\": \"Zoro absorbs Luffy’s unbearable pain\",\n"
+        "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark pain bloodied determined\"\n"
         "  }\n"
         "]\n\n"
-        "IMPORTANT NOTES:\n"
-        "1. For transition segments, use the context to determine the best image (reaction, location, etc.)\n"
-        "2. Maintain character and location context between segments when appropriate\n"
-        "3. For emotional scenes, include the emotion in the query\n"
-        "4. For action scenes, be specific about the action and participants\n"
-        "5. For dialogue scenes, focus on character expressions and relationships\n\n"
-        "Now generate the JSON array for the segments above. "
-        "Respond ONLY with valid JSON. Do not include any extra commentary or explanations."
+
+        "Now carefully analyze the subtitles below, merge fragments where needed, "
+        "and generate the JSON array.\n\n"
+        f"{raw_subtitles}"
     )
 
+
+
+
     try:
-        # Import json at the function level to avoid issues
-        import json as _json
+        response = model.generate_content(prompt)
+        if not response.text:
+            raise ValueError("Empty response from Gemini")
         
-        # Generate content with retry logic
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(prompt)
-                if not response.text:
-                    raise ValueError("Empty response from Gemini API")
-                
-                logger.debug(f"Gemini raw response (attempt {attempt + 1}): {response.text}")
-                text = response.text.strip()
-                
-                # Clean up the response if it's wrapped in markdown code blocks
-                if '```' in text:
-                    # Extract content between the first and last ```
-                    start_idx = text.find('```')
-                    end_idx = text.rfind('```')
-                    if start_idx != -1 and end_idx != -1 and start_idx != end_idx:
-                        text = text[start_idx + 3:end_idx].strip()
-                        # Remove 'json' prefix if present
-                        if text.startswith('json'):
-                            text = text[4:].strip()
-                
-                # Try to find the first { and last } to extract JSON
-                first_brace = text.find('{')
-                last_brace = text.rfind('}')
-                
-                if first_brace != -1 and last_brace != -1 and first_brace < last_brace:
-                    json_str = text[first_brace:last_brace + 1]
-                    logger.debug(f"Extracted JSON string: {json_str[:200]}...")  # Log first 200 chars
-                    
-                    # Try to parse the JSON
-                    try:
-                        slides = _json.loads(json_str)
-                    except _json.JSONDecodeError as je:
-                        # If parsing fails, try to find array start/end
-                        first_bracket = text.find('[')
-                        last_bracket = text.rfind(']')
-                        if first_bracket != -1 and last_bracket != -1 and first_bracket < last_bracket:
-                            json_str = text[first_bracket:last_bracket + 1]
-                            logger.debug(f"Trying array extraction: {json_str[:200]}...")
-                            slides = _json.loads(json_str)
-                        else:
-                            raise
-                else:
-                    raise ValueError("Could not find valid JSON in response")
-                
-                # If we get here, parsing was successful
-                break
-                
-            except (_json.JSONDecodeError, ValueError) as e:
-                if attempt == max_retries - 1:  # Last attempt
-                    logger.error(f"Failed to parse Gemini response after {max_retries} attempts")
-                    raise
-                logger.warning(f"JSON parse error on attempt {attempt + 1}, retrying...")
-                time.sleep(1)  # Wait before retrying
-        
-        # Validate the structure
-        if not isinstance(slides, list):
-            raise ValueError(f"Expected a list of slides, got {type(slides).__name__}")
+        # Log the raw response for debugging
+        logger.info(f"Raw Gemini response:\n{response.text}")
             
-        for i, slide in enumerate(slides):
-            if not isinstance(slide, dict):
-                raise ValueError(f"Slide {i} is not a dictionary")
+        # Parse the JSON response
+        try:
+            # Clean up the response to ensure valid JSON
+            json_str = response.text.strip()
+            if json_str.startswith('```json'):
+                json_str = json_str[7:]
+            if json_str.endswith('```'):
+                json_str = json_str[:-3]
                 
-            required_keys = ["start_time", "end_time", "summary", "image_search_query"]
-            for key in required_keys:
-                if key not in slide:
-                    raise ValueError(f"Slide {i} is missing required key: {key}")
-                if not isinstance(slide[key], str):
-                    raise ValueError(f"Slide {i} has invalid type for {key}: {type(slide[key]).__name__}")
-        
-        # Fill any gaps in the timeline
-        slides = fill_gaps_in_slides(slides, total_duration)
-        
-        # Ensure the output directory exists
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        
-        # Save the slides to the output file with atomic write
-        temp_path = f"{out_path}.tmp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            _json.dump(slides, f, indent=2, ensure_ascii=False)
-        
-        # Atomic rename to prevent partial writes
-        if os.path.exists(out_path):
-            os.remove(out_path)
-        os.rename(temp_path, out_path)
+            gemini_slides = json.loads(json_str)
+            logger.info(f"Successfully parsed {len(gemini_slides)} slides from Gemini response")
             
-        logger.info(f"Successfully generated {len(slides)} slides at {out_path}")
-        
-        # Download images if image_dir is provided
-        if image_dir:
-            download_images_for_slides(out_path, image_dir)
+            # Create final slides using Gemini's grouping
+            final_slides = []
             
-        return out_path
-        
-    except Exception as e:
-        logger.error(f"Error generating image slides: {str(e)}")
-        logger.debug("Error details:", exc_info=True)
-        
-        # If we have a partial response, try to save it for debugging
-        if 'slides' in locals() and slides:
-            debug_path = f"{out_path}.error.json"
-            try:
-                with open(debug_path, 'w', encoding='utf-8') as f:
-                    _json.dump({
-                        'error': str(e),
-                        'partial_slides': slides[:10]  # Only save first 10 slides to avoid huge files
-                    }, f, indent=2)
-                logger.info(f"Saved partial response to {debug_path} for debugging")
-            except Exception as save_error:
-                logger.error(f"Failed to save partial response: {str(save_error)}")
-        
-        raise
+            # For each Gemini slide (which may cover multiple original subtitles)
+            for gemini_slide in gemini_slides:
+                # Create one slide per Gemini group with its own timing
+                slide = {
+                    'start_time': gemini_slide['start_time'],
+                    'end_time': gemini_slide['end_time'],
+                    'summary': gemini_slide['summary'],
+                    'image_search_query': gemini_slide['image_search_query']
+                }
+                
+                # Add image path if image_dir is provided
+                if image_dir:
+                    os.makedirs(image_dir, exist_ok=True)
+                    slide_hash = hashlib.md5(slide['image_search_query'].encode()).hexdigest()[:8]
+                    slide['image_path'] = os.path.join(image_dir, f"slide_{len(final_slides)+1:03d}_{slide_hash}.jpg")
+                
+                final_slides.append(slide)
+            
+            # Save the slides to a JSON file
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(final_slides, f, indent=2, ensure_ascii=False)
+                
+            logger.info(f"Successfully generated {len(final_slides)} slides at {out_path}")
+            
+            # Download images if image_dir is provided
+            if image_dir:
+                download_images_for_slides(out_path, image_dir)
+                
+            return out_path
+            
+        except (json.JSONDecodeError, _json.JSONDecodeError) as e:
+            logger.error(f"Failed to parse Gemini response as JSON: {e}")
+            logger.error(f"Response text: {response.text}")
+            raise
             
     except Exception as e:
         logger.error(f"Error in generate_gemini_image_slides: {str(e)}")
@@ -615,229 +559,40 @@ def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
     return False
 
 
-def _extract_key_terms(text: str) -> List[str]:
-    """Extract key terms from text, removing common words and duplicates."""
-    # Custom stop words for One Piece context
-    custom_stopwords = set(stopwords.words('english')) - {'one', 'piece', 'straw', 'hat', 'devil', 'fruit'}
-    custom_stopwords.update({
-        'would', 'could', 'should', 'might', 'must', 'may', 'shall',
-        'also', 'even', 'still', 'much', 'many', 'every', 'very', 'really',
-        'just', 'like', 'get', 'go', 'see', 'make', 'know', 'take', 'use',
-        'come', 'think', 'look', 'want', 'need', 'way', 'thing', 'things',
-        'something', 'anything', 'nothing', 'everything', 'someone', 'anyone',
-        'no one', 'everyone', 'somebody', 'anybody', 'nobody', 'everybody',
-        'somewhere', 'anywhere', 'nowhere', 'everywhere', 'some', 'any',
-        'no', 'none', 'all', 'both', 'each', 'few', 'more', 'most', 'other',
-        'such', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'will',
-        'can', 'may', 'might', 'must', 'shall', 'should', 'ought', 'dare',
-        'need', 'used', 'using', 'one', 'two', 'three', 'four', 'five',
-        'first', 'second', 'third', 'fourth', 'fifth', 'another', 'next',
-        'last', 'previous', 'early', 'later', 'ago', 'before', 'after',
-        'since', 'until', 'when', 'while', 'during', 'before', 'after',
-        'until', 'till', 'by', 'for', 'from', 'in', 'into', 'of', 'on',
-        'to', 'with', 'without', 'about', 'against', 'between', 'through',
-        'under', 'over', 'again', 'further', 'then', 'once', 'here', 'there',
-        'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few',
-        'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only',
-        'own', 'same', 'so', 'than', 'too', 'very'
-    })
+def _generate_fallback_queries(base_query: str) -> List[str]:
+    """Generate fallback search queries if the original query doesn't yield results."""
+    # Remove any special characters and split into words
+    words = re.findall(r'\b\w+\b', base_query.lower())
     
-    # Tokenize and clean the text
-    words = nltk.word_tokenize(text.lower())
-    words = [w for w in words if w.isalnum() and w not in custom_stopwords and len(w) > 2]
+    # Common One Piece related terms to try in fallback queries
+    fallbacks = [
+        f"One Piece {base_query}",  # Original with One Piece prefix
+        base_query,  # Original query as is
+    ]
+    
+    # Add character names if detected
+    characters = [w for w in words if w.lower() in [
+        'luffy', 'zoro', 'sanji', 'nami', 'usopp', 'chopper', 
+        'robin', 'franky', 'brook', 'jinbe', 'mihawk', 'shanks',
+        'kaido', 'big mom', 'blackbeard', 'ace', 'sabo'
+    ]]
+    
+    if characters:
+        fallbacks.append(f"One Piece {' '.join(characters)}")
+    
+    # Add variations with different combinations
+    if len(words) > 1:
+        fallbacks.extend([
+            f"One Piece {words[0]} {words[-1]}",  # First and last word
+            f"One Piece {words[0]}",  # Just first word
+        ])
+    
+    # Add a generic fallback if nothing else works
+    fallbacks.append("One Piece")
     
     # Remove duplicates while preserving order
-    return list(dict.fromkeys(words))
-
-def _is_character_name(term: str) -> bool:
-    """Check if a term is a One Piece character name."""
-    one_piece_characters = {
-        'luffy', 'zoro', 'nami', 'usopp', 'sanji', 'chopper', 'robin', 'franky',
-        'brook', 'jinbe', 'ace', 'sabo', 'shanks', 'buggy', 'mihawk', 'crocodile',
-        'doflamingo', 'kaido', 'big mom', 'blackbeard', 'whitebeard', 'law', 'kidd',
-        'yamato', 'carrot', 'vivi', 'bonney', 'kuma', 'ivankov', 'dragon', 'garp',
-        'sengoku', 'akainu', 'kizaru', 'fujitora', 'ryokugyu', 'smoker', 'tashigi'
-    }
-    return term.lower() in one_piece_characters
-
-def _is_location(term: str) -> bool:
-    """Check if a term is a One Piece location."""
-    one_piece_locations = {
-        'east blue', 'grand line', 'new world', 'mariejois', 'mary geoise', 'reverie',
-        'alabasta', 'skypiea', 'water 7', 'enies lobby', 'thriller bark', 'sabaody',
-        'fishman island', 'dressrosa', 'whole cake', 'wano', 'onigashima', 'elbaf',
-        'marinford', 'impel down', 'amazon lily', 'punk hazard', 'zou', 'wci', 'wano'
-    }
-    return term.lower() in one_piece_locations
-
-def _is_ability(term: str) -> bool:
-    """Check if a term is a One Piece ability or power."""
-    one_piece_abilities = {
-        'haki', 'haoshoku', 'busoshoku', 'kenbunshoku', 'armament', 'observation',
-        'conqueror', 'conquerors', 'devil fruit', 'logia', 'zoan', 'paramecia',
-        'awakening', 'tekkai', 'sorcery', 'mink', 'sulong', 'voice', 'roger',
-        'poseidon', 'pluton', 'uranus', 'ancient weapon', 'poneglyph', 'road'
-    }
-    return term.lower() in one_piece_abilities
-
-def _generate_contextual_queries(slide: Dict, context: Dict) -> List[str]:
-    """Generate contextual search queries for a slide with improved fallbacks."""
-    def clean_query(query: str) -> str:
-        """Clean and format search query."""
-        return ' '.join(query.split())  # Remove extra whitespace
-    
-    queries = []
-    summary = slide.get('summary', '').lower()
-    key_terms = _extract_key_terms(summary)
-    
-    # Check if this is a silence/transition slide
-    is_transition = any(term in summary.lower() for term in ['silence', 'transition', '...', '--', 'beat', 'pause'])
-    
-    # Extract entities with more detailed analysis
-    characters = [t for t in key_terms if _is_character_name(t)]
-    locations = [t for t in key_terms if _is_location(t)]
-    abilities = [t for t in key_terms if _is_ability(t)]
-    actions = [t for t in key_terms if t.endswith(('ing', 'ed')) and t not in abilities]
-    
-    # Update context with new information
-    context['characters'].update(characters)
-    context['locations'].update(locations)
-    context['abilities'].update(abilities)
-    
-    # For transition/silence slides, generate more relevant queries
-    if is_transition:
-        # 1. Try to maintain context from previous/next slides
-        if context.get('characters'):
-            chars = list(context['characters'])[:2]  # Get up to 2 recent characters
-            queries.extend([
-                clean_query(f"One Piece {' '.join(chars)} scene"),
-                clean_query(f"One Piece {' '.join(chars)} moment"),
-                clean_query(f"One Piece {' '.join(chars)} reaction"),
-                clean_query(f"One Piece {' '.join(chars)} expression")
-            ])
-        
-        # 2. Use location if available
-        if context.get('locations'):
-            loc = next(iter(context['locations']))
-            queries.extend([
-                clean_query(f"One Piece {loc} scenery"),
-                clean_query(f"One Piece {loc} background"),
-                clean_query(f"One Piece {loc} location")
-            ])
-        
-        # 3. Add emotional context if available
-        emotion = context.get('emotional_tone', 'neutral')
-        if emotion != 'neutral':
-            queries.extend([
-                clean_query(f"One Piece {emotion} moment"),
-                clean_query(f"One Piece {emotion} scene")
-            ])
-    
-    # Regular content processing (for non-transition slides)
-    if not is_transition or not queries:  # If no transition queries were generated
-        # 1. Most specific queries (character + action + location)
-        if characters and actions and locations:
-            queries.append(clean_query(
-                f"One Piece {' '.join(characters)} {' '.join(actions)} at {' '.join(locations)}"
-            ))
-        
-        # 2. Character + Action/Ability
-        for action in actions + abilities:
-            if characters:
-                for char in characters:
-                    queries.append(clean_query(f"One Piece {char} {action}"))
-        
-        # 3. Location + Event
-        if locations and (actions or abilities):
-            queries.append(clean_query(
-                f"One Piece {summary} at {' '.join(locations)}"
-            ))
-        
-        # 4. Character + Summary (if not too long)
-        if characters and len(summary) < 50:
-            queries.append(clean_query(f"One Piece {' '.join(characters)} {summary}"))
-        
-        # 5. Context from previous slides
-        if context.get('characters') and (actions or abilities):
-            for action in actions + abilities:
-                queries.append(clean_query(
-                    f"One Piece {' '.join(context['characters'])} {action}"
-                ))
-    
-    # Fallback combinations (for both transition and regular slides)
-    if len(key_terms) >= 2:
-        # Try different term combinations
-        for i in range(min(3, len(key_terms))):
-            for j in range(i+1, min(i+4, len(key_terms))):
-                queries.append(clean_query(
-                    f"One Piece {key_terms[i]} {key_terms[j]}"
-                ))
-    
-    # Progressive fallbacks (more generic queries)
-    fallbacks = []
-    
-    # Character-based fallbacks
-    if characters:
-        fallbacks.extend([
-            clean_query(f"One Piece {char} scene") for char in characters[:2]
-        ])
-    
-    # Location-based fallbacks
-    if locations:
-        fallbacks.extend([
-            clean_query(f"One Piece {loc} scene") for loc in locations[:1]
-        ])
-    
-    # Action/emotion based fallbacks
-    if actions:
-        fallbacks.extend([
-            clean_query(f"One Piece {action} scene") for action in actions[:1]
-        ])
-    
-    # Generic but relevant fallbacks
-    fallbacks.extend([
-        clean_query("One Piece " + ' '.join(summary.split()[:5])),  # First 5 words
-        clean_query(f"One Piece {summary}"),
-        clean_query(f"One Piece {summary} scene"),
-        clean_query(f"One Piece {summary} moment")
-    ])
-    
-    # Add context-based fallbacks
-    if context.get('characters'):
-        chars = list(context['characters'])[:2]
-        fallbacks.append(clean_query(f"One Piece {' '.join(chars)} scene"))
-    
-    if context.get('locations'):
-        loc = next(iter(context['locations']), '')
-        if loc:
-            fallbacks.append(clean_query(f"One Piece {loc} scene"))
-    
-    # Add some generic but useful fallbacks
-    fallbacks.extend([
-        "One Piece scene",
-        "One Piece moment",
-        "One Piece anime"
-    ])
-    
-    # Combine all queries, ensuring uniqueness and proper order
-    all_queries = []
     seen = set()
-    
-    # First add the most specific queries
-    for q in queries + fallbacks:
-        q = q.strip()
-        if q and q not in seen:
-            seen.add(q)
-            all_queries.append(q)
-    
-    # Ensure we always have at least one fallback
-    if not all_queries:
-        all_queries.append("One Piece")
-    
-    # Log the generated queries for debugging
-    logger.debug(f"Generated {len(all_queries)} queries for slide: {all_queries}")
-    
-    return all_queries
+    return [f for f in fallbacks if not (f in seen or seen.add(f))]
 
 def download_images_for_slides(json_path: str, out_dir: str) -> None:
     """Download images for slides based on search queries in a JSON file.
@@ -852,139 +607,87 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     
     logger.info(f"Downloading images to {out_dir} from {json_path}")
-
+    
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
-
-    # Initialize context tracking
-    context = {
-        'characters': set(),
-        'locations': set(),
-        'abilities': set(),
-        'current_arc': None
-    }
-
+    
     # Track downloaded image hashes to avoid duplicates
     downloaded_hashes = set()
-
+    
     for idx, slide in enumerate(slides):
         search_query = slide.get("image_search_query")
         if not search_query:
             logger.warning(f"[Slide {idx+1}] No image_search_query")
             continue
-
-        # Generate contextual queries for this slide
-        queries = _generate_contextual_queries(slide, context)
-        logger.info(f"[Slide {idx+1}] Generated {len(queries)} search queries")
-
+            
+        logger.info(f"[Slide {idx+1}] Processing query: {search_query}")
+        
         # Track if we've successfully downloaded an image
         downloaded = False
-
-        # Try each query until we find a suitable image
-        for query in queries:
+        
+        # Try the original query and fallbacks
+        for query in [search_query] + _generate_fallback_queries(search_query):
             if downloaded:
                 break
-
+                
             logger.debug(f"[Slide {idx+1}] Trying search: {query}")
-            try:
-                items = google_image_search(query, num_results=5)  # Reduced number of results per query
-
-                if not items:
-                    logger.debug(f"[Slide {idx+1}] No results for: {query}")
-                    continue
-
-                logger.info(f"[Slide {idx+1}] Found {len(items)} results for: {query}")
-
-                # Process search results
-                for item in items:
-                    if downloaded:
-                        break
-
-                    item_link = item.get('link', '')
-                    item_title = item.get('title', '').lower()
-                    item_mime = item.get('mime', '')
-
-                    # Skip if no link or invalid MIME type
-                    if not item_link or not item_mime.startswith('image/'):
-                        continue
-
-                    # Check for One Piece relevance with more specific checks
-                    is_relevant = _is_relevant_image(item, context)
-                    if not is_relevant:
-                        logger.debug(f"[Slide {idx+1}] Skipping irrelevant image: {item_title}")
-                        continue
-
-                    # Check for duplicates using perceptual hashing
-                    is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
-                    if is_duplicate:
-                        logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
-                        continue
-
-                    # Try to download the image with better error handling
-                    filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
-                    save_path = os.path.join(out_dir, filename)
-
-                    if download_image(item_link, save_path):
-                        downloaded_hashes.add(image_hash)
-                        slide["image_path"] = save_path
-                        downloaded = True
-                        logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
-
-                        # Update context with successful download info
-                        _update_context_from_image(slide, item, context)
-
-            except Exception as e:
-                logger.error(f"[Slide {idx+1}] Error processing query '{query}': {str(e)}")
+            items = google_image_search(query, num_results=10)
+            
+            if not items:
+                logger.debug(f"[Slide {idx+1}] No results for: {query}")
                 continue
+                
+            logger.info(f"[Slide {idx+1}] Found {len(items)} results for: {query}")
 
-        if not downloaded:
-            logger.warning(f"[Slide {idx+1}] Failed to download image after all queries")
-
+            # Process search results
+            for item in items:
+                if downloaded:
+                    break
+                    
+                item_link = item.get('link', '')
+                item_title = item.get('title', '').lower()
+                item_mime = item.get('mime', '')
+                
+                # Skip if no link or invalid MIME type
+                if not item_link or not item_mime.startswith('image/'):
+                    continue
+                    
+                # Check for One Piece relevance
+                is_onepiece = ('one piece' in item_title or 
+                             any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+                
+                if not is_onepiece:
+                    logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
+                    continue
+                
+                # Check for duplicates
+                is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
+                if is_duplicate:
+                    logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
+                    continue
+                
+                # Try to download the image
+                filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
+                save_path = os.path.join(out_dir, filename)
+                
+                if download_image(item_link, save_path):
+                    downloaded_hashes.add(image_hash)
+                    slide["image_path"] = save_path
+                    downloaded = True
+                    logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
+                    break
+    
     # Save the updated slides with image paths
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(slides, f, indent=2, ensure_ascii=False)
-
+    
     # Log download statistics
     downloaded_count = sum(1 for slide in slides if "image_path" in slide)
-    success_rate = (downloaded_count / len(slides)) * 100 if slides else 0
-    logger.info(
-        f"Download complete. Successfully downloaded {downloaded_count}/{len(slides)} "
-        f"images ({success_rate:.1f}% success rate)"
-    )
+    logger.info(f"Download complete. Successfully downloaded {downloaded_count}/{len(slides)} images.")
 
+    # Clean up any temporary attributes we added
+    for slide in slides:
+        if '_priority' in slide:
+            del slide['_priority']
+    
     return downloaded_count
-
-
-def _is_relevant_image(item: Dict, context: Dict) -> bool:
-    """Check if an image is relevant based on its metadata and context."""
-    title = item.get('title', '').lower()
-    snippet = item.get('snippet', '').lower()
-
-    # Basic One Piece relevance check
-    if 'one piece' not in title and 'one piece' not in snippet:
-        if not any(char in title for char in context['characters']):
-            return False
-
-    # Check for common irrelevant content
-    blacklist = {'fan art', 'drawing', 'sketch', 'manga panel', 'color page', 'amv', 'opening', 'ending'}
-    if any(term in title for term in blacklist):
-        return False
-
-    return True
-
-
-def _update_context_from_image(slide: Dict, image_data: Dict, context: Dict) -> None:
-    """Update context based on successfully downloaded image."""
-    # Extract potential character names from image title/description
-    title = image_data.get('title', '').lower()
-    snippet = image_data.get('snippet', '').lower()
-
-    # Update context with any new characters found
-    for term in _extract_key_terms(title + ' ' + snippet):
-        if _is_character_name(term) and term not in context['characters']:
-            context['characters'].add(term)
-
-    # Update locations if mentioned
-    for term in _extract_key_terms(snippet):
-        if _is_location(term) and term not in context['locations']:
-            context['locations'].add(term)

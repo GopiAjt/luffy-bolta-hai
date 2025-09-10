@@ -226,11 +226,11 @@ def generate_script() -> str:
             "Funny Translation Errors",
             "Community Memes Explained"
         ]
-        # topic = random.choice(topics)
+        topic = random.choice(topics)
 
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
-            f"Create engaging content for a YouTube video about: [Search a recent trending 'one piece' topic from the internet]\n\n"
+            f"Create engaging content for a YouTube video about: \"{topic}\"\n\n"
             "You MUST produce all 4 sections fully, in this exact order and format:\n\n"
 
             "1. TITLE (Clickbait-style, under 70 chars):\n"
@@ -266,27 +266,27 @@ def generate_script() -> str:
             "- Hidden truth\n"
             "- Time bomb\n"
 
-            "4. POWER WORDS (use exactly 2–3):\n"
+            "4. POWER WORDS\n"
             "- Place one in the hook, one during mid-escalation, one near the end.\n"
             "- Examples: secret, explosive, shocking, insane, hidden, ultimate, terrifying, critical.\n"
 
-            "5. SPECIFIC DETAILS (use 1–2):\n"
+            "5. SPECIFIC DETAILS\n"
             "- Reference exact quotes, chapters, episodes, or timestamps to boost credibility.\n"
 
-            "6. EMOTIONAL STAKES (use 1):\n"
+            "6. EMOTIONAL STAKES\n"
             "- Show why this matters to you personally\n"
 
-            "7. SENSORY DESCRIPTION (use exactly 1):\n"
+            "7. SENSORY DESCRIPTION\n"
             "- Describe one physical reaction\n"
 
-            "8. CREDIBILITY BOOSTER (use 1):\n"
+            "8. CREDIBILITY BOOSTER\n"
             "- Mention research, rewatch, or reread\n"
 
-            "9. VIEWER CONNECTION (use 1–2):\n"
-            "- MID-ESCALATION HUMAN TOUCH (use exactly 1):\n"
+            "9. VIEWER CONNECTION\n"
+            "- MID-ESCALATION HUMAN TOUCH\n"
             "- Rising confusion, excitement, fear, disbelief, or anger that feels natural.\n"
 
-            "10. HUMAN-LIKE CLOSING (randomly select one):\n"
+            "10. HUMAN-LIKE CLOSING\n"
             "- Vulnerable cliffhanger\n"
             "- Urgent personal\n"
             "- Confident challenge\n"

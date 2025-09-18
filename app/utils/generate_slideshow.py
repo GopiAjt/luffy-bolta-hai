@@ -7,6 +7,7 @@ from PIL import Image
 import io
 import logging
 import subprocess # Added this import
+import random
 from app.config import VIDEO_RESOLUTION
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,102 @@ def apply_blur(image, blur_amount):
     return image
 
 
-def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=50):
+def fade_effect(current_frame, next_frame, progress):
+    """Fade between current and next frame.
+    
+    Args:
+        current_frame: Current frame as numpy array
+        next_frame: Next frame as numpy array
+        progress: Float between 0 and 1 representing transition progress
+        
+    Returns:
+        Transitioned frame as numpy array
+    """
+    logger.debug(f"Applying fade effect - Progress: {progress:.2f} ({(progress*100):.0f}%)")
+    return cv2.addWeighted(current_frame, 1 - progress, next_frame, progress, 0)
+
+
+def slide_effect(current_frame, next_frame, progress, direction='right'):
+    """Slide transition between current and next frame.
+    
+    Args:
+        current_frame: Current frame as numpy array
+        next_frame: Next frame as numpy array
+        progress: Float between 0 and 1 representing transition progress
+        direction: Direction of slide ('left', 'right', 'up', 'down')
+        
+    Returns:
+        Transitioned frame as numpy array
+    """
+    h, w = current_frame.shape[:2]
+    result = current_frame.copy()
+    
+    if direction == 'right':
+        # Slide right: next frame comes from the right
+        x = int(w * progress)
+        result[:, :w-x] = next_frame[:, x:]
+        result[:, w-x:] = current_frame[:, w-x:]
+        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
+    elif direction == 'left':
+        # Slide left: next frame comes from the left
+        x = int(w * (1 - progress))
+        result[:, x:] = next_frame[:, :w-x]
+        result[:, :x] = current_frame[:, w-x:]
+        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
+    elif direction == 'down':
+        # Slide down: next frame comes from the bottom
+        y = int(h * progress)
+        result[:h-y, :] = next_frame[y:, :]
+        result[h-y:, :] = current_frame[h-y:, :]
+        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
+    elif direction == 'up':
+        # Slide up: next frame comes from the top
+        y = int(h * (1 - progress))
+        result[y:, :] = next_frame[:h-y, :]
+        result[:y, :] = current_frame[h-y:, :]
+        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
+    else:
+        logger.warning(f"Unknown slide direction: {direction}. Defaulting to right slide.")
+        
+    return result
+
+
+def crossfade_effect(current_frame, next_frame, progress, blur_amount=5):
+    """Crossfade with blur effect between frames.
+    
+    Args:
+        current_frame: Current frame as numpy array
+        next_frame: Next frame as numpy array
+        progress: Float between 0 and 1 representing transition progress
+        blur_amount: Amount of blur to apply during transition
+        
+    Returns:
+        Transitioned frame as numpy array
+    """
+    # Log the crossfade progress
+    logger.debug(f"Crossfade effect - Progress: {progress:.2f}, Blur amount: {blur_amount}")
+    
+    # Apply blur to both frames during transition
+    if 0 < progress < 1:
+        # Ensure Gaussian kernel is a positive odd integer
+        k = max(1, int(blur_amount))
+        if k % 2 == 0:
+            k += 1
+        current_blurred = cv2.GaussianBlur(current_frame, (k, k), 0)
+        next_blurred = cv2.GaussianBlur(next_frame, (k, k), 0)
+        result = cv2.addWeighted(current_blurred, 1 - progress, next_blurred, progress, 0)
+        logger.debug(f"Crossfade frame - Current weight: {1 - progress:.2f}, Next weight: {progress:.2f}")
+        return result
+        
+    if progress >= 1:
+        logger.debug("Crossfade complete - Showing next frame")
+        return next_frame
+    else:
+        logger.debug("Crossfade starting - Showing current frame")
+        return current_frame
+
+
+def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=50, start_frame=0):
     """
     Fits the image height to the video height, then pans horizontally
     so that over the course of `duration` seconds, the window moves
@@ -64,14 +160,16 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
         idx: Slide index (used to determine pan direction)
         fps: Frames per second
         blur_amount: Radius of the Gaussian blur (0 = no blur, higher = more blur)
+        start_frame: Frame number to start from (used to skip frames after transition)
     """
     res_w, res_h = resolution
     num_frames = int(duration * fps)
     
-    # Log the panning direction and blur status
+    # Log the panning direction and blur status with more details
     direction = "left→right" if idx % 2 == 0 else "right→left"
     blur_status = f"with blur (kernel size: {blur_amount*2 + 1})" if blur_amount > 0 else "without blur"
-    logger.info(f"Processing slide {img_path} with index {idx}, panning {direction} {blur_status}")
+    logger.info(f"Processing slide {os.path.basename(img_path)} with index {idx}, panning {direction} {blur_status}")
+    logger.debug(f"  - Start frame: {start_frame}, Total frames: {num_frames}, Duration: {duration:.2f}s")
 
     # Read the image and apply blur
     img = cv2.imread(img_path)
@@ -105,18 +203,28 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     # Calculate the maximum possible x position (0 if image is narrower than video width)
     max_x = max(0, scaled_w - res_w)
     
-    for i in range(num_frames):
-        # fraction from 0.0→1.0
-        t = i / (num_frames - 1) if num_frames > 1 else 0.0
+    if start_frame >= num_frames:
+        logger.warning(f"start_frame ({start_frame}) is greater than total frames ({num_frames}). Using last frame.")
+        start_frame = max(0, num_frames - 1)
+    
+    # Generate frames starting from start_frame
+    effective_frames = max(1, num_frames - start_frame)
+    for i in range(start_frame, num_frames):
+        # Calculate progress using absolute index so skipping frames advances t
+        t = (i / (num_frames - 1)) if num_frames > 1 else 0.0
+        # Clamp t to [0.0, 1.0]
+        t = max(0.0, min(1.0, t))
         
         # Only apply panning if the image is wider than the video
         if max_x > 0:
             if idx % 2 == 0:
                 # left → right
-                x = int(t * max_x)
+                x = int(round(t * max_x))
             else:
                 # right → left
-                x = int((1 - t) * max_x)
+                x = int(round((1 - t) * max_x))
+            # Clamp x within valid bounds
+            x = max(0, min(x, max_x))
         else:
             # Center the image if it's not wide enough to pan
             x = 0
@@ -124,12 +232,70 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
         logger.debug(f"Frame {i}: x={x}, t={t:.2f}, max_x={max_x}, direction={'left→right' if idx % 2 == 0 else 'right→left'}")
 
         frame = scaled[:, x: x + res_w]
-            
-        cv2.imwrite(os.path.join(temp_frame_dir, f"frame_{frame_counter:05d}.jpg"), frame)
-        frame_counter += 1
-        frames_actually_written += 1
+        
+        # Ensure the frame is not empty before writing
+        if frame.size == 0:
+            logger.warning(f"Empty frame generated at x={x}, using black frame instead")
+            frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
+        
+        frame_path = os.path.join(temp_frame_dir, f"frame_{frame_counter:05d}.jpg")
+        try:
+            success = cv2.imwrite(frame_path, frame)
+            if not success:
+                logger.error(f"Failed to write frame {frame_path}")
+                # Skip this frame but continue with the rest
+                continue
+            frame_counter += 1
+            frames_actually_written += 1
+        except Exception as e:
+            logger.error(f"Error writing frame {frame_path}: {str(e)}")
+            continue
     
     return frame_counter # Return updated frame_counter
+
+
+def render_panned_frame(img_path, resolution, idx, t, blur_amount=0):
+    """Render a single frame of a slide at a given pan progress t in [0,1].
+    Mirrors the preprocessing in apply_panoramic_pan to ensure visual continuity.
+    """
+    res_w, res_h = resolution
+    img = cv2.imread(img_path)
+    if img is None:
+        logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
+        return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+
+    img_h, img_w = img.shape[:2]
+    scale = res_h / img_h
+    scaled_w = int(img_w * scale)
+    scaled = cv2.resize(img, (scaled_w, res_h))
+
+    if scaled_w < res_w:
+        pad = res_w - scaled_w
+        left = pad // 2
+        right = pad - left
+        scaled = cv2.copyMakeBorder(scaled, 0, 0, left, right, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        scaled_w = res_w
+
+    if blur_amount > 0:
+        scaled = apply_blur(scaled, blur_amount)
+
+    max_x = max(0, scaled_w - res_w)
+    # Clamp t and compute x using same direction logic
+    t = max(0.0, min(1.0, float(t)))
+    if max_x > 0:
+        if idx % 2 == 0:
+            x = int(round(t * max_x))
+        else:
+            x = int(round((1 - t) * max_x))
+        x = max(0, min(x, max_x))
+    else:
+        x = 0
+
+    frame = scaled[:, x: x + res_w]
+    if frame.size == 0:
+        logger.warning(f"render_panned_frame: Empty crop generated (x={x}), using black frame")
+        frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    return frame
 
 def get_video_duration(filepath):
     """Get the duration of a video file using ffprobe."""
@@ -191,7 +357,7 @@ def convert_to_jpg(image_path, quality=95):
         return None
 
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=50):
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=50, transition_type='random', transition_duration=0.5):
     """
     Generates the final slideshow video using OpenCV.
     
@@ -203,6 +369,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         resolution: Video resolution as (width, height)
         fps: Frames per second for the output video
         blur_amount: Amount of blur to apply (0 = no blur, higher = more blur)
+        transition_type: Type of transition between slides ('fade', 'crossfade', 'slide_left', 'slide_right', 'slide_up', 'slide_down')
+        transition_duration: Duration of transition in seconds
     """
     resolution = sanitize_size(resolution)
     res_w, res_h = resolution
@@ -236,6 +404,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     
     # Initialize frames_written counter
     frames_written = 0
+    # Track last selected transition to avoid immediate repeats when using 'random'
+    last_selected_transition = None
     
     for idx, slide in enumerate(slides):
         try:
@@ -244,7 +414,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             duration = end - start
             last_slide_end_time = max(last_slide_end_time, end)
             
-            logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): start={start:.2f}s, end={end:.2f}s, duration={duration:.2f}s")
+            logger.info(f"Processing slide {idx+1} (slides_processed={slides_processed}): start={start:.2f}s, end={end:.2f}s, duration={duration:.2f}s, transition={transition_type}")
 
             # First try to get the image path from the slide data if it exists
             img_path = slide.get('image_path')
@@ -323,17 +493,202 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     img_path = jpg_path
 
             logger.info(f"Processing image: {img_path}")
-            frames_written = apply_panoramic_pan(
-                temp_frame_dir=temp_frame_dir,
-                frame_counter=frames_written,
-                img_path=img_path,
-                duration=duration,
-                resolution=resolution,
-                idx=slides_processed,
-                fps=fps,
-                blur_amount=blur_amount
-            )
-            slides_processed += 1
+            # Determine transition type for this boundary (support 'random')
+            selected_transition_type = transition_type
+            if isinstance(transition_type, str) and transition_type.lower() == 'random':
+                transitions_pool = ['fade', 'crossfade', 'slide_left', 'slide_right', 'slide_up', 'slide_down']
+                # Avoid picking the same transition twice in a row when possible
+                if last_selected_transition in transitions_pool and len(transitions_pool) > 1:
+                    pool_no_repeat = [t for t in transitions_pool if t != last_selected_transition]
+                else:
+                    pool_no_repeat = transitions_pool
+                selected_transition_type = random.choice(pool_no_repeat)
+                last_selected_transition = selected_transition_type
+                logger.info(f"Selected random transition: {selected_transition_type}")
+
+            # Calculate transition frames if not the first slide
+            transition_frames = 0
+            if slides_processed > 0 and transition_duration > 0 and selected_transition_type != 'none':
+                transition_frames = int(transition_duration * fps)
+                logger.info(
+                    f"Preparing {selected_transition_type} transition between slides {slides_processed} and {slides_processed+1} | "
+                    f"from: {os.path.basename(slides[idx-1].get('image_path', 'unknown')) if idx>0 else 'N/A'} -> "
+                    f"to: {os.path.basename(img_path)} | duration: {transition_duration:.2f}s, frames: {transition_frames}, fps: {fps}"
+                )
+                
+                # Adjust duration for transition
+                original_duration = duration
+                duration -= transition_duration
+                if duration < 0:
+                    duration = 0.1  # Minimum duration for the slide
+                    logger.warning(f"Adjusted slide duration to minimum (0.1s) to accommodate transition")
+                
+                logger.debug(f"Original slide duration: {original_duration:.2f}s, After transition: {duration:.2f}s")
+                
+                # Load the next frame first
+                logger.debug(f"Preparing next frame using panned start of next slide: {img_path}")
+                # Estimate number of content frames for next slide (duration already adjusted)
+                next_num_frames = max(1, int(duration * fps))
+                # We will skip the first content frame after transition (start_frame=1),
+                # so align the transition's last frame to that first used progress
+                start_t = (1 / (next_num_frames - 1)) if next_num_frames > 1 else 0.0
+                next_frame = render_panned_frame(img_path, resolution, idx=slides_processed, t=start_t, blur_amount=blur_amount)
+                logger.debug(
+                    f"Next frame prepared via render_panned_frame | t={start_t:.4f}, frames={next_num_frames}, idx={slides_processed}"
+                )
+                
+                # For the first slide, use a black frame as current to fade in from black
+                if slides_processed == 0:
+                    current_frame = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+                else:
+                    # Calculate the frame number we should be using for the previous slide's last frame
+                    # This should be the last frame before the transition starts
+                    transition_start_frame = frames_written - 1
+                    current_frame_path = os.path.join(temp_frame_dir, f"frame_{transition_start_frame:05d}.jpg")
+                    logger.debug(f"Loading current frame from: {current_frame_path}")
+                    current_frame = cv2.imread(current_frame_path)
+                    
+                    # If we can't load the previous frame, try to load the first frame of the current slide
+                    if current_frame is None:
+                        logger.warning(f"Failed to load current frame: {current_frame_path}. Using first frame of current slide.")
+                        current_frame = next_frame.copy()
+                
+                # Log frame details
+                logger.debug(
+                    f"Current frame shape: {current_frame.shape if current_frame is not None else 'None'} | "
+                    f"Next frame shape: {next_frame.shape if next_frame is not None else 'None'}"
+                )
+                
+                # Apply transition effect with error handling
+                logger.info(
+                    f"Applying {selected_transition_type} transition over {transition_frames} frames "
+                    f"between slides {slides_processed} and {slides_processed+1} | "
+                    f"frame range: {frames_written:05d}-{frames_written + transition_frames - 1:05d}"
+                )
+                
+                # Make sure both frames have the same dimensions
+                if current_frame.shape != next_frame.shape:
+                    logger.warning(
+                        f"Frame dimension mismatch: current {current_frame.shape} vs next {next_frame.shape}. Resizing both to {resolution[1]}x{resolution[0]}"
+                    )
+                    current_frame = cv2.resize(current_frame, (resolution[0], resolution[1]))
+                    next_frame = cv2.resize(next_frame, (resolution[0], resolution[1]))
+                
+                try:
+                    # Write transition frames
+                    transition_written = 0
+                    for i in range(transition_frames):
+                        try:
+                            progress = (i + 1) / transition_frames
+                            frame_num = frames_written + i
+                            
+                            # Generate transition frame
+                            if selected_transition_type == 'fade':
+                                frame = fade_effect(current_frame, next_frame, progress)
+                            elif selected_transition_type.startswith('slide_'):
+                                direction = selected_transition_type.split('_')[1]
+                                frame = slide_effect(current_frame, next_frame, progress, direction)
+                            else:  # crossfade
+                                frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
+                            
+                            # Log progress at key checkpoints to avoid log spam
+                            if i in {0, max(0, transition_frames//4), max(0, transition_frames//2), max(0, 3*transition_frames//4), transition_frames-1}:
+                                logger.debug(
+                                    f"Transition frame {i+1}/{transition_frames} | global #{frame_num:05d} | progress={progress:.2f}"
+                                )
+                            
+                            # Ensure frame is in the correct format
+                            if frame is None:
+                                logger.warning(f"Generated frame is None, using black frame instead")
+                                frame = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+                            
+                            # Ensure frame has correct dimensions
+                            if frame.shape[0] != resolution[1] or frame.shape[1] != resolution[0]:
+                                frame = cv2.resize(frame, (resolution[0], resolution[1]))
+                            
+                            # Write the frame
+                            frame_path = os.path.join(temp_frame_dir, f"frame_{frame_num:05d}.jpg")
+                            success = cv2.imwrite(frame_path, frame)
+                            if not success:
+                                raise Exception(f"Failed to write frame {frame_path}")
+                            
+                            transition_written += 1
+                            
+                        except Exception as e:
+                            logger.error(f"Error in transition frame {i+1}/{transition_frames} between slides {slides_processed} and {slides_processed+1}: {str(e)}")
+                            logger.error(traceback.format_exc())
+                            # Skip this frame but continue with the rest
+                            # Continue with next frame even if one fails
+                            continue
+                    
+                    start_idx = frames_written
+                    frames_written += transition_frames
+                    end_idx = frames_written - 1
+                    logger.info(
+                        f"Transition complete. Wrote {transition_written}/{transition_frames} frames | "
+                        f"range: {start_idx:05d}-{end_idx:05d}"
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Critical error during transition: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    # Skip transition frames to prevent getting stuck
+                    frames_written += transition_frames
+            
+            # Calculate the number of frames for this slide
+            slide_frames = int(duration * fps)
+            
+            # For the first slide, start from frame 0
+            # For subsequent slides with transitions, we need to account for the transition frames
+            if slides_processed == 0:
+                start_frame = 0
+            else:
+                # If we had a transition, we need to start from frame 1 to avoid duplicating the last transition frame
+                start_frame = 1 if transition_frames > 0 else 0
+            
+            # Only generate frames if we have frames left after accounting for the start frame
+            try:
+                if slide_frames > start_frame:
+                    # Calculate the adjusted duration to account for skipped frames
+                    adjusted_duration = (slide_frames - start_frame) / fps
+                    
+                    logger.info(f"Processing slide {os.path.basename(img_path)} - frames: {slide_frames}, start: {start_frame}, duration: {adjusted_duration:.2f}s")
+                    
+                    frames_before = frames_written
+                    frames_written = apply_panoramic_pan(
+                        temp_frame_dir=temp_frame_dir,
+                        frame_counter=frames_written,
+                        img_path=img_path,
+                        duration=adjusted_duration,
+                        resolution=resolution,
+                        idx=slides_processed,
+                        fps=fps,
+                        blur_amount=blur_amount,
+                        start_frame=start_frame
+                    )
+                    
+                    frames_written_this_slide = frames_written - frames_before
+                    logger.info(f"Successfully wrote {frames_written_this_slide} frames for slide {slides_processed + 1}")
+                    
+                    # Verify the frames were written correctly
+                    expected_frame = os.path.join(temp_frame_dir, f"frame_{frames_written-1:05d}.jpg")
+                    if not os.path.exists(expected_frame):
+                        logger.warning(f"Expected frame {expected_frame} was not created!")
+                        # Create a black frame to prevent further issues
+                        cv2.imwrite(expected_frame, np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8))
+                        frames_written += 1
+                else:
+                    logger.warning(f"Skipping slide {slides_processed + 1} - not enough frames (need {start_frame + 1}, have {slide_frames})")
+                    frames_written += slide_frames
+                
+                slides_processed += 1
+                
+            except Exception as e:
+                logger.error(f"Error processing slide {slides_processed + 1}: {str(e)}")
+                logger.error(traceback.format_exc())
+                # Skip to next slide to prevent getting stuck
+                frames_written += max(1, slide_frames - start_frame)
+                slides_processed += 1
 
         except Exception as e:
             logger.error(f"Error processing slide {idx+1}: {e}")

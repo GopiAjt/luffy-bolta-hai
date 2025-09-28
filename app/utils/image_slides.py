@@ -27,7 +27,20 @@ if not api_key:
     raise ValueError("Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file")
 
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel("gemini-2.0-flash")
+model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+# Preferred domains for image sourcing (searched first with site-restricted queries)
+PRIORITY_DOMAINS: List[str] = [
+    "onepiece.fandom.com",
+    "www.cbr.com",
+    "cbr.com",
+    "thelibraryofohara.com",
+    "www.thelibraryofohara.com",
+    "www.screenrant.com",
+    "screenrant.com",
+    "www.gamerant.com",
+    "gamerant.com",
+]
 
 
 def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
@@ -225,69 +238,90 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     prompt = (
-        "You are an expert video content designer specializing in One Piece. "
-        "Your job is to map subtitle segments to visually engaging image search queries, "
-        "structured in JSON format.\n\n"
+    "You are an expert video content designer specializing in One Piece. "
+    "Your job is to map timestamped subtitle lines to visually engaging image search queries, "
+    "structured in JSON format.\n\n"
 
-        "CRITICAL RULES:\n"
-        "1. Every query MUST contain at least one One Piece character or location. "
-        "Never leave a query as just raw subtitle text.\n"
-        "2. Always include 'One Piece anime' in every image_search_query.\n"
-        "3. If the subtitle is too short (e.g., 1–2 words like 'prove', 'because', 'right?'), "
-        "merge it with adjacent subtitles into a meaningful sentence before generating a query.\n"
-        "   - Example: 'prove' + 'me wrong' + 'because' → 'Prove me wrong because...'\n"
-        "4. Priority for terms: characters > actions > locations > emotions > objects.\n"
-        "5. Queries must always describe a VISUAL moment (character pose, emotion, action, or setting). "
-        "Never just copy text from the subtitle.\n\n"
+    "CRITICAL RULES:\n"
+    "1. Every query MUST contain at least one One Piece character or location. "
+    "Never leave a query as raw subtitle text.\n"
+    "2. Always include the phrase 'One Piece anime' in every image_search_query.\n"
+    "3. If a subtitle is too short (e.g., 1–3 words like 'prove', 'because'), "
+    "merge it with adjacent subtitles into a meaningful sentence before generating a query.\n"
+    "   - Example: 'prove' + 'me wrong' + 'because' -> 'Prove me wrong because...' \n"
+    "4. Priority for terms: characters > actions > locations > emotions > objects.\n"
+    "5. Queries must always describe a VISUAL moment (character pose, emotion, action, or setting). "
+    "Never just copy text from the subtitle.\n\n"
 
-        "MERGE RULE:\n"
-        "- If a subtitle is shorter than 4 words or is incomplete (e.g., \"prove\", \"me wrong\", \"because\", \"right?\"),\n"
-        "  ALWAYS merge it with its nearest neighbors into one meaningful sentence before producing an image_search_query.\n"
-        "- Never output an image_search_query that contains only filler or fragment text.\n\n"
+    "MERGE RULES (fragments):\n"
+    "- If a subtitle contains fewer than 4 words or is a fragment, ALWAYS merge it with nearest neighbor(s) "
+    "to form a full sentence or clause before generating timestamps/queries.\n"
+    "- When merging, use start_time of the first line and end_time of the last line merged.\n\n"
 
-        "VISUAL VARIETY:\n"
-        "- Avoid repeating the same character/emotion more than twice in a row.\n"
-        "- Rotate between Straw Hats, side characters, and relevant locations when possible.\n"
-        "- Favor visually distinct frames (group shots, landscapes, dramatic poses).\n\n"
+    "TIMESTAMP / NARRATION ALIGNMENT RULES (MANDATORY):\n"
+    "- Use the provided subtitles' timestamps as the canonical timeline. Do NOT invent new timestamps.\n"
+    "- **NO GAPS**: If there is any gap between consecutive original subtitle times (next_start > prev_end), "
+    "adjust the previous segment's end_time to equal the next subtitle's start_time so the timeline is continuous.\n"
+    "- **NO OVERLAPS**: If two subtitles overlap (next_start < prev_end), MERGE them into one segment spanning "
+    "min(start) to max(end) and produce a single query for the merged segment.\n"
+    "- When merging or adjusting, preserve chronological order and ensure the output covers from the first "
+    "subtitle start to the last subtitle end with no missing time.\n\n"
 
-        "HANDLING SCENE TYPES:\n"
-        "For ACTION scenes: 'One Piece anime [character1] [action] [character2] [location]'\n"
-        "For DIALOGUE/EMOTION scenes: 'One Piece anime [character] [emotion/expression] close up'\n"
-        "For REVEALS/MYSTERIES: 'One Piece anime [character] shocked [arc/location]'\n"
-        "For TRANSITIONS: 'One Piece anime [location] scenery dramatic'\n\n"
+    "SPLITTING RULES (avoid long static slides):\n"
+    "- MAX_DURATION = 3.5 seconds per segment. If a (merged) segment's duration > MAX_DURATION, split it into "
+    "N equal contiguous subsegments where each subsegment duration <= MAX_DURATION. Compute chunk_len = (end-start)/N.\n"
+    "- For split subsegments, vary the image_search_query across subsegments to maintain visual variety, e.g.:\n"
+    "    part 1 -> '... close up'\n"
+    "    part 2 -> '... wide shot'\n"
+    "    part 3 -> '... detail' or '... reaction'\n"
+    "- For split items, keep summary concise and optionally append ' (part X/N)'.\n\n"
 
-        "TIMING RULES:\n"
-        "1. Segments must form a continuous timeline with NO gaps or overlaps. "
-        "The end_time of one segment should equal the start_time of the next.\n"
-        "2. If a merged segment is shorter than 2.5 seconds, merge it with the nearest neighbor "
-        "unless it represents a deliberate dramatic pause.\n"
-        "3. Standalone lines like 'Think about it', 'Now, consider Chapter 967', or 'Right?' "
-        "should ALWAYS be merged with the following segment.\n\n"
+    "SEGMENTATION GUIDELINES:\n"
+    "- Normally map each subtitle line to its own output segment after fragment-merge logic.\n"
+    "- Segments should be between 1–4 seconds (never exceed 5s). Prefer more segments over fewer.\n"
+    "- Never combine more than 2–3 subtitles unless they are obviously one continuous sentence.\n\n"
 
-        "OUTPUT RULES:\n"
-        "1. Input subtitles are timestamped. You may MERGE consecutive subtitles into larger segments "
-        "if they clearly form one sentence/thought.\n"
-        "2. For each merged segment, output JSON with:\n"
-        "   - start_time (from first subtitle)\n"
-        "   - end_time (from last subtitle)\n"
-        "   - summary: concise paraphrase of the line(s)\n"
-        "   - image_search_query: refined search query following rules above\n\n"
+    "VISUAL VARIETY:\n"
+    "- Avoid repeating same character/emotion more than twice in a row.\n"
+    "- Rotate between Straw Hats, side characters, and relevant locations when possible.\n"
+    "- Favor visually distinct frames (group shots, wide landscape, mid-shot, close-up, dramatic reactions).\n\n"
 
-        "OUTPUT FORMAT (JSON array only, no commentary):\n"
-        "[\n"
-        "  {\n"
-        "    \"start_time\": \"0:00:00\",\n"
-        "    \"end_time\": \"0:00:05\",\n"
-        "    \"summary\": \"Zoro absorbs Luffy’s unbearable pain\",\n"
-        "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark pain bloodied determined\"\n"
-        "  }\n"
-        "]\n\n"
+    "HANDLING SILENCE OR EXTRA AUDIO:\n"
+    "- If there is silent audio before the first subtitle or after the last subtitle, create a neutral transition slide "
+    "covering that time (e.g., 'One Piece anime scenery dramatic' or 'One Piece anime logo').\n"
+    "- If you need extra slides for pacing, split existing segments (per MAX_DURATION) rather than leaving long gaps.\n\n"
 
-        "Now carefully analyze the subtitles below, merge fragments where needed, "
-        "and generate the JSON array.\n\n"
-        f"{raw_subtitles}"
-    )
+    "OUTPUT SPEC (strict):\n"
+    "1. Return a JSON array only (no commentary, no code fences).\n"
+    "2. Each array element must be an object with exactly these keys:\n"
+    "   - start_time (string, same format as input, e.g., '0:00:03.41')\n"
+    "   - end_time (string)\n"
+    "   - summary (short paraphrase)\n"
+    "   - image_search_query (must contain 'One Piece anime' + a visual description)\n\n"
+    "3. Timestamps must be continuous: for every i, slides[i].end_time == slides[i+1].start_time.\n"
+    "4. Use merged timestamps when you merged fragments; use split timestamps (equal chunks) when you split a long segment.\n\n"
 
+    "EXAMPLES:\n"
+    "[\n"
+    "  {\n"
+    "    \"start_time\": \"0:00:04.05\",\n"
+    "    \"end_time\": \"0:00:07.05\",\n"
+    "    \"summary\": \"Zoro absorbs Luffy's pain (part 1/2)\",\n"
+    "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark close up bloodied\"\n"
+    "  },\n"
+    "  {\n"
+    "    \"start_time\": \"0:00:07.05\",\n"
+    "    \"end_time\": \"0:00:10.05\",\n"
+    "    \"summary\": \"Zoro absorbs Luffy's pain (part 2/2)\",\n"
+    "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark wide shot injured\"\n"
+    "  }\n"
+    "]\n\n"
+
+    "All rules above are MANDATORY. Now carefully analyze the exact timestamped subtitles below, apply fragment-merge, "
+    "split long segments per MAX_DURATION, fix gaps/overlaps per the Timestamp rules, ensure continuous timestamps across all segments, "
+    "and return ONLY a JSON array of the segments.\n\n"
+    f"{raw_subtitles}"
+)
 
 
 
@@ -410,7 +444,8 @@ def google_image_search(query: str, api_key: Optional[str] = None, cse_id: Optio
     Returns:
         List of image search results
     """
-    api_key = api_key or os.getenv("GOOGLE_API_KEY")
+    # Prefer a dedicated CSE API key if provided; fall back to GOOGLE_API_KEY
+    api_key = api_key or os.getenv("GOOGLE_CSE_API_KEY") or os.getenv("GOOGLE_API_KEY")
     cse_id = cse_id or os.getenv("GOOGLE_SEARCH_ENGINE_ID")
     
     if not api_key or not cse_id:
@@ -607,6 +642,13 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     
     logger.info(f"Downloading images to {out_dir} from {json_path}")
+
+    # Early credential check to avoid repeated error spam
+    _cse_api_key = os.getenv("GOOGLE_CSE_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    _cse_id = os.getenv("GOOGLE_SEARCH_ENGINE_ID")
+    if not _cse_api_key or not _cse_id:
+        logger.error("Google Custom Search credentials missing. Set GOOGLE_SEARCH_ENGINE_ID and GOOGLE_CSE_API_KEY (or GOOGLE_API_KEY).")
+        raise RuntimeError("Missing Google CSE credentials: set GOOGLE_SEARCH_ENGINE_ID and GOOGLE_CSE_API_KEY/GOOGLE_API_KEY in your .env")
     
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
@@ -619,63 +661,120 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
         if not search_query:
             logger.warning(f"[Slide {idx+1}] No image_search_query")
             continue
-            
+
         logger.info(f"[Slide {idx+1}] Processing query: {search_query}")
-        
+
         # Track if we've successfully downloaded an image
         downloaded = False
-        
-        # Try the original query and fallbacks
-        for query in [search_query] + _generate_fallback_queries(search_query):
+
+        # Prepare the list of queries: try site-restricted searches on preferred domains first
+        fallback_queries = _generate_fallback_queries(search_query)
+
+        # 1) Try all priority domains at once using a combined site filter
+        combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS]) + ")"
+        for q in [search_query] + fallback_queries:
             if downloaded:
                 break
-                
-            logger.debug(f"[Slide {idx+1}] Trying search: {query}")
-            items = google_image_search(query, num_results=10)
-            
+            site_query = f"{combined_site_filter} {q}"
+            logger.debug(f"[Slide {idx+1}] Trying combined priority sites search: {site_query}")
+            items = google_image_search(site_query, num_results=10)
+
             if not items:
-                logger.debug(f"[Slide {idx+1}] No results for: {query}")
+                logger.debug(f"[Slide {idx+1}] No results for: {site_query}")
                 continue
-                
-            logger.info(f"[Slide {idx+1}] Found {len(items)} results for: {query}")
+
+            logger.info(f"[Slide {idx+1}] Found {len(items)} results across priority sites")
 
             # Process search results
             for item in items:
                 if downloaded:
                     break
-                    
+
                 item_link = item.get('link', '')
                 item_title = item.get('title', '').lower()
                 item_mime = item.get('mime', '')
-                
+
                 # Skip if no link or invalid MIME type
                 if not item_link or not item_mime.startswith('image/'):
                     continue
-                    
+
                 # Check for One Piece relevance
                 is_onepiece = ('one piece' in item_title or 
-                             any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
-                
+                               any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+
                 if not is_onepiece:
                     logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
                     continue
-                
+
                 # Check for duplicates
                 is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
                 if is_duplicate:
                     logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
                     continue
-                
+
                 # Try to download the image
                 filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
                 save_path = os.path.join(out_dir, filename)
-                
+
                 if download_image(item_link, save_path):
                     downloaded_hashes.add(image_hash)
                     slide["image_path"] = save_path
                     downloaded = True
-                    logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
+                    logger.info(f"[Slide {idx+1}] Downloaded from priority sites: {os.path.basename(save_path)}")
                     break
+
+        # 2) If still not downloaded, fall back to generic searches as before
+        if not downloaded:
+            for query in [search_query] + fallback_queries:
+                if downloaded:
+                    break
+
+                logger.debug(f"[Slide {idx+1}] Trying generic search: {query}")
+                items = google_image_search(query, num_results=10)
+
+                if not items:
+                    logger.debug(f"[Slide {idx+1}] No results for: {query}")
+                    continue
+
+                logger.info(f"[Slide {idx+1}] Found {len(items)} results for generic query")
+
+                # Process search results
+                for item in items:
+                    if downloaded:
+                        break
+
+                    item_link = item.get('link', '')
+                    item_title = item.get('title', '').lower()
+                    item_mime = item.get('mime', '')
+
+                    # Skip if no link or invalid MIME type
+                    if not item_link or not item_mime.startswith('image/'):
+                        continue
+
+                    # Check for One Piece relevance
+                    is_onepiece = ('one piece' in item_title or 
+                                   any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+
+                    if not is_onepiece:
+                        logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
+                        continue
+
+                    # Check for duplicates
+                    is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
+                    if is_duplicate:
+                        logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
+                        continue
+
+                    # Try to download the image
+                    filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
+                    save_path = os.path.join(out_dir, filename)
+
+                    if download_image(item_link, save_path):
+                        downloaded_hashes.add(image_hash)
+                        slide["image_path"] = save_path
+                        downloaded = True
+                        logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
+                        break
     
     # Save the updated slides with image paths
     with open(json_path, 'w', encoding='utf-8') as f:

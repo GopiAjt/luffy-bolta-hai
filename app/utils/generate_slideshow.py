@@ -8,6 +8,7 @@ import io
 import logging
 import subprocess # Added this import
 import random
+import math
 from app.config import VIDEO_RESOLUTION
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,33 @@ def parse_time(t):
     """Converts '0:00:06.28' to seconds."""
     h, m, s = t.split(":")
     return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+# Default easing to apply across transition effects
+DEFAULT_EASING = 'cosine'
+
+# Gamma used for approximate sRGB linearization
+GAMMA = 2.2
+
+def to_linear_bgr(img: np.ndarray) -> np.ndarray:
+    """Convert uint8 BGR sRGB image to linear float32 [0,1]."""
+    x = img.astype(np.float32) / 255.0
+    # Simple gamma approximation
+    return np.power(x, GAMMA)
+
+def to_srgb_bgr(img_linear: np.ndarray) -> np.ndarray:
+    """Convert linear float32 [0,1] to uint8 BGR sRGB image."""
+    x = np.clip(img_linear, 0.0, 1.0)
+    x = np.power(x, 1.0 / GAMMA)
+    return (x * 255.0 + 0.5).astype(np.uint8)
+
+def blend_linear_bgr(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
+    """Gamma-correct (linear space) blend between a and b with weight t (0..1)."""
+    t = float(max(0.0, min(1.0, t)))
+    la = to_linear_bgr(a)
+    lb = to_linear_bgr(b)
+    lc = la * (1.0 - t) + lb * t
+    return to_srgb_bgr(lc)
 
 
 def sanitize_size(size):
@@ -48,9 +76,8 @@ def apply_blur(image, blur_amount):
 
 
 def fade_effect(current_frame, next_frame, progress):
-    """Fade between current and next frame.
-    
-    Args:
+    """
+    Simple fade effect that blends between two frames based on progress
         current_frame: Current frame as numpy array
         next_frame: Next frame as numpy array
         progress: Float between 0 and 1 representing transition progress
@@ -59,7 +86,9 @@ def fade_effect(current_frame, next_frame, progress):
         Transitioned frame as numpy array
     """
     logger.debug(f"Applying fade effect - Progress: {progress:.2f} ({(progress*100):.0f}%)")
-    return cv2.addWeighted(current_frame, 1 - progress, next_frame, progress, 0)
+    p = ease_progress(progress, DEFAULT_EASING)
+    # Gamma-correct blend for better midtones
+    return blend_linear_bgr(current_frame, next_frame, p)
 
 
 def slide_effect(current_frame, next_frame, progress, direction='right'):
@@ -79,25 +108,29 @@ def slide_effect(current_frame, next_frame, progress, direction='right'):
     
     if direction == 'right':
         # Slide right: next frame comes from the right
-        x = int(w * progress)
+        p = ease_progress(progress, DEFAULT_EASING)
+        x = int(w * p)
         result[:, :w-x] = next_frame[:, x:]
         result[:, w-x:] = current_frame[:, w-x:]
         logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
     elif direction == 'left':
         # Slide left: next frame comes from the left
-        x = int(w * (1 - progress))
+        p = ease_progress(progress, DEFAULT_EASING)
+        x = int(w * (1 - p))
         result[:, x:] = next_frame[:, :w-x]
         result[:, :x] = current_frame[:, w-x:]
         logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
     elif direction == 'down':
         # Slide down: next frame comes from the bottom
-        y = int(h * progress)
+        p = ease_progress(progress, DEFAULT_EASING)
+        y = int(h * p)
         result[:h-y, :] = next_frame[y:, :]
         result[h-y:, :] = current_frame[h-y:, :]
         logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
     elif direction == 'up':
         # Slide up: next frame comes from the top
-        y = int(h * (1 - progress))
+        p = ease_progress(progress, DEFAULT_EASING)
+        y = int(h * (1 - p))
         result[y:, :] = next_frame[:h-y, :]
         result[:y, :] = current_frame[h-y:, :]
         logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
@@ -122,19 +155,22 @@ def crossfade_effect(current_frame, next_frame, progress, blur_amount=5):
     # Log the crossfade progress
     logger.debug(f"Crossfade effect - Progress: {progress:.2f}, Blur amount: {blur_amount}")
     
+    # Apply easing to progress for weight computation
+    p = ease_progress(progress, DEFAULT_EASING)
     # Apply blur to both frames during transition
-    if 0 < progress < 1:
+    if 0 < p < 1:
         # Ensure Gaussian kernel is a positive odd integer
         k = max(1, int(blur_amount))
         if k % 2 == 0:
             k += 1
         current_blurred = cv2.GaussianBlur(current_frame, (k, k), 0)
         next_blurred = cv2.GaussianBlur(next_frame, (k, k), 0)
-        result = cv2.addWeighted(current_blurred, 1 - progress, next_blurred, progress, 0)
-        logger.debug(f"Crossfade frame - Current weight: {1 - progress:.2f}, Next weight: {progress:.2f}")
+        # Gamma-correct blend
+        result = blend_linear_bgr(current_blurred, next_blurred, p)
+        logger.debug(f"Crossfade frame - Current weight: {1 - p:.2f}, Next weight: {p:.2f}")
         return result
         
-    if progress >= 1:
+    if p >= 1:
         logger.debug("Crossfade complete - Showing next frame")
         return next_frame
     else:
@@ -297,6 +333,261 @@ def render_panned_frame(img_path, resolution, idx, t, blur_amount=0):
         frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
     return frame
 
+
+def weighted_choice(weighted_items):
+    """Pick an item from a list of (item, weight) tuples."""
+    total = sum(w for _, w in weighted_items)
+    if total <= 0:
+        # fallback to uniform choice over items
+        items = [it for it, _ in weighted_items]
+        return random.choice(items)
+    r = random.uniform(0, total)
+    upto = 0
+    for item, weight in weighted_items:
+        upto += weight
+        if upto >= r:
+            return item
+    # Fallback (floating point edge)
+    return weighted_items[-1][0]
+
+
+LEFT_DIR_NAMES = {"slide_left", "motion_slide_left", "whip_pan_left"}
+RIGHT_DIR_NAMES = {"slide_right", "motion_slide_right", "whip_pan_right"}
+
+
+def choose_transition(slides_processed, next_slide_duration, last_selected_transition, avoid_same_direction_horizontal=True):
+    """Heuristic to choose a pleasing transition for the boundary to the next slide.
+    Rules:
+    - Prefer soft transitions (fade/crossfade) for short durations.
+    - Favor slide direction that complements next slide pan direction.
+    - Occasionally use vertical slides for variety.
+    - Avoid immediate repeats.
+    """
+    # Thresholds and weights (tweakable)
+    min_duration_for_slide = 1.2  # seconds
+    soft_weights = [("fade", 0.4), ("fade_eased", 0.25), ("crossfade", 0.2), ("zoom_dissolve", 0.15)]
+    # Determine pan direction for upcoming slide (we use slides_processed parity)
+    # even -> pan L→R, odd -> pan R→L
+    next_pan = "lr" if (slides_processed % 2 == 0) else "rl"
+
+    # Build candidate pool with weights
+    candidates = []
+    if next_slide_duration < min_duration_for_slide:
+        candidates = soft_weights[:]  # prefer soft transitions for short slides
+    else:
+        # base soft/hard mix
+        soft_mix = [("fade", 0.25), ("fade_eased", 0.2), ("crossfade", 0.15), ("zoom_dissolve", 0.1)]
+        if next_pan == "lr":
+            hard_mix = [("slide_right", 0.35), ("motion_slide_right", 0.2), ("whip_pan_right", 0.1)]
+        else:
+            hard_mix = [("slide_left", 0.35), ("motion_slide_left", 0.2), ("whip_pan_left", 0.1)]
+        # small chance of vertical slide for variety
+        vertical_mix = [("slide_up", 0.04), ("slide_down", 0.04)]
+        special_mix = [("radial_wipe", 0.06)]
+        candidates = soft_mix + hard_mix + vertical_mix + special_mix
+
+    # Optionally avoid same-direction horizontal slide as upcoming pan
+    if avoid_same_direction_horizontal:
+        if next_pan == "lr":
+            filtered = [(t, w) for (t, w) in candidates if t not in RIGHT_DIR_NAMES]
+            if filtered:
+                candidates = filtered
+        else:
+            filtered = [(t, w) for (t, w) in candidates if t not in LEFT_DIR_NAMES]
+            if filtered:
+                candidates = filtered
+
+    # Avoid immediate repeat when possible
+    pruned = [(t, w) for (t, w) in candidates if t != last_selected_transition]
+    selected = weighted_choice(pruned if pruned else candidates)
+    logger.info(
+        f"Heuristic choose_transition -> pan={next_pan}, duration={next_slide_duration:.2f}s, "
+        f"last={last_selected_transition}, chosen={selected}"
+    )
+    return selected
+
+
+# Normalize horizontal transition names to match upcoming pan direction
+# next_pan: 'lr' (left→right) or 'rl' (right→left)
+def normalize_horizontal_transition(name, next_pan):
+    if not isinstance(name, str):
+        return name
+    # Map desired direction based on pan
+    desired = 'right' if next_pan == 'lr' else 'left'
+    # Simple replacements for known directional transitions
+    mapping = {
+        'slide_left': 'slide_right' if desired == 'right' else 'slide_left',
+        'slide_right': 'slide_right' if desired == 'right' else 'slide_left',
+        'motion_slide_left': 'motion_slide_right' if desired == 'right' else 'motion_slide_left',
+        'motion_slide_right': 'motion_slide_right' if desired == 'right' else 'motion_slide_left',
+        'whip_pan_left': 'whip_pan_right' if desired == 'right' else 'whip_pan_left',
+        'whip_pan_right': 'whip_pan_right' if desired == 'right' else 'whip_pan_left',
+    }
+    return mapping.get(name, name)
+
+
+def flip_horizontal_transition(name):
+    """Flip left<->right variants for horizontal directional transitions."""
+    mapping = {
+        'slide_left': 'slide_right',
+        'slide_right': 'slide_left',
+        'motion_slide_left': 'motion_slide_right',
+        'motion_slide_right': 'motion_slide_left',
+        'whip_pan_left': 'whip_pan_right',
+        'whip_pan_right': 'whip_pan_left',
+    }
+    return mapping.get(name, name)
+
+
+# ------------------ New Transition Effects ------------------
+
+def ease_progress(p, kind='cosine'):
+    p = max(0.0, min(1.0, float(p)))
+    if kind == 'cosine':
+        return 0.5 - 0.5 * math.cos(math.pi * p)
+    if kind == 'smoothstep':
+        return p * p * (3 - 2 * p)
+    if kind == 'sine':
+        return math.sin(p * math.pi * 0.5)
+    return p
+
+
+def center_crop_to(frame, size_wh):
+    w, h = size_wh
+    fh, fw = frame.shape[:2]
+    # When scaled larger than target, center-crop; when smaller, resize
+    if fw < w or fh < h:
+        frame = cv2.resize(frame, (w, h))
+        return frame
+    x0 = (fw - w) // 2
+    y0 = (fh - h) // 2
+    return frame[y0:y0 + h, x0:x0 + w]
+
+
+def zoom_dissolve_effect(current_frame, next_frame, progress, resolution, zoom=1.05, easing='cosine'):
+    p = ease_progress(progress, easing)
+    res_w, res_h = resolution
+    # scale next frame by factor 1 -> zoom
+    scale = 1.0 + (zoom - 1.0) * p
+    nh, nw = next_frame.shape[:2]
+    scaled = cv2.resize(next_frame, (int(nw * scale), int(nh * scale)), interpolation=cv2.INTER_CUBIC)
+    scaled = center_crop_to(scaled, (res_w, res_h))
+    # Mild unsharp mask for crispness after upscaling
+    us_k = 3
+    if us_k % 2 == 0:
+        us_k += 1
+    blurred = cv2.GaussianBlur(scaled, (us_k, us_k), 0)
+    sharpened = cv2.addWeighted(scaled, 1.15, blurred, -0.15, 0)
+    # Gamma-correct blend
+    out = blend_linear_bgr(current_frame, sharpened, p)
+    return out
+
+
+def motion_blur_kernel(length, orientation='horizontal'):
+    k = max(1, int(length))
+    if k % 2 == 0:
+        k += 1
+    if orientation == 'horizontal':
+        kernel = np.zeros((1, k), dtype=np.float32)
+        kernel[0, :] = 1.0 / k
+    else:
+        kernel = np.zeros((k, 1), dtype=np.float32)
+        kernel[:, 0] = 1.0 / k
+    return kernel
+
+
+def motion_blur_slide_effect(current_frame, next_frame, progress, direction='right', strength=15):
+    # Base slide composition
+    h, w = current_frame.shape[:2]
+    result = current_frame.copy()
+    p = ease_progress(progress, 'smoothstep')
+    if direction == 'right':
+        # Slide right: next frame comes from the right
+        x = int(w * p)
+        result[:, :w-x] = next_frame[:, x:]
+        result[:, w-x:] = current_frame[:, w-x:]
+        orientation = 'horizontal'
+    elif direction == 'left':
+        # Slide left: next frame comes from the left
+        x = int(w * (1 - p))
+        result[:, x:] = next_frame[:, :w-x]
+        result[:, :x] = current_frame[:, w-x:]
+        orientation = 'horizontal'
+    elif direction == 'down':
+        # Slide down: next frame comes from the bottom
+        y = int(h * p)
+        result[:h-y, :] = next_frame[y:, :]
+        result[h-y:, :] = current_frame[h-y:, :]
+        orientation = 'vertical'
+    else:  # up
+        y = int(h * (1 - p))
+        result[y:, :] = next_frame[:h-y, :]
+        result[:y, :] = current_frame[h-y:, :]
+        orientation = 'vertical'
+    # Apply motion blur proportional to progress
+    k = int(strength * max(0.1, min(1.0, 2 * abs(p - 0.5))))  # strongest mid-way
+    kernel = motion_blur_kernel(max(3, k), 'horizontal' if orientation == 'horizontal' else 'vertical')
+    blurred = cv2.filter2D(result, -1, kernel, borderType=cv2.BORDER_REPLICATE)
+    return blurred
+
+
+def fade_effect_eased(current_frame, next_frame, progress, easing='cosine'):
+    p = ease_progress(progress, easing)
+    return cv2.addWeighted(current_frame, 1 - p, next_frame, p, 0)
+
+
+def radial_wipe_effect(current_frame, next_frame, progress, feather=0.05):
+    # Build a circular mask from center that grows with progress
+    h, w = current_frame.shape[:2]
+    cx, cy = w / 2.0, h / 2.0
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    max_r = np.sqrt(cx ** 2 + cy ** 2)
+    # Apply easing to radius growth
+    p = ease_progress(progress, DEFAULT_EASING)
+    r = max(0.0, min(1.0, float(p))) * max_r
+    feather_px = feather * max(h, w)
+    # Mask grows from 0 to 1 with a feathered edge
+    mask = (dist - (r - feather_px)) / (feather_px + 1e-6)
+    mask = np.clip(mask, 0.0, 1.0)
+    mask = 1.0 - mask  # inside is 1, outside is 0
+    mask = np.clip(mask, 0.0, 1.0)
+    mask3 = np.dstack([mask, mask, mask]).astype(np.float32)
+    out = (next_frame.astype(np.float32) * mask3 + current_frame.astype(np.float32) * (1.0 - mask3)).astype(np.uint8)
+    return out
+
+
+def whip_pan_effect(current_frame, next_frame, progress, direction='right', blur_strength=25):
+    # Aggressive slide with strong motion blur and easing that speeds up then snaps
+    h, w = current_frame.shape[:2]
+    # Use sharper ease-in-out
+    p = ease_progress(progress, 'sine')
+    result = current_frame.copy()
+    if direction == 'right':
+        x = int(w * p)
+        result[:, :w - x] = next_frame[:, x:]
+        result[:, w - x:] = current_frame[:, w - x:]
+        orientation = 'horizontal'
+    elif direction == 'left':
+        x = int(w * (1 - p))
+        result[:, x:] = next_frame[:, :w - x]
+        result[:, :x] = current_frame[:, w - x:]
+        orientation = 'horizontal'
+    elif direction == 'down':
+        y = int(h * p)
+        result[:h - y, :] = next_frame[y:, :]
+        result[h - y:, :] = current_frame[h - y:, :]
+        orientation = 'vertical'
+    else:
+        y = int(h * (1 - p))
+        result[y:, :] = next_frame[:h - y, :]
+        result[:y, :] = current_frame[h - y:, :]
+        orientation = 'vertical'
+    # Strong motion blur regardless of p
+    kernel = motion_blur_kernel(max(5, int(blur_strength)), 'horizontal' if orientation == 'horizontal' else 'vertical')
+    blurred = cv2.filter2D(result, -1, kernel)
+    return blurred
+
 def get_video_duration(filepath):
     """Get the duration of a video file using ffprobe."""
     cmd = [
@@ -357,7 +648,7 @@ def convert_to_jpg(image_path, quality=95):
         return None
 
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=50, transition_type='random', transition_duration=0.5):
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=50, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True):
     """
     Generates the final slideshow video using OpenCV.
     
@@ -401,12 +692,101 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     slides_processed = 0
     
     logger.info(f"Starting to process {len(slides)} slides...")
-    
+
+    # -------- Prepass: select transitions and allocate frames to avoid tail padding --------
+    last_selected_transition = None
+    flip_remaining = 1 if flip_horizontal_once else 0
+    boundary_transition_types = []  # per slide index (same as processing index)
+    content_frames_float = []       # desired written content frames per slide (before rounding)
+    start_skips = []                # 0 for first slide or no transition, else 1
+    transition_frames_list = []     # frames written for transition before this slide
+
+    # First, select transitions per boundary deterministically for this run
+    for idx, slide in enumerate(slides):
+        # Parse timing
+        start = parse_time(slide["start_time"]) 
+        end = parse_time(slide["end_time"]) 
+        duration = end - start
+        # Decide transition type into THIS slide (except first)
+        selected_transition_type = 'none'
+        if idx > 0 and transition_duration > 0:
+            if isinstance(transition_type, str):
+                tt = transition_type.lower()
+                if tt == 'random':
+                    transitions_pool = [
+                        'fade', 'crossfade', 'fade_eased', 'zoom_dissolve', 'radial_wipe',
+                        'slide_left', 'slide_right', 'slide_up', 'slide_down',
+                        'motion_slide_left', 'motion_slide_right',
+                        'whip_pan_left', 'whip_pan_right'
+                    ]
+                    pool = [t for t in transitions_pool if t != last_selected_transition] or transitions_pool
+                    selected_transition_type = random.choice(pool)
+                elif tt == 'auto':
+                    expected_content_duration = max(0.1, duration - transition_duration)
+                    selected_transition_type = choose_transition(idx, expected_content_duration, last_selected_transition, avoid_same_direction_horizontal)
+                else:
+                    selected_transition_type = transition_type
+            # Normalize horizontal transitions to match upcoming pan (unless that would violate avoidance rule)
+            if selected_transition_type and selected_transition_type != 'none':
+                next_pan = 'lr' if (idx % 2 == 0) else 'rl'
+                normalized = normalize_horizontal_transition(selected_transition_type, next_pan)
+                # If avoidance is enabled, do not normalize into same-direction
+                if avoid_same_direction_horizontal:
+                    if (next_pan == 'lr' and normalized in RIGHT_DIR_NAMES) or (next_pan == 'rl' and normalized in LEFT_DIR_NAMES):
+                        logger.info(
+                            f"Skipped normalization to '{normalized}' to avoid same-direction with pan {next_pan}; keeping '{selected_transition_type}'"
+                        )
+                    else:
+                        if normalized != selected_transition_type:
+                            logger.info(f"Normalized transition '{selected_transition_type}' to '{normalized}' to match upcoming pan {next_pan}")
+                        selected_transition_type = normalized
+                else:
+                    if normalized != selected_transition_type:
+                        logger.info(f"Normalized transition '{selected_transition_type}' to '{normalized}' to match upcoming pan {next_pan}")
+                    selected_transition_type = normalized
+                # Optionally flip once per run for creative variety
+                if flip_remaining > 0:
+                    flipped = flip_horizontal_transition(selected_transition_type)
+                    if flipped != selected_transition_type:
+                        logger.info(f"Flipped horizontal transition once: '{selected_transition_type}' -> '{flipped}'")
+                        selected_transition_type = flipped
+                        flip_remaining -= 1
+            if selected_transition_type != 'none':
+                last_selected_transition = selected_transition_type
+        boundary_transition_types.append(selected_transition_type)
+
+        # Compute desired content frames (the frames we intend to WRITE for the slide's content)
+        content_duration = duration - (transition_duration if idx > 0 and selected_transition_type != 'none' else 0.0)
+        content_frames_float.append(max(0.0, content_duration * fps))
+        # Determine if we'll skip first content frame due to transition overlap
+        start_skips.append(1 if (idx > 0 and selected_transition_type != 'none') else 0)
+        transition_frames_list.append(int(transition_duration * fps) if (idx > 0 and selected_transition_type != 'none') else 0)
+
+    # Allocate integer content frames using largest remainder so that total == target - transitions
+    total_transition_frames = sum(transition_frames_list)
+    target_content_frames = total_output_frames - total_transition_frames
+    content_floor = [int(np.floor(x)) for x in content_frames_float]
+    remainders = [x - f for x, f in zip(content_frames_float, content_floor)]
+    allocated = content_floor[:]
+    deficit = target_content_frames - sum(allocated)
+    if deficit > 0:
+        # Distribute +1 to the largest remainders
+        order = sorted(range(len(remainders)), key=lambda i: remainders[i], reverse=True)
+        for i in order[:deficit]:
+            allocated[i] += 1
+    elif deficit < 0:
+        # Remove frames from smallest remainders (or anywhere) to match target
+        order = sorted(range(len(remainders)), key=lambda i: remainders[i])
+        for i in order[:abs(deficit)]:
+            if allocated[i] > 0:
+                allocated[i] -= 1
+
+    # Compute planned slide_frames passed to pan function (accounting for double skip in implementation)
+    planned_slide_frames = [alloc + 2 * start_skips[i] for i, alloc in enumerate(allocated)]
+
     # Initialize frames_written counter
     frames_written = 0
-    # Track last selected transition to avoid immediate repeats when using 'random'
-    last_selected_transition = None
-    
+
     for idx, slide in enumerate(slides):
         try:
             start = parse_time(slide["start_time"])
@@ -493,18 +873,10 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     img_path = jpg_path
 
             logger.info(f"Processing image: {img_path}")
-            # Determine transition type for this boundary (support 'random')
-            selected_transition_type = transition_type
-            if isinstance(transition_type, str) and transition_type.lower() == 'random':
-                transitions_pool = ['fade', 'crossfade', 'slide_left', 'slide_right', 'slide_up', 'slide_down']
-                # Avoid picking the same transition twice in a row when possible
-                if last_selected_transition in transitions_pool and len(transitions_pool) > 1:
-                    pool_no_repeat = [t for t in transitions_pool if t != last_selected_transition]
-                else:
-                    pool_no_repeat = transitions_pool
-                selected_transition_type = random.choice(pool_no_repeat)
-                last_selected_transition = selected_transition_type
-                logger.info(f"Selected random transition: {selected_transition_type}")
+            # Use preselected transition for this boundary to keep frame plan consistent
+            selected_transition_type = boundary_transition_types[idx]
+            if selected_transition_type and selected_transition_type != 'none' and idx > 0:
+                logger.info(f"Using preselected transition: {selected_transition_type}")
 
             # Calculate transition frames if not the first slide
             transition_frames = 0
@@ -585,10 +957,25 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                             # Generate transition frame
                             if selected_transition_type == 'fade':
                                 frame = fade_effect(current_frame, next_frame, progress)
+                            elif selected_transition_type == 'fade_eased':
+                                frame = fade_effect_eased(current_frame, next_frame, progress, easing='cosine')
+                            elif selected_transition_type == 'crossfade':
+                                frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
+                            elif selected_transition_type == 'zoom_dissolve':
+                                frame = zoom_dissolve_effect(current_frame, next_frame, progress, resolution)
+                            elif selected_transition_type == 'radial_wipe':
+                                frame = radial_wipe_effect(current_frame, next_frame, progress, feather=0.06)
+                            elif selected_transition_type.startswith('motion_slide_'):
+                                direction = selected_transition_type.split('_')[2]
+                                frame = motion_blur_slide_effect(current_frame, next_frame, progress, direction=direction, strength=15)
+                            elif selected_transition_type.startswith('whip_pan_'):
+                                direction = selected_transition_type.split('_')[2]
+                                frame = whip_pan_effect(current_frame, next_frame, progress, direction=direction, blur_strength=25)
                             elif selected_transition_type.startswith('slide_'):
                                 direction = selected_transition_type.split('_')[1]
                                 frame = slide_effect(current_frame, next_frame, progress, direction)
-                            else:  # crossfade
+                            else:
+                                # Fallback to crossfade
                                 frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
                             
                             # Log progress at key checkpoints to avoid log spam
@@ -635,8 +1022,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     # Skip transition frames to prevent getting stuck
                     frames_written += transition_frames
             
-            # Calculate the number of frames for this slide
-            slide_frames = int(duration * fps)
+            # Calculate planned frames for this slide's pan (based on pre-allocation)
+            slide_frames = planned_slide_frames[idx]
             
             # For the first slide, start from frame 0
             # For subsequent slides with transitions, we need to account for the transition frames
@@ -646,10 +1033,20 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 # If we had a transition, we need to start from frame 1 to avoid duplicating the last transition frame
                 start_frame = 1 if transition_frames > 0 else 0
             
+            # Last-slide correction: ensure we exactly hit total_output_frames
+            if idx == len(slides) - 1:
+                remaining_needed = total_output_frames - frames_written
+                corrected_slide_frames = remaining_needed + 2 * (1 if (slides_processed > 0 and transition_frames > 0) else 0)
+                if corrected_slide_frames != slide_frames and corrected_slide_frames > 0:
+                    logger.info(
+                        f"Adjusting last slide frames from {slide_frames} to {corrected_slide_frames} to meet target {total_output_frames}."
+                    )
+                    slide_frames = corrected_slide_frames
+
             # Only generate frames if we have frames left after accounting for the start frame
             try:
                 if slide_frames > start_frame:
-                    # Calculate the adjusted duration to account for skipped frames
+                    # Calculate the adjusted duration to ensure the function writes (slide_frames - 2*start_frame)
                     adjusted_duration = (slide_frames - start_frame) / fps
                     
                     logger.info(f"Processing slide {os.path.basename(img_path)} - frames: {slide_frames}, start: {start_frame}, duration: {adjusted_duration:.2f}s")
@@ -668,7 +1065,10 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     )
                     
                     frames_written_this_slide = frames_written - frames_before
-                    logger.info(f"Successfully wrote {frames_written_this_slide} frames for slide {slides_processed + 1}")
+                    planned_content_frames = slide_frames - 2 * start_frame
+                    logger.info(
+                        f"Successfully wrote {frames_written_this_slide} frames for slide {slides_processed + 1} (planned={planned_content_frames}, start_skip={start_frame})"
+                    )
                     
                     # Verify the frames were written correctly
                     expected_frame = os.path.join(temp_frame_dir, f"frame_{frames_written-1:05d}.jpg")
@@ -694,25 +1094,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             logger.error(f"Error processing slide {idx+1}: {e}")
             traceback.print_exc()
 
-    logger.info(f"Frames written after initial pass: {frames_written}")
-
-    # Padding logic to ensure the video reaches the total_duration
-    if frames_written < total_output_frames:
-        padding_needed = total_output_frames - frames_written
-        logger.info(f"Padding needed for {padding_needed} frames.")
-
-        # Create a blank frame to use for padding
-        blank_frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
-        blank_frame_path = os.path.join(temp_frame_dir, "blank_frame.jpg")
-        cv2.imwrite(blank_frame_path, blank_frame)
-
-        for i in range(padding_needed):
-            frame_path = os.path.join(temp_frame_dir, f"frame_{frames_written + i:05d}.jpg")
-            # For simplicity, we just copy the blank frame. A more advanced implementation could repeat the last slide.
-            cv2.imwrite(frame_path, blank_frame)
-        frames_written += padding_needed
-
-    logger.info(f"Total frames written after padding: {frames_written}")
+    logger.info(f"Frames written after generation: {frames_written}")
+    if frames_written != total_output_frames:
+        logger.warning(f"Frame count mismatch: wrote {frames_written}, expected {total_output_frames}. Consider re-checking allocation.")
 
     # Use ffmpeg to stitch frames into a video
     ffmpeg_command = [

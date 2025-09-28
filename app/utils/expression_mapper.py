@@ -60,7 +60,7 @@ def build_gemini_prompt(sub_lines):
 
 def setup_gemini(api_key: str):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.0-flash")
+    return genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 def generate_expression_mapping_with_gemini(model, sub_lines):

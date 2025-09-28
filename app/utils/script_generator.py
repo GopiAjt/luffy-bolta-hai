@@ -15,312 +15,149 @@ if not api_key:
 
 # 2. Configure the Gemini client
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel("gemini-2.0-flash")
+model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 
 def generate_script() -> str:
     """Generate a 30–60s One Piece narration script via Gemini."""
     try:
         topics = [
-            # CHARACTER RANKINGS & COMPARISONS
-            "Top 10 Strongest Straw Hats RANKED",
-            "Most Overpowered Devil Fruits EVER",
-            "Weakest to Strongest Admirals",
-            "Every Yonko Ranked by Power",
-            "Most Tragic One Piece Backstories",
-            "Smartest Characters in One Piece",
-            "Fastest Characters RANKED",
-            "Most Loyal Crew Members",
-            "Best One Piece Villains RANKED",
-            "Most Underrated Characters",
-            
-            # POWER SCALING & BATTLES
-            "Luffy vs Every Yonko - Who Wins?",
-            "Can Zoro Beat an Admiral?",
-            "Strongest Haki Users RANKED",
-            "Most Broken Devil Fruit Abilities",
-            "Garp vs Prime Whitebeard",
-            "Revolutionary Army vs Marines",
-            "Old Generation vs New Generation",
-            "Who Can Beat Kaido 1v1?",
-            "Mihawk's True Power Level",
-            "Blackbeard's Secret Third Devil Fruit?",
-            
-            # THEORIES & MYSTERIES
-            "The One Piece is Actually...",
-            "Imu's True Identity REVEALED",
-            "Joy Boy's Real Name Theory",
-            "Blackbeard's Body Secret",
-            "Zunesha's Ancient Crime",
-            "The Will of D Explained",
-            "Vegapunk's Final Message",
-            "Ancient Weapons Locations",
-            "Void Century Truth",
-            "Laugh Tale's Real Secret",
-            
-            # DEVIL FRUIT CONTENT
-            "Most Useless Devil Fruits",
-            "Devil Fruit Awakenings RANKED",
-            "Mythical Zoan Powers Explained",
-            "Logia vs Paramecia vs Zoan",
-            "Devil Fruit Weaknesses EXPOSED",
-            "Future Devil Fruit Users",
-            "Lost/Extinct Devil Fruits",
-            "Devil Fruit Origins Theory",
-            "Most Creative Devil Fruit Uses",
-            "Artificial vs Real Devil Fruits",
-            
-            # EMOTIONAL/DRAMATIC MOMENTS
-            "Saddest One Piece Deaths",
-            "Most Emotional Straw Hat Moments",
-            "Going Merry's Final Goodbye",
-            "Ace's Death Impact",
-            "Brook's Backstory Explained",
-            "Robin's 'I Want to Live!'",
-            "Sanji vs Zeff Flashback",
-            "Nami's Tears for Help",
-            "Chopper's Origin Story",
-            "Law's Tragic Past",
-            
-            # WORLD BUILDING & LORE
-            "Every One Piece Island RANKED",
-            "Grand Line Secrets Explained",
-            "Celestial Dragons' Dark Truth",
-            "Revolutionary Army Goals",
-            "Marine Ranks Explained",
-            "Pirate Crews Power Hierarchy",
-            "One Piece Timeline Explained",
-            "Ancient Kingdom Theory",
-            "Red Line Destruction Theory",
-            "All Blue Location Theory",
-            
-            # CREW DYNAMICS & RELATIONSHIPS
-            "Straw Hat Relationships RANKED",
-            "Who Joins the Crew Next?",
-            "Crew Member Roles Explained",
-            "Best Straw Hat Combos",
-            "Zoro vs Sanji Rivalry",
-            "Captain-First Mate Duos",
-            "Found Family Moments",
-            "Crew Recruitment Stories",
-            "Inter-Crew Friendships",
-            "Mentor-Student Relationships",
-            
-            # CHAPTER/ARC BREAKDOWNS
-            "This Week's Chapter BREAKDOWN",
-            "Best One Piece Arcs RANKED",
-            "Wano's Hidden Details",
-            "Marineford War Analysis",
-            "Whole Cake Island Secrets",
-            "Dressrosa Connections",
-            "Water 7 Foreshadowing",
-            "Enies Lobby Epic Moments",
-            "Alabasta Kingdom Politics",
-            "East Blue Arc Importance",
-            
-            # PREDICTIONS & FUTURE CONTENT
-            "Final War Predictions",
-            "Who Dies in the Final Arc?",
-            "Straw Hats' Final Bounties",
-            "End Game Power Rankings",
-            "One Piece Ending Theories",
-            "Next Villain Predictions",
-            "Future Alliance Theories",
-            "Straw Hat Dreams Coming True",
-            "Government Downfall Theory",
-            "New World Changes",
-            
-            # FUN FACTS & TRIVIA
-            "One Piece Easter Eggs",
-            "Oda's Hidden Messages",
-            "Real World Inspirations",
-            "Voice Actor Fun Facts",
-            "Animation Secrets",
-            "Manga vs Anime Differences",
-            "Cover Story Importance",
-            "SBS Question Highlights",
-            "Character Design Evolution",
-            "Behind the Scenes Facts",
-            
-            # CONTROVERSIAL TAKES
-            "Most Overrated Characters",
-            "Unpopular One Piece Opinions",
-            "Worst One Piece Decisions",
-            "Plot Holes in One Piece",
-            "Characters Who Should Be Stronger",
-            "Disappointing Reveals",
-            "Overhyped Moments",
-            "Boring Arcs Ranked",
-            "Wasted Character Potential",
-            "Animation Quality Issues",
-            
-            # NOSTALGIA & THROWBACKS
-            "Early One Piece vs Now",
-            "Forgotten Plot Points",
-            "Characters We Miss",
-            "Old Art Style vs New",
-            "First Appearances vs Current",
-            "Abandoned Storylines",
-            "Early Foreshadowing Payoffs",
-            "Classic Moments Ranked",
-            "Evolution of Animation",
-            "Original vs Current Voices",
-            
-            # QUICK EDUCATIONAL CONTENT
-            "One Piece in 60 Seconds",
-            "Devil Fruit Explained Simply",
-            "Haki Types Breakdown",
-            "Marine Ranks Quick Guide",
-            "Yonko System Explained",
-            "Revolutionary Army 101",
-            "World Government Structure",
-            "Pirate Crew Basics",
-            "Grand Line Navigation",
-            "One Piece Geography",
-            
-            # INTERACTIVE/ENGAGEMENT CONTENT
-            "Guess the Character by Laugh",
-            "One Piece Quiz Challenge",
-            "Rate My Top 10 List",
-            "Predict Next Chapter Events",
-            "Guess the Devil Fruit Power",
-            "Name That Attack Move",
-            "Character Voice Impressions",
-            "Draw One Piece Characters",
-            "React to First Time Watchers",
-            "Tier List Maker",
-            
-            # CURRENT EVENTS TOPICS
-            "Latest Chapter Reactions",
-            "New Episode Highlights",
-            "Manga vs Anime Comparisons",
-            "Live Action Adaptation News",
-            "Video Game Content",
-            "Merchandise Reviews",
-            "Convention Coverage",
-            "Voice Actor Interviews",
-            "Creator Statements",
-            "Fan Art Showcases",
-            
-            # CROSSOVER & COMPARISON CONTENT
-            "One Piece vs Naruto vs Bleach",
-            "Anime Power Scaling Cross-Series",
-            "Best Shonen Protagonists",
-            "Manga Art Style Comparisons",
-            "Voice Actor Shared Roles",
-            "Similar Character Archetypes",
-            "Story Structure Comparisons",
-            "Animation Studio Differences",
-            "Cultural Impact Analysis",
-            "International Reception",
-            
-            # MEME & HUMOR CONTENT
-            "Funniest One Piece Moments",
-            "Meme-able Character Expressions",
-            "Ridiculous Power-Ups",
-            "Absurd Plot Armor Moments",
-            "Weirdest Character Designs",
-            "Strangest Devil Fruits",
-            "Most Random Plot Twists",
-            "Goofy Animation Moments",
-            "Funny Translation Errors",
-            "Community Memes Explained"
+            # CHARACTER SECRET TEMPLATES
+
+            "{Character}'s Hidden {Power/Past/Connection} REVEALED",
+            "The FORBIDDEN Truth About {Character}'s {Ability/Origin}",
+            "{Character}'s Secret {Weakness/Strength} Oda Never Shows",
+            "Why {Character} is HIDING Their True {Power/Identity}",
+            "{Character}'s {Bloodline/Heritage/Family} Secret Exposed",
+
+            # ODA'S HIDDEN DETAILS TEMPLATES
+
+            "Oda HID This {Detail/Connection} in {Arc/Chapter}",
+            "The Secret {Foreshadowing/Message} Buried in {Scene/Arc}",
+            "{Number} Hidden Details You MISSED in {Arc/Episode}",
+            "Oda's Secret {Pattern/Code} Throughout One Piece",
+            "The {Symbol/Design/Reference} Oda Keeps Hiding",
+
+            # THEORY REVELATION TEMPLATES
+
+            "{Major Mystery} is Actually {Shocking Theory}",
+            "The REAL Reason Behind {Event/Decision/Power}",
+            "{Popular Belief} is WRONG - Here's the Truth",
+            "{Character/Object/Location}'s TRUE Purpose REVEALED",
+            "Why {Theory/Belief} Changes EVERYTHING",
+
+            # CONNECTION/RELATIONSHIP TEMPLATES
+
+            "The Hidden Connection Between {Character A} and {Character B}",
+            "How {Past Event} Secretly Affects {Current Situation}",
+            "{Character}'s Role in {Major Event} You Never Noticed",
+            "The {Bloodline/Crew/Organization} Connection Oda Hides",
+            "Why {Character} and {Character} Share This Secret"
+
+            # POWER/ABILITY MYSTERY TEMPLATES
+
+            "{Character}'s {Devil Fruit/Haki/Technique} Secret Ability",
+            "The Hidden {Type/Level/Form} of {Power System}",
+            "{Character} Can Do THIS But Never Shows It",
+            "The REAL Weakness of {Powerful Character/Ability}",
+            "{Power/Technique}'s True Origin EXPOSED"
+
+            # WORLD-BUILDING SECRET TEMPLATES
+
+            "The Dark Truth About {Organization/Location/System}",
+            "{Island/Kingdom/Organization}'s Hidden {Purpose/Past}",
+            "What {Government/Pirates/Marines} DON'T Want You to Know",
+            "The Secret Behind {World Building Element}",
+            "{Location/System}'s Connection to {Ancient Mystery}"
+
+            # CURRENT CONTENT TEMPLATES
+
+            "Chapter {Number}: The {Detail/Revelation} Everyone Missed",
+            "{Arc Name}'s BIGGEST Secret Finally Revealed",
+            "This Week's Chapter Hides {Shocking Discovery}",
+            "The {Current Villain/Situation} Connection to {Past Event}",
+            "Episode {Number}'s Hidden {Message/Foreshadowing}"
+
+            # CONTROVERSIAL ANGLE TEMPLATES
+
+            "Why {Popular Character/Theory} is Actually {Opposite Claim}",
+            "{Beloved Moment/Character} Has a Dark Secret",
+            "The {Disappointing/Confusing} Truth About {Popular Topic}",
+            "{Character} Made the WORST Possible Decision",
+            "{Fan Favorite Thing} is Actually Problematic"
+
+            # PREDICTION/FUTURE TEMPLATES
+
+            "{Character} Will {Action} in {Timeframe/Arc} - Here's Why",
+            "The Next {Crew Member/Villain/Power-Up} is Obviously {Prediction}",
+            "{Current Situation} Leads to {Major Future Event}",
+            "{Character}'s Final {Battle/Moment/Revelation} Predicted",
+            "How {Current Arc} Sets Up {Future Major Event}"
+
+            # COMPARATIVE ANALYSIS TEMPLATES
+
+            "{Character A} vs {Character B}: The Secret Difference",
+            "{Past Arc/Event} vs {Current Arc/Event}: Hidden Pattern",
+            "{Old Generation Character} vs {New Generation Character} Truth",
+            "{Power/Ability A} vs {Power/Ability B}: Which is Really Stronger",
+            "{Theory A} vs {Theory B}: Which Oda Actually Hints At"
         ]
         topic = random.choice(topics)
 
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
-            f"Create engaging content for a YouTube video about: \"{topic}\"\n\n"
-            "You MUST produce all 4 sections fully, in this exact order and format:\n\n"
-
-            "1. TITLE (Clickbait-style, under 70 chars):\n"
-            "Must feel urgent, emotional, or forbidden — no bland summaries.\n"
-            "Use ALL CAPS or emojis for emphasis — but not every time.\n"
-            "Every title must feel different — rotate between:\n"
-            "Shocking question (Ex: “Did Oda just confirm THIS?!”)\n"
-            "Impossible claim (Ex: “This ONE scene changes EVERYTHING!”)\n"
-            "Urgent warning (Ex: “Stop ignoring this clue before it’s too late!”)\n"
-            "Hidden truth (Ex: “The secret Oda buried in Chapter 1109”)\n"
-            "Avoid repeating sentence structures — mix fragments, exclamations, and numbers.\n"
-            "Use ONE power word if possible (Ex: “secret,” “shocking,” “hidden,” “forbidden”).\n"
-
-            "2. SCRIPT (30–40 seconds, ~60 words):\n"
-            "- PURE narration only — no SFX or music cues.\n"
-            "- Open with ONE short, high-impact hook (5–9 words).\n"
-            "- First 10 seconds must hit with curiosity (shocking claim, hidden truth, or contradiction).\n"
-            "- Keep a fast pace, vary sentence length — mix 2–3 punchy lines with longer rambling ones.\n"
-            "- Add emotional or surprising details immediately.\n"
-            "- End with a curiosity-driven CTA (8–12 words) that hints at the next big reveal.\n"
-
-            "3. HUMANIZATION LAYER (MANDATORY):\n"
-            "- Frame as your personal discovery (not just info).\n"
-            "- Show emotional vulnerability — doubt, excitement, fear, confusion.\n"
-            "- Use conversational fragments and natural hesitations\n"
-            "- Admit uncertainty, pose questions to the audience\n"
-
-            "HOOK VARIETY:\n"
-            "- Personal contradiction\n"
-            "- Discovery moment\n"
-            "- Shocking realization\n"
-            "- Revelation setup\n"
-            "- Hidden truth\n"
-            "- Time bomb\n"
-
-            "4. POWER WORDS\n"
-            "- Place one in the hook, one during mid-escalation, one near the end.\n"
-            "- Examples: secret, explosive, shocking, insane, hidden, ultimate, terrifying, critical.\n"
-
-            "5. SPECIFIC DETAILS\n"
-            "- Reference exact quotes, chapters, episodes, or timestamps to boost credibility.\n"
-
-            "6. EMOTIONAL STAKES\n"
-            "- Show why this matters to you personally\n"
-
-            "7. SENSORY DESCRIPTION\n"
-            "- Describe one physical reaction\n"
-
-            "8. CREDIBILITY BOOSTER\n"
-            "- Mention research, rewatch, or reread\n"
-
-            "9. VIEWER CONNECTION\n"
-            "- MID-ESCALATION HUMAN TOUCH\n"
-            "- Rising confusion, excitement, fear, disbelief, or anger that feels natural.\n"
-
-            "10. HUMAN-LIKE CLOSING\n"
-            "- Vulnerable cliffhanger\n"
-            "- Urgent personal\n"
-            "- Confident challenge\n"
-            "- Emotional prediction\n"
-            "- Community rally\n"
-            "- Nervous teaser\n"
-            "- Controversial uncertainty\n"
-
-            "3. VIDEO DESCRIPTION (under 500 chars, bullet points):\n"
-            "- PERSONAL HOOK: Start with personal discovery moment, shocking realization, or vulnerable admission.\n"
-            "- CONTROVERSY: Include 1 statement that will trigger debates in comments.\n"
-            "- REVEALS: Add 3-5 personal discoveries with emojis (🤯⚡🔥💀🚨😱) and cliffhanger explanations.\n"
-            "- FOMO with personality: 'Most fans missed this like I did...', 'I felt so dumb when I realized...', 'Only true fans will get why this scared me...'.\n"
-            "- CREDIBILITY: Drop manga spoiler warnings, episode references, or personal research mentions.\n"
-            "- COMMUNITY CHALLENGES: 'Bet you can't find what I found...', 'Prove my theory wrong...', 'Help me figure out if I'm crazy...'.\n"
-            "- THEORY LEVELS: Use '🔥SPICY THEORY🔥', '⚠️DANGEROUS PREDICTION⚠️', '💀DARK REALIZATION💀', '😱MIND-BLOWN MOMENT😱'.\n"
-            "- PERSONAL CONNECTIONS: Reference how this relates to other characters/arcs you've analyzed.\n"
-            "- VULNERABLE CTA: End with personal questions AND community challenge that shows uncertainty.\n\n"
-
-            "4. HASHTAGS (8-12 trending tags, lowercase):\n"
-            "- Core\n"
-            "- Trending\n"
-            "- Topic-specific\n"
-            "- Viral potential\n\n"
-                            
-            "Format EXACTLY as:\n"
-            "TITLE: [your engaging title]\n\n"
-            "SCRIPT: [your human-like script here]\n\n"
-            "DESCRIPTION: [your personal engaging description]\n\n"
-            "HASHTAGS: [your hashtags here]\n\n"
+            "Write in a Gen-Z, hype, casual tone — but keep it readable.\n\n"
             
-            "CRITICAL: Write as a REAL FAN sharing a personal discovery, not an AI presenting information. Include natural speech patterns, emotional reactions, and genuine uncertainty. Make it sound like you're excitedly (but nervously) telling friends about something you just figured out."
-        )
+            f"TOPIC: \"{topic}\"\n\n"
 
+            "OUTPUT STRUCTURE (in this exact order):\n"
+            "TITLE: [engaging, under 80 chars]\n\n"
+            "SCRIPT: [human-like narration, 35–45s, ~75–85 words]\n\n"
+            "DESCRIPTION: [personal, under 500 chars, BULLET POINTS + emojis, 3–5 lines, include sticky FOMO]\n\n"
+            "HASHTAGS: [10–15 relevant hashtags, lowercase]\n\n"
+
+            "RULES FOR STYLE:\n"
+            "- SOUND like a real fan talking to friends.\n"
+            "- Use hype language for energy, max 2–3 slang terms.\n"
+            "- Keep sentences short, fast-paced, easy to follow.\n"
+            "- Blend slang with clear English — balance is key.\n"
+            "- Always add curiosity, suspense, or debate bait.\n\n"
+
+            "TITLE RULES:\n"
+            "- Must grab instantly (under 80 chars).\n"
+            "- Randomly use ONE of these tones: shocking question, urgent warning, hidden truth, impossible claim.\n\n"
+
+            "SCRIPT REQUIREMENTS:\n"
+            "- PURE narration only, no SFX/music.\n"
+            "- Open with a 1-sentence powerful hook (max 9 words).\n"
+            "- First 10s must spark curiosity (hidden truth, contradiction, twist).\n"
+            "- Keep fast pace, vary sentence length.\n"
+            "- Add vivid, sensory detail within first 15s.\n"
+            "- Show personal emotions + uncertainty (hesitations, incomplete thoughts).\n"
+            "- Use exactly 2–3 power words (e.g., shocking, dangerous, hidden).\n"
+            "- Include 1 specific detail (chapter/episode OR exact quote).\n"
+            "- Mid-escalation: show rising excitement/doubt naturally.\n"
+            "- End with a curiosity-driven CTA inviting debate (max 12 words).\n"
+            "- TOTAL WORD COUNT: 75–85 words (auto-enforce brevity).\n\n"
+
+            "DESCRIPTION REQUIREMENTS:\n"
+            "- MUST be 5–6 bullet points.\n"
+            "- Each bullet MUST start with an emoji (🤯🔥💀😱⚡🚨).\n"
+            "- Each bullet MUST be 8–15 words long (not shorter).\n"
+            "- MUST include at least one controversial/debate-trigger line.\n"
+            "- MUST include at least one FOMO phrase ('Most fans missed this...', 'I almost overlooked this...').\n"
+            "- MUST end with a vulnerable CTA + community challenge ('Bet you can’t prove me wrong 👀👇').\n"
+            "- Entire description MUST be between 300–500 characters.\n\n"
+
+
+            "HASHTAGS RULES:\n"
+            "- Always include core (#onepiece #anime #theory).\n"
+            "- Include 2+ character-specific tags.\n"
+            "- Include 1 arc-specific tag.\n"
+            "- Include 1+ viral bait tags (#mindblown, #plottwist).\n\n"
+
+            "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear sentences, natural fan energy, maximum scroll-stopping engagement."
+        )
 
         response = model.generate_content(prompt)
         if not response.text:

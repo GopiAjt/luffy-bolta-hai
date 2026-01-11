@@ -9,7 +9,9 @@ import logging
 import time
 import shutil
 import hashlib
+import urllib.parse
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -29,9 +31,14 @@ if not api_key:
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
+# Fandom API settings
+FANDOM_API_URL = "https://onepiece.fandom.com/api.php"
+FANDOM_IMAGE_LIMIT = 5  # Max images to fetch per query
+REQUEST_DELAY = 0.5  # Delay between API requests to respect rate limits
+
 # Preferred domains for image sourcing (searched first with site-restricted queries)
 PRIORITY_DOMAINS: List[str] = [
-    "onepiece.fandom.com",
+    "onepiece.fandom.com",  # Highest priority - we'll use the API directly for this
     "www.cbr.com",
     "cbr.com",
     "thelibraryofohara.com",
@@ -238,91 +245,83 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     prompt = (
-    "You are an expert video content designer specializing in One Piece. "
-    "Your job is to map timestamped subtitle lines to visually engaging image search queries, "
-    "structured in JSON format.\n\n"
+        "You are an expert video content designer specializing in One Piece. "
+        "Your job is to map timestamped subtitle lines to visually engaging image search queries, "
+        "structured in JSON format.\n\n"
 
-    "CRITICAL RULES:\n"
-    "1. Every query MUST contain at least one One Piece character or location. "
-    "Never leave a query as raw subtitle text.\n"
-    "2. Always include the phrase 'One Piece anime' in every image_search_query.\n"
-    "3. If a subtitle is too short (e.g., 1–3 words like 'prove', 'because'), "
-    "merge it with adjacent subtitles into a meaningful sentence before generating a query.\n"
-    "   - Example: 'prove' + 'me wrong' + 'because' -> 'Prove me wrong because...' \n"
-    "4. Priority for terms: characters > actions > locations > emotions > objects.\n"
-    "5. Queries must always describe a VISUAL moment (character pose, emotion, action, or setting). "
-    "Never just copy text from the subtitle.\n\n"
+        "CRITICAL RULES:\n"
+        "1. Every query MUST reference at least one canonical One Piece entity (character, arc, island, or crew).\n"
+        "2. You are optimizing for the One Piece Fandom Wiki (MediaWiki API) — not a general image search engine.\n"
+        "3. Use **short, canonical names** that directly match Fandom pages: characters (Luffy, Zoro, Shanks), arcs (Marineford, Dressrosa), or places (Mary Geoise, Wano Country).\n"
+        "4. Do NOT use adjectives like 'dramatic', 'close up', or cinematic words — they reduce Fandom search accuracy.\n"
+        "5. The `image_search_query` should ideally look like: 'Shanks Mary Geoise', 'Zoro Thriller Bark', 'Luffy Marineford', etc.\n"
+        "6. When possible, combine character + location or character + event for higher precision.\n"
+        "7. If multiple entities fit, choose the most specific combination (e.g., 'Shanks Reverie', not just 'Shanks').\n"
+        "8. Detect if the subtitle talks about power, event, or location.\n"
+        "9. Use appropriate query forms:\n"
+        "  * Power-related → 'Character + Power term'\n"
+        "  * Event-related → 'Character + Arc'\n"
+        "  * Neutral → 'Character'\n"
+        "  * Transition → 'Grand Line Map' or 'One Piece Logo'\n"
+        "10. NEVER include the phrase 'One Piece anime' in Fandom queries.\n\n"
 
-    "MERGE RULES (fragments):\n"
-    "- If a subtitle contains fewer than 4 words or is a fragment, ALWAYS merge it with nearest neighbor(s) "
-    "to form a full sentence or clause before generating timestamps/queries.\n"
-    "- When merging, use start_time of the first line and end_time of the last line merged.\n\n"
+        "MERGE RULES (fragments):\n"
+        "- If a subtitle contains fewer than 4 words or is a fragment, merge it with adjacent subtitles "
+        "to form a meaningful sentence.\n"
+        "- Use the start_time of the first and end_time of the last merged fragment.\n\n"
 
-    "TIMESTAMP / NARRATION ALIGNMENT RULES (MANDATORY):\n"
-    "- Use the provided subtitles' timestamps as the canonical timeline. Do NOT invent new timestamps.\n"
-    "- **NO GAPS**: If there is any gap between consecutive original subtitle times (next_start > prev_end), "
-    "adjust the previous segment's end_time to equal the next subtitle's start_time so the timeline is continuous.\n"
-    "- **NO OVERLAPS**: If two subtitles overlap (next_start < prev_end), MERGE them into one segment spanning "
-    "min(start) to max(end) and produce a single query for the merged segment.\n"
-    "- When merging or adjusting, preserve chronological order and ensure the output covers from the first "
-    "subtitle start to the last subtitle end with no missing time.\n\n"
+        "TIMESTAMP RULES:\n"
+        "- Maintain continuous timestamps (no gaps, no overlaps).\n"
+        "- If two subtitles overlap, merge them.\n"
+        "- If there's a gap, adjust previous end_time to match the next start_time.\n\n"
 
-    "SPLITTING RULES (avoid long static slides):\n"
-    "- MAX_DURATION = 3.5 seconds per segment. If a (merged) segment's duration > MAX_DURATION, split it into "
-    "N equal contiguous subsegments where each subsegment duration <= MAX_DURATION. Compute chunk_len = (end-start)/N.\n"
-    "- For split subsegments, vary the image_search_query across subsegments to maintain visual variety, e.g.:\n"
-    "    part 1 -> '... close up'\n"
-    "    part 2 -> '... wide shot'\n"
-    "    part 3 -> '... detail' or '... reaction'\n"
-    "- For split items, keep summary concise and optionally append ' (part X/N)'.\n\n"
+        "SPLITTING RULES:\n"
+        "- MAX_DURATION = 3.5 seconds per segment.\n"
+        "- If a merged segment exceeds MAX_DURATION, split evenly into subsegments (<=3.5s each).\n"
+        "- Append '(part X/N)' in summary if split.\n\n"
 
-    "SEGMENTATION GUIDELINES:\n"
-    "- Normally map each subtitle line to its own output segment after fragment-merge logic.\n"
-    "- Segments should be between 1–4 seconds (never exceed 5s). Prefer more segments over fewer.\n"
-    "- Never combine more than 2–3 subtitles unless they are obviously one continuous sentence.\n\n"
+        "SEGMENT GUIDELINES:\n"
+        "- Normally map each subtitle line to one segment (after merging short fragments).\n"
+        "- Duration should be 1–4 seconds (never exceed 5s).\n"
+        "- Avoid merging more than 3 subtitles unless it's one continuous sentence.\n\n"
 
-    "VISUAL VARIETY:\n"
-    "- Avoid repeating same character/emotion more than twice in a row.\n"
-    "- Rotate between Straw Hats, side characters, and relevant locations when possible.\n"
-    "- Favor visually distinct frames (group shots, wide landscape, mid-shot, close-up, dramatic reactions).\n\n"
+        "VISUAL VARIETY:\n"
+        "- Rotate between characters, arcs, and settings (avoid using the same entity 3+ times in a row).\n"
+        "- If a scene is ambiguous, default to the primary speaker or most relevant location.\n\n"
 
-    "HANDLING SILENCE OR EXTRA AUDIO:\n"
-    "- If there is silent audio before the first subtitle or after the last subtitle, create a neutral transition slide "
-    "covering that time (e.g., 'One Piece anime scenery dramatic' or 'One Piece anime logo').\n"
-    "- If you need extra slides for pacing, split existing segments (per MAX_DURATION) rather than leaving long gaps.\n\n"
+        "SILENCE HANDLING:\n"
+        "- If there’s silence before/after subtitles, fill with neutral transition slides using canonical entities "
+        "like 'One Piece Logo', 'Grand Line Map', or 'Sunny Ship'.\n\n"
 
-    "OUTPUT SPEC (strict):\n"
-    "1. Return a JSON array only (no commentary, no code fences).\n"
-    "2. Each array element must be an object with exactly these keys:\n"
-    "   - start_time (string, same format as input, e.g., '0:00:03.41')\n"
-    "   - end_time (string)\n"
-    "   - summary (short paraphrase)\n"
-    "   - image_search_query (must contain 'One Piece anime' + a visual description)\n\n"
-    "3. Timestamps must be continuous: for every i, slides[i].end_time == slides[i+1].start_time.\n"
-    "4. Use merged timestamps when you merged fragments; use split timestamps (equal chunks) when you split a long segment.\n\n"
+        "OUTPUT FORMAT (STRICT):\n"
+        "- Return ONLY a JSON array (no code fences or text).\n"
+        "- Each element must have exactly these keys:\n"
+        "  * start_time (string)\n"
+        "  * end_time (string)\n"
+        "  * summary (short paraphrase)\n"
+        "  * image_search_query (short Fandom-optimized query — canonical names only)\n"
+        "- Timestamps must be continuous: slides[i].end_time == slides[i+1].start_time.\n\n"
 
-    "EXAMPLES:\n"
-    "[\n"
-    "  {\n"
-    "    \"start_time\": \"0:00:04.05\",\n"
-    "    \"end_time\": \"0:00:07.05\",\n"
-    "    \"summary\": \"Zoro absorbs Luffy's pain (part 1/2)\",\n"
-    "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark close up bloodied\"\n"
-    "  },\n"
-    "  {\n"
-    "    \"start_time\": \"0:00:07.05\",\n"
-    "    \"end_time\": \"0:00:10.05\",\n"
-    "    \"summary\": \"Zoro absorbs Luffy's pain (part 2/2)\",\n"
-    "    \"image_search_query\": \"One Piece anime Zoro Thriller Bark wide shot injured\"\n"
-    "  }\n"
-    "]\n\n"
+        "EXAMPLES:\n"
+        "[\n"
+        "  {\n"
+        "    \"start_time\": \"0:00:03.10\",\n"
+        "    \"end_time\": \"0:00:06.60\",\n"
+        "    \"summary\": \"Shanks walks into Mary Geoise\",\n"
+        "    \"image_search_query\": \"Shanks Mary Geoise\"\n"
+        "  },\n"
+        "  {\n"
+        "    \"start_time\": \"0:00:06.60\",\n"
+        "    \"end_time\": \"0:00:09.80\",\n"
+        "    \"summary\": \"Zoro absorbs Luffy's pain (part 1/2)\",\n"
+        "    \"image_search_query\": \"Zoro Luffy Thriller Bark\"\n"
+        "  }\n"
+        "]\n\n"
 
-    "All rules above are MANDATORY. Now carefully analyze the exact timestamped subtitles below, apply fragment-merge, "
-    "split long segments per MAX_DURATION, fix gaps/overlaps per the Timestamp rules, ensure continuous timestamps across all segments, "
-    "and return ONLY a JSON array of the segments.\n\n"
-    f"{raw_subtitles}"
-)
-
+        "Now analyze the following timestamped subtitles, apply the fragment-merge and split logic, "
+        "ensure timestamps are continuous, and return ONLY a JSON array following the above rules:\n\n"
+        f"{raw_subtitles}"
+    )
 
 
     try:
@@ -629,6 +628,154 @@ def _generate_fallback_queries(base_query: str) -> List[str]:
     seen = set()
     return [f for f in fallbacks if not (f in seen or seen.add(f))]
 
+def search_fandom_pages(query: str, limit: int = 3) -> List[Dict]:
+    """Search for pages on One Piece Fandom."""
+    params = {
+        "action": "query",
+        "list": "search",
+        "srsearch": f"intitle:{query}",
+        "format": "json",
+        "srlimit": limit,
+        "srwhat": "text"
+    }
+    
+    try:
+        response = requests.get(FANDOM_API_URL, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("query", {}).get("search", [])
+    except Exception as e:
+        logger.error(f"Fandom search error for '{query}': {str(e)}")
+        return []
+
+def get_page_images(page_title: str) -> List[Dict]:
+    """Get all images from a specific Fandom page."""
+    params = {
+        "action": "query",
+        "titles": page_title,
+        "prop": "images",
+        "format": "json",
+        "imlimit": 50
+    }
+    
+    try:
+        response = requests.get(FANDOM_API_URL, params=params, timeout=10)
+        response.raise_for_status()
+        pages = response.json().get("query", {}).get("pages", {})
+        return [img["title"] for page in pages.values() 
+                for img in page.get("images", []) 
+                if img["title"].lower().endswith(('.jpg', '.jpeg', '.png'))]
+    except Exception as e:
+        logger.error(f"Error getting images for page '{page_title}': {str(e)}")
+        return []
+
+def get_image_info(image_titles: List[str]) -> List[Dict]:
+    """Get full URLs and metadata for a list of image titles."""
+    if not image_titles:
+        return []
+    
+    # Process in batches to avoid URL length limits
+    batch_size = 20
+    all_images = []
+    
+    for i in range(0, len(image_titles), batch_size):
+        batch = image_titles[i:i + batch_size]
+        params = {
+            "action": "query",
+            "titles": "|".join(batch),
+            "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata",
+            "iiurlwidth": "800",
+            "format": "json"
+        }
+        
+        try:
+            time.sleep(REQUEST_DELAY)
+            response = requests.get(FANDOM_API_URL, params=params, timeout=15)
+            response.raise_for_status()
+            pages = response.json().get("query", {}).get("pages", {})
+            
+            for page in pages.values():
+                if "imageinfo" in page:
+                    info = page["imageinfo"][0]
+                    ext_meta = info.get("extmetadata", {})
+                    all_images.append({
+                        "title": urllib.parse.unquote(page["title"].replace("File:", "")),
+                        "url": info["url"],
+                        "width": info.get("width", 0),
+                        "height": info.get("height", 0),
+                        "size": info.get("size", 0),
+                        "mime": info.get("mime", ""),
+                        "description": ext_meta.get("ImageDescription", {}).get("*", "") if ext_meta else "",
+                        "source": "fandom"
+                    })
+        except Exception as e:
+            logger.error(f"Error fetching image info: {str(e)}")
+            continue
+            
+    return all_images
+
+def fetch_fandom_images(query: str, max_results: int = 5) -> List[Dict]:
+    """Fetch relevant images from One Piece Fandom for a given query."""
+    logger.debug(f"[Fandom] Searching for: {query}")
+    
+    # 1. Search for relevant pages
+    pages = search_fandom_pages(query)
+    if not pages:
+        logger.debug(f"[Fandom] No pages found for: {query}")
+        return []
+        
+    # 2. Get images from top pages
+    all_images = []
+    for page in pages[:3]:  # Limit to top 3 pages to avoid too many requests
+        page_title = page["title"]
+        logger.debug(f"[Fandom] Getting images for page: {page_title}")
+        
+        image_titles = get_page_images(page_title)
+        if not image_titles:
+            continue
+            
+        # 3. Get image URLs and metadata
+        images = get_image_info(image_titles[:20])  # Limit to 20 images per page
+        all_images.extend(images)
+        
+        # Early exit if we have enough results
+        if len(all_images) >= max_results * 2:  # Get extra for filtering
+            break
+    
+    # 4. Filter and sort images
+    filtered = []
+    seen = set()
+    
+    # Prefer larger images with common One Piece aspect ratios
+    for img in sorted(all_images, key=lambda x: x.get("width", 0), reverse=True):
+        if len(filtered) >= max_results:
+            break
+            
+        # Basic deduplication
+        img_key = img["url"].split("/")[-1].split("?")[0]
+        if img_key in seen:
+            continue
+            
+        # Filter criteria
+        width = img.get("width", 0)
+        height = img.get("height", 1)
+        aspect_ratio = width / height if height > 0 else 0
+        
+        # Common One Piece image aspect ratios (16:9, 3:4, 1:1)
+        if not (0.7 <= aspect_ratio <= 2.0):
+            continue
+            
+        # Minimum size check
+        if width < 400 or height < 300:
+            continue
+            
+        filtered.append(img)
+        seen.add(img_key)
+    
+    logger.info(f"[Fandom] Found {len(filtered)} suitable images for: {query}")
+    return filtered[:max_results]
+
 def download_images_for_slides(json_path: str, out_dir: str) -> None:
     """Download images for slides based on search queries in a JSON file.
     
@@ -670,20 +817,56 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
         # Prepare the list of queries: try site-restricted searches on preferred domains first
         fallback_queries = _generate_fallback_queries(search_query)
 
-        # 1) Try all priority domains at once using a combined site filter
-        combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS]) + ")"
-        for q in [search_query] + fallback_queries:
-            if downloaded:
-                break
-            site_query = f"{combined_site_filter} {q}"
-            logger.debug(f"[Slide {idx+1}] Trying combined priority sites search: {site_query}")
-            items = google_image_search(site_query, num_results=10)
+        # 1) First try One Piece Fandom API for high-quality, relevant images
+        if not downloaded:
+            logger.info(f"[Slide {idx+1}] Trying Fandom API for: {search_query}")
+            fandom_images = fetch_fandom_images(search_query, max_results=5)
+            
+            for img in fandom_images:
+                if downloaded:
+                    break
+                    
+                try:
+                    # Generate a hash from the image URL for deduplication
+                    image_hash = _get_image_hash(img["url"])
+                    
+                    # Skip duplicates
+                    if image_hash in downloaded_hashes:
+                        logger.debug(f"[Slide {idx+1}] Skipping duplicate Fandom image")
+                        continue
+                    
+                    # Download the image
+                    filename = f"slide_{idx+1:03d}_fandom_{image_hash[:8]}.jpg"
+                    save_path = os.path.join(out_dir, filename)
+                    
+                    if download_image(img["url"], save_path):
+                        downloaded_hashes.add(image_hash)
+                        slide["image_path"] = save_path
+                        slide["image_source"] = "fandom"
+                        downloaded = True
+                        logger.info(f"[Slide {idx+1}] Downloaded from Fandom: {os.path.basename(save_path)}")
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"[Slide {idx+1}] Error processing Fandom image: {str(e)}")
+                    continue
+        
+        # 2) Fall back to Google CSE with priority domains if Fandom didn't work
+        if not downloaded:
+            combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS[1:]]) + ")"  # Skip fandom.com as we already tried it
+            for q in [search_query] + fallback_queries:
+                if downloaded:
+                    break
+                    
+                site_query = f"{combined_site_filter} {q}"
+                logger.debug(f"[Slide {idx+1}] Trying Google CSE with priority sites: {site_query}")
+                items = google_image_search(site_query, num_results=10)
 
-            if not items:
-                logger.debug(f"[Slide {idx+1}] No results for: {site_query}")
-                continue
+                if not items:
+                    logger.debug(f"[Slide {idx+1}] No results for: {site_query}")
+                    continue
 
-            logger.info(f"[Slide {idx+1}] Found {len(items)} results across priority sites")
+                logger.info(f"[Slide {idx+1}] Found {len(items)} results across priority sites")
 
             # Process search results
             for item in items:
@@ -723,7 +906,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                     logger.info(f"[Slide {idx+1}] Downloaded from priority sites: {os.path.basename(save_path)}")
                     break
 
-        # 2) If still not downloaded, fall back to generic searches as before
+        # 3) If still not downloaded, fall back to generic searches as a last resort
         if not downloaded:
             for query in [search_query] + fallback_queries:
                 if downloaded:
@@ -786,7 +969,8 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
 
     # Clean up any temporary attributes we added
     for slide in slides:
-        if '_priority' in slide:
-            del slide['_priority']
+        for attr in ['_priority']:
+            if attr in slide:
+                del slide[attr]
     
     return downloaded_count

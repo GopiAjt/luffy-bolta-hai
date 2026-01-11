@@ -22,85 +22,65 @@ def generate_script() -> str:
     """Generate a 30–60s One Piece narration script via Gemini."""
     try:
         topics = [
-            # CHARACTER SECRET TEMPLATES
+            # 🔥 Character Secrets
 
-            "{Character}'s Hidden {Power/Past/Connection} REVEALED",
-            "The FORBIDDEN Truth About {Character}'s {Ability/Origin}",
-            "{Character}'s Secret {Weakness/Strength} Oda Never Shows",
-            "Why {Character} is HIDING Their True {Power/Identity}",
-            "{Character}'s {Bloodline/Heritage/Family} Secret Exposed",
+"Zoro’s Hidden Bloodline REVEALED – Is He a Shimotsuki?!",
 
-            # ODA'S HIDDEN DETAILS TEMPLATES
+"The FORBIDDEN Truth About Blackbeard’s Three Devil Fruits",
 
-            "Oda HID This {Detail/Connection} in {Arc/Chapter}",
-            "The Secret {Foreshadowing/Message} Buried in {Scene/Arc}",
-            "{Number} Hidden Details You MISSED in {Arc/Episode}",
-            "Oda's Secret {Pattern/Code} Throughout One Piece",
-            "The {Symbol/Design/Reference} Oda Keeps Hiding",
+"Shanks’ Secret Connection to the Gorosei Exposed",
 
-            # THEORY REVELATION TEMPLATES
+"Why Mihawk is HIDING His True Strength",
 
-            "{Major Mystery} is Actually {Shocking Theory}",
-            "The REAL Reason Behind {Event/Decision/Power}",
-            "{Popular Belief} is WRONG - Here's the Truth",
-            "{Character/Object/Location}'s TRUE Purpose REVEALED",
-            "Why {Theory/Belief} Changes EVERYTHING",
+"Luffy’s Family Secret Oda Never Wanted Us to See",
 
-            # CONNECTION/RELATIONSHIP TEMPLATES
+# 🧩 Oda’s Hidden Details
 
-            "The Hidden Connection Between {Character A} and {Character B}",
-            "How {Past Event} Secretly Affects {Current Situation}",
-            "{Character}'s Role in {Major Event} You Never Noticed",
-            "The {Bloodline/Crew/Organization} Connection Oda Hides",
-            "Why {Character} and {Character} Share This Secret"
+"Oda HID This Shocking Foreshadowing in Marineford",
 
-            # POWER/ABILITY MYSTERY TEMPLATES
+"The Secret Message Buried in Enies Lobby’s “I Want to Live” Scene",
 
-            "{Character}'s {Devil Fruit/Haki/Technique} Secret Ability",
-            "The Hidden {Type/Level/Form} of {Power System}",
-            "{Character} Can Do THIS But Never Shows It",
-            "The REAL Weakness of {Powerful Character/Ability}",
-            "{Power/Technique}'s True Origin EXPOSED"
+"7 Hidden Details You MISSED in Egghead Arc",
 
-            # WORLD-BUILDING SECRET TEMPLATES
+"Oda’s Secret Code in Every One Piece Bounty Poster",
 
-            "The Dark Truth About {Organization/Location/System}",
-            "{Island/Kingdom/Organization}'s Hidden {Purpose/Past}",
-            "What {Government/Pirates/Marines} DON'T Want You to Know",
-            "The Secret Behind {World Building Element}",
-            "{Location/System}'s Connection to {Ancient Mystery}"
+"The Symbol Oda Keeps Hiding in the Straw Hat",
 
-            # CURRENT CONTENT TEMPLATES
+# 🌀 Theory Revelations
 
-            "Chapter {Number}: The {Detail/Revelation} Everyone Missed",
-            "{Arc Name}'s BIGGEST Secret Finally Revealed",
-            "This Week's Chapter Hides {Shocking Discovery}",
-            "The {Current Villain/Situation} Connection to {Past Event}",
-            "Episode {Number}'s Hidden {Message/Foreshadowing}"
+"The One Piece Treasure is Actually an Ancient Weapon",
 
-            # CONTROVERSIAL ANGLE TEMPLATES
+"The REAL Reason Why Shanks Met the Gorosei",
 
-            "Why {Popular Character/Theory} is Actually {Opposite Claim}",
-            "{Beloved Moment/Character} Has a Dark Secret",
-            "The {Disappointing/Confusing} Truth About {Popular Topic}",
-            "{Character} Made the WORST Possible Decision",
-            "{Fan Favorite Thing} is Actually Problematic"
+"Joy Boy is NOT Who You Think He Is",
 
-            # PREDICTION/FUTURE TEMPLATES
+"Imu’s TRUE Purpose Finally REVEALED",
 
-            "{Character} Will {Action} in {Timeframe/Arc} - Here's Why",
-            "The Next {Crew Member/Villain/Power-Up} is Obviously {Prediction}",
-            "{Current Situation} Leads to {Major Future Event}",
-            "{Character}'s Final {Battle/Moment/Revelation} Predicted",
-            "How {Current Arc} Sets Up {Future Major Event}"
+"Why the Will of D Changes EVERYTHING in One Piece",
 
-            # COMPARATIVE ANALYSIS TEMPLATES
+# 🔗 Connections & Relationships
 
-            "{Character A} vs {Character B}: The Secret Difference",
-            "{Past Arc/Event} vs {Current Arc/Event}: Hidden Pattern",
-            "{Old Generation Character} vs {New Generation Character} Truth",
-            "{Power/Ability A} vs {Power/Ability B}: Which is Really Stronger",
-            "{Theory A} vs {Theory B}: Which Oda Actually Hints At"
+"The Hidden Connection Between Luffy and Rocks D. Xebec",
+
+"How Ohara’s Destruction Secretly Affects Egghead",
+
+"Dragon’s Role in Roger’s Final Journey You Never Noticed",
+
+"The Bloodline Connection Oda Hides Between Garp and Blackbeard",
+
+"Why Luffy and Shanks Share This Secret Bond",
+
+# ⚡ Power & Ability Mysteries
+
+"Zoro’s Sword Enma Has a Secret Ability Nobody Talks About",
+
+"The Hidden Advanced Level of Conqueror’s Haki",
+
+"Sanji Can Do THIS But Never Shows It",
+
+"The REAL Weakness of Kaido’s Mythical Zoan Fruit",
+
+"Nika’s True Origin EXPOSED – The Sun God’s Lost Power",
         ]
         topic = random.choice(topics)
 
@@ -108,11 +88,11 @@ def generate_script() -> str:
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
             "Write in a Gen-Z, hype, casual tone — but keep it readable.\n\n"
             
-            f"TOPIC: \"{topic}\"\n\n"
+            f"TOPIC(place holders to be replaced): \"{topic}\"\n\n"
 
             "OUTPUT STRUCTURE (in this exact order):\n"
             "TITLE: [engaging, under 80 chars]\n\n"
-            "SCRIPT: [human-like narration, 35–45s, ~75–85 words]\n\n"
+            "SCRIPT: [human-like narration, 35–45s, ~85–95 words]\n\n"
             "DESCRIPTION: [personal, under 500 chars, BULLET POINTS + emojis, 3–5 lines, include sticky FOMO]\n\n"
             "HASHTAGS: [10–15 relevant hashtags, lowercase]\n\n"
 
@@ -138,7 +118,8 @@ def generate_script() -> str:
             "- Include 1 specific detail (chapter/episode OR exact quote).\n"
             "- Mid-escalation: show rising excitement/doubt naturally.\n"
             "- End with a curiosity-driven CTA inviting debate (max 12 words).\n"
-            "- TOTAL WORD COUNT: 75–85 words (auto-enforce brevity).\n\n"
+            "- After debate CTA, ADD a second CTA to gain followers\n"
+            "- TOTAL WORD COUNT: 85–95 words (auto-enforce brevity).\n\n"
 
             "DESCRIPTION REQUIREMENTS:\n"
             "- MUST be 5–6 bullet points.\n"
@@ -147,7 +128,8 @@ def generate_script() -> str:
             "- MUST include at least one controversial/debate-trigger line.\n"
             "- MUST include at least one FOMO phrase ('Most fans missed this...', 'I almost overlooked this...').\n"
             "- MUST end with a vulnerable CTA + community challenge ('Bet you can’t prove me wrong 👀👇').\n"
-            "- Entire description MUST be between 300–500 characters.\n\n"
+            "- ALSO add a soft CTA for followers: 'Follow for more hidden One Piece truths ⚡'.\n"
+            "- Entire description MUST be between 400–500 characters.\n\n"
 
 
             "HASHTAGS RULES:\n"

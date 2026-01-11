@@ -85,59 +85,138 @@ def fade_effect(current_frame, next_frame, progress):
     Returns:
         Transitioned frame as numpy array
     """
-    logger.debug(f"Applying fade effect - Progress: {progress:.2f} ({(progress*100):.0f}%)")
     p = ease_progress(progress, DEFAULT_EASING)
     # Gamma-correct blend for better midtones
     return blend_linear_bgr(current_frame, next_frame, p)
 
 
-def slide_effect(current_frame, next_frame, progress, direction='right'):
-    """Slide transition between current and next frame.
+def page_curl_effect(current_frame, next_frame, progress, corner='top-right'):
+    """
+    Creates a page curl effect from the specified corner.
     
     Args:
-        current_frame: Current frame as numpy array
-        next_frame: Next frame as numpy array
-        progress: Float between 0 and 1 representing transition progress
-        direction: Direction of slide ('left', 'right', 'up', 'down')
+        current_frame: Current frame as numpy array (BGR)
+        next_frame: Next frame as numpy array (BGR)
+        progress: Float between 0 and 1
+        corner: Corner from which to curl ('top-left', 'top-right', 'bottom-left', 'bottom-right')
         
     Returns:
         Transitioned frame as numpy array
     """
     h, w = current_frame.shape[:2]
-    result = current_frame.copy()
+    result = np.zeros_like(current_frame, dtype=np.float32)
     
-    if direction == 'right':
-        # Slide right: next frame comes from the right
-        p = ease_progress(progress, DEFAULT_EASING)
-        x = int(w * p)
-        result[:, :w-x] = next_frame[:, x:]
-        result[:, w-x:] = current_frame[:, w-x:]
-        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
-    elif direction == 'left':
-        # Slide left: next frame comes from the left
-        p = ease_progress(progress, DEFAULT_EASING)
-        x = int(w * (1 - p))
-        result[:, x:] = next_frame[:, :w-x]
-        result[:, :x] = current_frame[:, w-x:]
-        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, x-offset: {x}px")
-    elif direction == 'down':
-        # Slide down: next frame comes from the bottom
-        p = ease_progress(progress, DEFAULT_EASING)
-        y = int(h * p)
-        result[:h-y, :] = next_frame[y:, :]
-        result[h-y:, :] = current_frame[h-y:, :]
-        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
-    elif direction == 'up':
-        # Slide up: next frame comes from the top
-        p = ease_progress(progress, DEFAULT_EASING)
-        y = int(h * (1 - p))
-        result[y:, :] = next_frame[:h-y, :]
-        result[:y, :] = current_frame[h-y:, :]
-        logger.debug(f"Slide {direction} - Progress: {progress:.2f}, y-offset: {y}px")
-    else:
-        logger.warning(f"Unknown slide direction: {direction}. Defaulting to right slide.")
+    # Convert to float for processing
+    current = current_frame.astype(np.float32) / 255.0
+    next_img = next_frame.astype(np.float32) / 255.0
+    
+    # Calculate curl parameters based on corner
+    if corner == 'top-left':
+        center = (0, 0)
+        x_curve = lambda p: (1 - p) * w / 2
+        y_curve = lambda p: (1 - p) * h / 2
+    elif corner == 'top-right':
+        center = (w, 0)
+        x_curve = lambda p: w - (1 - p) * w / 2
+        y_curve = lambda p: (1 - p) * h / 2
+    elif corner == 'bottom-left':
+        center = (0, h)
+        x_curve = lambda p: (1 - p) * w / 2
+        y_curve = lambda p: h - (1 - p) * h / 2
+    else:  # bottom-right
+        center = (w, h)
+        x_curve = lambda p: w - (1 - p) * w / 2
+        y_curve = lambda p: h - (1 - p) * h / 2
+    
+    # Create coordinate grids
+    y, x = np.ogrid[:h, :w]
+    
+    # Calculate distance from corner
+    dx = x - center[0]
+    dy = y - center[1]
+    distance = np.sqrt(dx*dx + dy*dy)
+    max_dist = np.sqrt(w*w + h*h)
+    
+    # Calculate angle
+    angle = np.arctan2(dy, dx)
+    
+    # Create curl mask
+    curve_x = x_curve(progress)
+    curve_y = y_curve(progress)
+    curl_mask = ((x - center[0])**2 / (curve_x**2 + 1e-6) + 
+                 (y - center[1])**2 / (curve_y**2 + 1e-6)) <= 1.0
+    
+    # Create shadow
+    shadow = np.ones_like(current) * 0.3  # Darker shadow
+    shadow_mask = (distance / max_dist) < (1 - progress * 0.8)
+    
+    # Apply the effect
+    result = np.where(curl_mask[..., None], next_img, current)
+    result = np.where(shadow_mask[..., None], result * shadow, result)
+    
+    # Add highlight on the curl
+    highlight = np.ones_like(current) * 1.2
+    highlight_mask = curl_mask & ((distance / max_dist) > (1 - progress * 0.5))
+    result = np.where(highlight_mask[..., None], result * highlight, result)
+    
+    # Clamp values
+    result = np.clip(result, 0, 1)
+    
+    return (result * 255).astype(np.uint8)
+
+
+def water_ripple_effect(current_frame, next_frame, progress, center=None, amplitude=10, wavelength=30):
+    """
+    Creates a water ripple effect between two frames.
+    
+    Args:
+        current_frame: Current frame as numpy array (BGR)
+        next_frame: Next frame as numpy array (BGR)
+        progress: Float between 0 and 1
+        center: (x, y) coordinates for ripple center (None for random)
+        amplitude: Maximum displacement of the ripple
+        wavelength: Wavelength of the ripple
         
-    return result
+    Returns:
+        Transitioned frame as numpy array
+    """
+    h, w = current_frame.shape[:2]
+    
+    # Use provided center or random if not specified
+    if center is None:
+        cx = random.randint(w//4, 3*w//4)
+        cy = random.randint(h//4, 3*h//4)
+        center = (cx, cy)
+    
+    # Create coordinate grids
+    y, x = np.ogrid[:h, :w]
+    
+    # Calculate distance from center
+    dx = x - center[0]
+    dy = y - center[1]
+    distance = np.sqrt(dx*dx + dy*dy)
+    
+    # Calculate ripple displacement
+    ripple = amplitude * np.sin(2 * np.pi * distance / wavelength - progress * 2 * np.pi)
+    
+    # Create displacement maps
+    scale = progress * ripple / (distance + 1e-6)  # Avoid division by zero
+    map_x = x + dx * scale
+    map_y = y + dy * scale
+    
+    # Ensure coordinates are within bounds
+    map_x = np.clip(map_x, 0, w-1).astype(np.float32)
+    map_y = np.clip(map_y, 0, h-1).astype(np.float32)
+    
+    # Remap the images
+    current_remap = cv2.remap(current_frame, map_x, map_y, interpolation=cv2.INTER_LINEAR)
+    next_remap = cv2.remap(next_frame, map_x, map_y, interpolation=cv2.INTER_LINEAR)
+    
+    # Blend based on progress
+    p = ease_progress(progress, 'ease_in_out_quad')
+    result = (1 - p) * current_remap.astype(np.float32) + p * next_remap.astype(np.float32)
+    
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 def crossfade_effect(current_frame, next_frame, progress, blur_amount=5):
@@ -356,6 +435,121 @@ RIGHT_DIR_NAMES = {"slide_right", "motion_slide_right", "whip_pan_right"}
 
 
 def choose_transition(slides_processed, next_slide_duration, last_selected_transition, avoid_same_direction_horizontal=True):
+    """Heuristic to choose a transition effect.
+    
+    Args:
+        slides_processed: Number of slides processed so far
+        next_slide_duration: Duration of the next slide in seconds
+        last_selected_transition: Last used transition effect
+        avoid_same_direction_horizontal: If True, avoid same horizontal direction transitions
+        
+    Returns:
+        Name of the selected transition effect
+    """
+    # Base weights for different transition types
+    soft_weights = [
+        ("fade", 0.3), 
+        ("fade_eased", 0.2), 
+        ("crossfade", 0.15), 
+        ("zoom_dissolve", 0.1),
+        ("iris_wipe", 0.15),
+        ("cube_rotation_right", 0.05),
+        ("cube_rotation_left", 0.05)
+    ]
+    
+    # Adjust weights based on next slide duration
+    if next_slide_duration < 2.0:
+        # For very short slides, prefer softer transitions
+        soft_mix = [
+            ("fade", 0.25),
+            ("fade_eased", 0.2),
+            ("crossfade", 0.15),
+            ("iris_wipe", 0.2),
+            ("zoom_dissolve", 0.2)
+        ]
+    elif next_slide_duration < 4.0:
+        # For medium duration slides, mix in more dynamic transitions
+        soft_mix = [
+            ("fade", 0.2),
+            ("fade_eased", 0.15),
+            ("crossfade", 0.1),
+            ("iris_wipe", 0.15),
+            ("zoom_dissolve", 0.15),
+            ("cube_rotation_right", 0.1),
+            ("cube_rotation_left", 0.1),
+            ("radial_wipe", 0.05)
+        ]
+    else:
+        # For longer slides, use more dynamic transitions
+        soft_mix = [
+            ("fade", 0.15),
+            ("fade_eased", 0.1),
+            ("crossfade", 0.08),
+            ("iris_wipe", 0.12),
+            ("zoom_dissolve", 0.1),
+            ("cube_rotation_right", 0.12),
+            ("cube_rotation_left", 0.12),
+            ("radial_wipe", 0.08),
+            ("motion_slide_right", 0.06),
+            ("motion_slide_left", 0.06),
+            ("whip_pan_right", 0.03),
+            ("whip_pan_left", 0.03)
+        ]
+    
+    # Add directional transitions
+    if slides_processed % 2 == 0:
+        hard_mix = [
+            ("slide_right", 0.2),
+            ("motion_slide_right", 0.15),
+            ("whip_pan_right", 0.08),
+            ("cube_rotation_right", 0.12)
+        ]
+    else:
+        hard_mix = [
+            ("slide_left", 0.2),
+            ("motion_slide_left", 0.15),
+            ("whip_pan_left", 0.08),
+            ("cube_rotation_left", 0.12)
+        ]
+    
+    # Add vertical transitions (less frequent)
+    vertical_mix = [
+        ("slide_up", 0.03),
+        ("slide_down", 0.03),
+        ("cube_rotation_up", 0.02),
+        ("cube_rotation_down", 0.02)
+    ]
+    
+    # Special transitions (used occasionally)
+    special_mix = [
+        ("radial_wipe", 0.05),
+        ("iris_wipe", 0.1)
+    ]
+    
+    # Combine all transitions
+    candidates = soft_mix + hard_mix + vertical_mix + special_mix
+    
+    # Avoid repeating the same transition
+    if last_selected_transition:
+        candidates = [(t, w) for t, w in candidates if t != last_selected_transition]
+    
+    # Avoid same direction horizontal transitions if requested
+    if avoid_same_direction_horizontal and last_selected_transition:
+        if 'right' in last_selected_transition:
+            candidates = [(t, w) for t, w in candidates if 'right' not in t]
+        elif 'left' in last_selected_transition:
+            candidates = [(t, w) for t, w in candidates if 'left' not in t]
+    
+    # Normalize weights
+    total_weight = sum(w for _, w in candidates)
+    if total_weight > 0:
+        candidates = [(t, w/total_weight) for t, w in candidates]
+    
+    # Select a transition
+    if not candidates:
+        return "crossfade"  # Fallback
+        
+    return weighted_choice(candidates)
     """Heuristic to choose a pleasing transition for the boundary to the next slide.
     Rules:
     - Prefer soft transitions (fade/crossfade) for short durations.
@@ -440,6 +634,142 @@ def flip_horizontal_transition(name):
 
 
 # ------------------ New Transition Effects ------------------
+
+def cube_rotation_effect(current_frame, next_frame, progress, direction='right'):
+    """3D cube rotation transition effect.
+    
+    Args:
+        current_frame: Current frame as numpy array (BGR)
+        next_frame: Next frame as numpy array (BGR)
+        progress: Float between 0 and 1
+        direction: Rotation direction ('left', 'right', 'up', 'down')
+        
+    Returns:
+        Transitioned frame as numpy array
+    """
+    h, w = current_frame.shape[:2]
+    
+    # Ease the progress for smoother motion
+    p = ease_progress(progress, 'smoothstep')
+    
+    # Create output frame
+    output = np.zeros_like(current_frame, dtype=np.float32)
+    
+    # Convert to float for processing
+    current = current_frame.astype(np.float32) / 255.0
+    next_img = next_frame.astype(np.float32) / 255.0
+    
+    # Calculate rotation angle (0 to 90 degrees)
+    angle = p * 90.0
+    
+    # Convert to linear color space for better blending
+    current_lin = np.power(current, GAMMA)
+    next_lin = np.power(next_img, GAMMA)
+    
+    # Create grid of coordinates
+    x = np.linspace(-1, 1, w)
+    y = np.linspace(-1, 1, h)
+    xv, yv = np.meshgrid(x, y)
+    
+    # Apply rotation based on direction
+    if direction in ['left', 'right']:
+        # Horizontal rotation
+        rot = np.radians(angle)
+        if direction == 'left':
+            rot = -rot
+        
+        # Calculate perspective
+        xp = xv * np.cos(rot) + (1 if direction == 'right' else -1)
+        mask = (xp + 1) / 2  # Normalize to 0-1
+        
+        # Create visibility masks
+        mask_current = 1 - mask
+        mask_next = mask
+        
+        # Apply perspective scaling
+        scale = 0.5 + 0.5 * np.cos(np.radians(angle))
+        mask_current = mask_current * scale
+        mask_next = mask_next * scale
+        
+        # Blend images
+        for c in range(3):
+            output[..., c] = (current_lin[..., c] * mask_current + 
+                            next_lin[..., c] * mask_next)
+    
+    else:  # vertical rotation
+        rot = np.radians(angle)
+        if direction == 'up':
+            rot = -rot
+            
+        # Calculate perspective
+        yp = yv * np.cos(rot) + (1 if direction == 'down' else -1)
+        mask = (yp + 1) / 2  # Normalize to 0-1
+        
+        # Create visibility masks
+        mask_current = 1 - mask
+        mask_next = mask
+        
+        # Apply perspective scaling
+        scale = 0.5 + 0.5 * np.cos(np.radians(angle))
+        mask_current = mask_current * scale
+        mask_next = mask_next * scale
+        
+        # Blend images
+        for c in range(3):
+            output[..., c] = (current_lin[..., c] * mask_current[..., np.newaxis] + 
+                            next_lin[..., c] * mask_next[..., np.newaxis])
+    
+    # Convert back to sRGB and 8-bit
+    output = np.power(np.clip(output, 0, 1), 1.0/GAMMA)
+    return (output * 255).astype(np.uint8)
+
+def iris_wipe_effect(current_frame, next_frame, progress, center=None, feather=0.1):
+    """Iris wipe transition effect with soft edges.
+    
+    Args:
+        current_frame: Current frame as numpy array (BGR)
+        next_frame: Next frame as numpy array (BGR)
+        progress: Float between 0 and 1
+        center: (x,y) center point of the iris (None for center of image)
+        feather: Feather amount for soft edges (0-1)
+        
+    Returns:
+        Transitioned frame as numpy array
+    """
+    h, w = current_frame.shape[:2]
+    
+    # Default to center of image
+    if center is None:
+        cx, cy = w // 2, h // 2
+    else:
+        cx, cy = center
+    
+    # Ease the progress for smoother motion
+    p = ease_progress(progress, 'smoothstep')
+    
+    # Create distance map from center
+    y, x = np.ogrid[:h, :w]
+    dist = np.sqrt((x - cx)**2 + (y - cy)**2)
+    max_dist = np.sqrt((w/2)**2 + (h/2)**2)  # Maximum possible distance
+    
+    # Calculate radius based on progress
+    radius = p * max_dist * 1.2  # Slightly overshoot to ensure full coverage
+    
+    # Create soft mask with feathering
+    mask = np.clip((radius - dist) / (feather * max_dist) + 0.5, 0, 1)
+    
+    # Convert to 3-channel mask
+    mask_3d = mask[..., np.newaxis]
+    
+    # Convert to linear color space for better blending
+    current_lin = to_linear_bgr(current_frame)
+    next_lin = to_linear_bgr(next_frame)
+    
+    # Blend images using the mask
+    result = current_lin * (1 - mask_3d) + next_lin * mask_3d
+    
+    # Convert back to sRGB
+    return to_srgb_bgr(result)
 
 def ease_progress(p, kind='cosine'):
     p = max(0.0, min(1.0, float(p)))
@@ -715,10 +1045,14 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 if tt == 'random':
                     transitions_pool = [
                         'fade', 'crossfade', 'fade_eased', 'zoom_dissolve', 'radial_wipe',
-                        'slide_left', 'slide_right', 'slide_up', 'slide_down',
-                        'motion_slide_left', 'motion_slide_right',
-                        'whip_pan_left', 'whip_pan_right'
+                        'slide_up', 'slide_down',
+                        'iris_wipe',
+                        'cube_rotation_left', 'cube_rotation_right',
+                        'cube_rotation_up', 'cube_rotation_down',
+                        'page_curl_tl', 'page_curl_tr', 'page_curl_bl', 'page_curl_br',
+                        'water_ripple'
                     ]
+                    # Filter out the last used transition if we have alternatives
                     pool = [t for t in transitions_pool if t != last_selected_transition] or transitions_pool
                     selected_transition_type = random.choice(pool)
                 elif tt == 'auto':
@@ -955,27 +1289,45 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                             frame_num = frames_written + i
                             
                             # Generate transition frame
-                            if selected_transition_type == 'fade':
-                                frame = fade_effect(current_frame, next_frame, progress)
-                            elif selected_transition_type == 'fade_eased':
-                                frame = fade_effect_eased(current_frame, next_frame, progress, easing='cosine')
-                            elif selected_transition_type == 'crossfade':
-                                frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
-                            elif selected_transition_type == 'zoom_dissolve':
-                                frame = zoom_dissolve_effect(current_frame, next_frame, progress, resolution)
-                            elif selected_transition_type == 'radial_wipe':
-                                frame = radial_wipe_effect(current_frame, next_frame, progress, feather=0.06)
-                            elif selected_transition_type.startswith('motion_slide_'):
-                                direction = selected_transition_type.split('_')[2]
-                                frame = motion_blur_slide_effect(current_frame, next_frame, progress, direction=direction, strength=15)
-                            elif selected_transition_type.startswith('whip_pan_'):
-                                direction = selected_transition_type.split('_')[2]
-                                frame = whip_pan_effect(current_frame, next_frame, progress, direction=direction, blur_strength=25)
-                            elif selected_transition_type.startswith('slide_'):
-                                direction = selected_transition_type.split('_')[1]
-                                frame = slide_effect(current_frame, next_frame, progress, direction)
-                            else:
-                                # Fallback to crossfade
+                            try:
+                                if selected_transition_type == 'fade':
+                                    frame = fade_effect(current_frame, next_frame, progress)
+                                elif selected_transition_type == 'fade_eased':
+                                    frame = fade_effect_eased(current_frame, next_frame, progress, easing='cosine')
+                                elif selected_transition_type == 'crossfade':
+                                    frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
+                                elif selected_transition_type == 'zoom_dissolve':
+                                    frame = zoom_dissolve_effect(current_frame, next_frame, progress, resolution)
+                                elif selected_transition_type == 'radial_wipe':
+                                    frame = radial_wipe_effect(current_frame, next_frame, progress, feather=0.06)
+                                elif selected_transition_type == 'iris_wipe':
+                                    # Randomize iris center position for variety
+                                    if random.random() < 0.3:  # 30% chance for non-center position
+                                        h, w = current_frame.shape[:2]
+                                        center = (
+                                            int(w * (0.2 + 0.6 * random.random())),  # 20-80% of width
+                                            int(h * (0.2 + 0.6 * random.random()))   # 20-80% of height
+                                        )
+                                        frame = iris_wipe_effect(current_frame, next_frame, progress, center=center, feather=0.08)
+                                    else:
+                                        frame = iris_wipe_effect(current_frame, next_frame, progress, feather=0.08)
+                                elif selected_transition_type.startswith('cube_rotation_'):
+                                    direction = selected_transition_type.split('_')[2]
+                                    frame = cube_rotation_effect(current_frame, next_frame, progress, direction=direction)
+                                elif selected_transition_type.startswith('page_curl_'):
+                                    corner = selected_transition_type.split('_')[2]  # tl, tr, bl, or br
+                                    frame = page_curl_effect(current_frame, next_frame, progress, corner=f"{corner[0]}-{corner[1]}")
+                                elif selected_transition_type == 'water_ripple':
+                                    frame = water_ripple_effect(current_frame, next_frame, progress)
+                                # Note: Basic slide_* and motion slide transitions have been removed.
+                                # Using crossfade as fallback for any unsupported transitions.
+                                else:
+                                    # Fallback to crossfade
+                                    frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
+                            except Exception as e:
+                                logger.error(f"Error applying transition '{selected_transition_type}': {str(e)}")
+                                logger.error(traceback.format_exc())
+                                # Fallback to crossfade on error
                                 frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)
                             
                             # Log progress at key checkpoints to avoid log spam
@@ -1161,3 +1513,4 @@ if __name__ == "__main__":
 
     main(args.json, args.images, output_path, total_duration=args.duration,
          resolution=resolution_arg, fps=args.fps)
+    

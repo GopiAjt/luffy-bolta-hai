@@ -43,25 +43,25 @@ class SubtitleGenerator:
         'dream', 'freedom', 'friendship', 'family', 'promise', 'hope', 'courage', 'will',
         'nakama', 'treasure', 'adventure', 'journey', 'destiny', 'legend', 'myth'
     }
-    def __init__(self, script_text: str, audio_path: str, style: str = 'epic'):
+    def __init__(self, audio_path: str, script_text: str = None, style: str = 'epic'):
         """
-        Initialize subtitle generator with script, audio paths, and style.
+        Initialize subtitle generator with audio path and optional script text.
 
         Args:
-            script_text: Text content of the narration script
-            audio_path: Path to the audio file
+            audio_path: Path to the audio file (required)
+            script_text: Optional text content of the narration script. If not provided,
+                        the text will be automatically transcribed from the audio.
             style: Subtitle style ('epic', 'dramatic', 'manga', 'adventure')
         """
         self.style = style.lower() if style else 'epic'  # Default to 'epic' style
-        # Validate script text
-        if not script_text or not script_text.strip():
-            raise ValueError("Script text cannot be empty")
 
         # Validate audio file
         if not audio_path or not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-        # Validate and preprocess audio file
+        # Create temp directory for any temporary files
+        self.temp_dir = tempfile.mkdtemp()
+        
         try:
             import wave
             import pydub
@@ -70,8 +70,7 @@ class SubtitleGenerator:
             with wave.open(audio_path, 'r') as wav:
                 channels = wav.getnchannels()
                 framerate = wav.getframerate()
-                logger.info(
-                    f"Audio file details: channels={channels}, framerate={framerate}")
+                logger.info(f"Audio file details: channels={channels}, framerate={framerate}")
 
                 # If not 16kHz mono, resample it
                 if channels != 1 or framerate != 16000:
@@ -80,25 +79,56 @@ class SubtitleGenerator:
                     audio = audio.set_frame_rate(16000).set_channels(1)
 
                     # Save resampled audio to temp file
-                    self.temp_dir = tempfile.mkdtemp()
-                    resampled_path = os.path.join(
-                        self.temp_dir, "resampled.wav")
+                    resampled_path = os.path.join(self.temp_dir, "resampled.wav")
                     audio.export(resampled_path, format="wav")
                     self.audio_path = resampled_path
                     logger.info(f"Saved resampled audio to {resampled_path}")
                 else:
                     self.audio_path = audio_path
-                    self.temp_dir = tempfile.mkdtemp()
         except Exception as e:
             logger.error(f"Error processing audio: {str(e)}")
             raise
 
-        self.script_text = script_text
+        # If no script provided, we'll transcribe it from audio
+        if script_text and script_text.strip():
+            self.script_text = script_text
+            logger.info(f"Using provided script text: {len(script_text)} characters")
+        else:
+            self.script_text = self._transcribe_audio()
+            logger.info(f"Transcribed script from audio: {len(self.script_text)} characters")
 
         # Log initialization details
-        logger.info(
-            f"Subtitle generator initialized with audio: {self.audio_path}")
-        logger.info(f"Script length: {len(script_text)} characters")
+        logger.info(f"Subtitle generator initialized with audio: {self.audio_path}")
+        
+    def _transcribe_audio(self) -> str:
+        """
+        Transcribe audio to text using Whisper.
+        
+        Returns:
+            str: Transcribed text from the audio
+        """
+        try:
+            import whisper
+            logger.info("Transcribing audio using Whisper...")
+            
+            # Load the base model (small is a good balance between speed and accuracy)
+            model = whisper.load_model("base")
+            
+            # Transcribe the audio file
+            result = model.transcribe(self.audio_path, fp16=False)  # fp16=False for CPU compatibility
+            
+            # Extract the transcribed text
+            transcribed_text = result["text"].strip()
+            
+            if not transcribed_text:
+                raise ValueError("Audio transcription returned empty result")
+                
+            logger.info("Audio transcription completed successfully")
+            return transcribed_text
+            
+        except Exception as e:
+            logger.error(f"Error transcribing audio: {str(e)}")
+            raise Exception(f"Failed to transcribe audio: {str(e)}")
 
     def detect_silence_gaps(self, min_silence_len=300, silence_thresh=-40):
         """

@@ -276,23 +276,25 @@ def upload_audio():
 @app.route('/api/v1/generate-subtitles', methods=['POST'])
 def generate_subtitles():
     """
-    Generate subtitles for uploaded audio and script.
+    Generate subtitles for uploaded audio, with optional script.
+    If script is not provided, it will be automatically transcribed from the audio.
 
     Request:
     {
         "audio_id": "file_id",
-        "script": "Your script text here"
+        "script": "Optional script text. If not provided, will be transcribed from audio.",
+        "subtitle_style": "Optional style (default: 'epic')"
     }
     """
     try:
         data = request.json
         audio_id = data.get('audio_id')
-        script = data.get('script')
-        subtitle_style = data.get('subtitle_style', 'karaoke')
+        script = data.get('script')  # This is now optional
+        subtitle_style = data.get('subtitle_style', 'epic')
 
-        if not audio_id or not script:
+        if not audio_id:
             return jsonify({
-                'error': 'audio_id and script are required'
+                'error': 'audio_id is required'
             }), 400
 
         # Get audio file path
@@ -302,9 +304,21 @@ def generate_subtitles():
                 'error': f'Audio file not found: {audio_id}'
             }), 404
 
+        # Log whether we're using provided script or transcribing
+        if script and script.strip():
+            logger.info(f"Generating subtitles with provided script (length: {len(script)} chars)")
+        else:
+            logger.info("No script provided, will transcribe from audio")
+
         # Generate subtitles with the selected style
-        logger.info(f"Generating subtitles with style: {subtitle_style}")
-        subtitle_generator = SubtitleGenerator(script, audio_path, style=subtitle_style)
+        logger.info(f"Using subtitle style: {subtitle_style}")
+        try:
+            subtitle_generator = SubtitleGenerator(audio_path, script, style=subtitle_style)
+        except Exception as e:
+            logger.error(f"Error initializing subtitle generator: {str(e)}")
+            return jsonify({
+                'error': f'Failed to process audio: {str(e)}'
+            }), 500
 
         # Get word-level timestamps
         logger.info("Generating word-level timestamps...")

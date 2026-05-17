@@ -44,6 +44,9 @@ japanize-matplotlib>=1.1.0
 networkx>=2.8.0
 wordcloud>=1.8.0
 
+# Audio Processing
+whisper-openai>=20231117  # For audio transcription
+
 # New additions from the code block
 pandas>=1.5.0
 numpy>=1.21.0

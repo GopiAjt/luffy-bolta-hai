@@ -111,10 +111,12 @@ def generate_script_endpoint():
     }
     """
     try:
-        data = request.json
+        data = request.json or {}
+        topic = data.get('script') or data.get('topic')
+        language = data.get('language', 'hindi')
 
         # Generate script along with description and hashtags
-        result = generate_script()
+        result = generate_script(topic_override=topic, language=language)
 
         return jsonify({
             'status': 'success',

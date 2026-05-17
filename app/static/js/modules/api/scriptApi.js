@@ -4,13 +4,18 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  * API client for script generation
  */
 
-export const generateScript = async (prompt = "Generate a 30-60 second One Piece narration script") => {
+export const generateScript = async (prompt = null) => {
+    const payload = { language: 'hindi' };
+    if (prompt && prompt.trim()) {
+        payload.topic = prompt.trim();
+    }
+
     const response = await fetch('/api/v1/generate-script', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ script: prompt })
+        body: JSON.stringify(payload)
     });
 
     await handleApiError(response);

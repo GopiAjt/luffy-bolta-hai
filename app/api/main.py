@@ -12,6 +12,7 @@ from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
 from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
+from app.utils.output_cleanup import cleanup_output, get_output_usage
 import re
 import json
 import glob
@@ -540,6 +541,50 @@ def health_check():
         "status": "healthy",
         "version": "1.0.0"
     }
+
+
+@app.route('/api/v1/output-usage', methods=['GET'])
+def output_usage_endpoint():
+    """
+    Return generated output folder usage.
+    """
+    try:
+        return jsonify({
+            'status': 'success',
+            'usage': get_output_usage()
+        })
+    except Exception as e:
+        logger.error(f"Error getting output usage: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/cleanup-output', methods=['POST'])
+def cleanup_output_endpoint():
+    """
+    Clean generated output files.
+
+    Request:
+    {
+        "max_age_hours": 24,
+        "force": false
+    }
+    """
+    try:
+        data = request.json or {}
+        max_age_hours = data.get('max_age_hours', 24)
+        force = bool(data.get('force', False))
+
+        result = cleanup_output(max_age_hours=max_age_hours, force=force)
+        return jsonify({
+            'status': 'success',
+            'message': 'Output cleanup completed',
+            'result': result
+        })
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error cleaning output folder: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/v1/download/<filename>')

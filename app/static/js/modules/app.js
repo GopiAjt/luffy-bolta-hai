@@ -1,7 +1,7 @@
 import { generateScript } from './api/scriptApi.js';
 import { uploadAudio, generateVoiceover, getAudioMetadata } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
-import { generateVideo, generateSlideshow } from './api/videoApi.js';
+import { generateVideo, generateSlideshow, getOutputUsage, cleanupOutput } from './api/videoApi.js';
 import { LoadingIndicator } from './ui/loadingIndicator.js';
 import { AudioPlayer } from './ui/audioPlayer.js';
 import { VideoPlayer } from './ui/videoPlayer.js';
@@ -204,6 +204,19 @@ export class LuffyBoltHaiApp {
         } else {
             console.warn('Generate slideshow button not found');
         }
+
+        const cleanupOutputButton = document.getElementById('cleanupOutputButton');
+        if (cleanupOutputButton) {
+            cleanupOutputButton.addEventListener('click', () => {
+                this.handleCleanupOutput().catch(error => {
+                    console.error('Error in handleCleanupOutput:', error);
+                });
+            });
+        }
+
+        this.refreshOutputUsage().catch(error => {
+            console.warn('Could not load output usage:', error);
+        });
 
         console.log('=== Finished initializeEventListeners ===');
     }
@@ -414,6 +427,21 @@ export class LuffyBoltHaiApp {
             uploadProgress.style.display = 'block';
         }
 
+        const loadingMessages = [
+            'Loading Qwen3-TTS on CPU...',
+            'Designing the voice...',
+            'Generating speech audio...',
+            'Still working. CPU generation can take a while...',
+            'Almost there. Saving the voiceover soon...'
+        ];
+        let loadingMessageIndex = 0;
+        const loadingStartedAt = Date.now();
+        const voiceoverStatusTimer = uploadStatus ? setInterval(() => {
+            loadingMessageIndex = (loadingMessageIndex + 1) % loadingMessages.length;
+            const elapsedSeconds = Math.round((Date.now() - loadingStartedAt) / 1000);
+            uploadStatus.textContent = `${loadingMessages[loadingMessageIndex]} (${elapsedSeconds}s elapsed)`;
+        }, 8000) : null;
+
         try {
             const result = await generateVoiceover(
                 scriptText,
@@ -447,6 +475,9 @@ export class LuffyBoltHaiApp {
             console.log('=== Generate Voiceover Completed Successfully ===');
             return result;
         } finally {
+            if (voiceoverStatusTimer) {
+                clearInterval(voiceoverStatusTimer);
+            }
             if (voiceoverButton) {
                 voiceoverButton.disabled = false;
                 voiceoverButton.innerHTML = '<i class="bi bi-soundwave me-2"></i>Generate Voiceover';
@@ -760,6 +791,49 @@ export class LuffyBoltHaiApp {
         }
     }, {
         errorElement: document.getElementById('slidesStatus')
+    });
+
+    refreshOutputUsage = async () => {
+        const cleanupStatus = document.getElementById('cleanupStatus');
+        if (!cleanupStatus) {
+            return;
+        }
+
+        const data = await getOutputUsage();
+        if (data && data.usage) {
+            cleanupStatus.textContent = `${data.usage.file_count} generated files, ${data.usage.total_mb} MB used`;
+        }
+    };
+
+    handleCleanupOutput = withErrorHandling(async () => {
+        const cleanupButton = document.getElementById('cleanupOutputButton');
+        const cleanupStatus = document.getElementById('cleanupStatus');
+        const forceCheckbox = document.getElementById('cleanupForce');
+        const ageInput = document.getElementById('cleanupAgeHours');
+        const force = forceCheckbox ? forceCheckbox.checked : false;
+        const maxAgeHours = ageInput && ageInput.value ? Number(ageInput.value) : 24;
+
+        if (cleanupButton) {
+            cleanupButton.disabled = true;
+        }
+        if (cleanupStatus) {
+            cleanupStatus.textContent = force ? 'Deleting generated output files...' : `Deleting files older than ${maxAgeHours} hours...`;
+        }
+
+        try {
+            const result = await cleanupOutput({ maxAgeHours, force });
+            const cleanupResult = result.result;
+            if (cleanupStatus && cleanupResult) {
+                cleanupStatus.textContent = `Deleted ${cleanupResult.deleted_count} files (${cleanupResult.mb_deleted} MB). Remaining: ${cleanupResult.remaining.file_count} files, ${cleanupResult.remaining.total_mb} MB.`;
+            }
+            return result;
+        } finally {
+            if (cleanupButton) {
+                cleanupButton.disabled = false;
+            }
+        }
+    }, {
+        errorElement: document.getElementById('cleanupStatus')
     });
 }
 

@@ -374,6 +374,32 @@
                 <div id="finalVideoOutput" class="p-3 bg-light rounded" style="display: none;"></div>
             </div>
         </div>
+
+        <!-- Output Cleanup Section -->
+        <div class="section">
+            <h2 class="text-center mb-4"><i class="bi bi-trash me-2"></i>Output Cleanup</h2>
+            <div class="row justify-content-center">
+                <div class="col-md-8">
+                    <div class="d-flex gap-3 align-items-end flex-wrap">
+                        <div>
+                            <label for="cleanupAgeHours" class="form-label text-white">Delete files older than:</label>
+                            <div class="input-group">
+                                <input type="number" min="0" step="1" id="cleanupAgeHours" class="form-control" value="24">
+                                <span class="input-group-text">hours</span>
+                            </div>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="cleanupForce">
+                            <label class="form-check-label text-white" for="cleanupForce">Delete all generated files</label>
+                        </div>
+                        <button id="cleanupOutputButton" class="btn btn-warning text-white">
+                            <i class="bi bi-trash me-2"></i>Clean Output
+                        </button>
+                    </div>
+                    <div id="cleanupStatus" class="small text-white mt-3"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Bootstrap JS Bundle with Popper -->

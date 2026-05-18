@@ -1,6 +1,9 @@
 import logging
 import os
+import threading
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +20,28 @@ DEFAULT_VOICE_INSTRUCT = (
 
 _tts_model = None
 _tts_model_id = None
+
+
+@contextmanager
+def _progress_logger(label: str, interval_seconds: int = 10):
+    """Log a heartbeat while a long Qwen TTS step is running."""
+    stop_event = threading.Event()
+    started_at = time.monotonic()
+
+    def log_progress():
+        while not stop_event.wait(interval_seconds):
+            elapsed = time.monotonic() - started_at
+            logger.info("%s still running... elapsed %.1fs", label, elapsed)
+
+    logger.info("%s started", label)
+    thread = threading.Thread(target=log_progress, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        elapsed = time.monotonic() - started_at
+        logger.info("%s finished in %.1fs", label, elapsed)
 
 
 def _torch_dtype(torch):
@@ -63,12 +88,13 @@ def _load_qwen_tts_model(model_id: str = DEFAULT_TTS_MODEL):
         device,
         dtype,
     )
-    _tts_model = Qwen3TTSModel.from_pretrained(
-        model_id,
-        device_map=device,
-        dtype=dtype,
-        attn_implementation=os.getenv("QWEN_TTS_ATTN", "eager"),
-    )
+    with _progress_logger("Qwen TTS model load"):
+        _tts_model = Qwen3TTSModel.from_pretrained(
+            model_id,
+            device_map=device,
+            dtype=dtype,
+            attn_implementation=os.getenv("QWEN_TTS_ATTN", "eager"),
+        )
     _tts_model_id = model_id
     return _tts_model
 
@@ -106,17 +132,21 @@ def generate_voiceover(
         ) from exc
 
     logger.info("Generating Qwen voiceover (%d chars, language=%s)", len(text), language)
-    wavs, sample_rate = model.generate_voice_design(
-        text=text,
-        language=language,
-        instruct=voice_instruct,
-    )
+    logger.info("Voice design prompt: %s", voice_instruct)
+    with _progress_logger("Qwen voiceover generation"):
+        wavs, sample_rate = model.generate_voice_design(
+            text=text,
+            language=language,
+            instruct=voice_instruct,
+        )
 
     if not wavs:
         raise RuntimeError("Qwen TTS returned no audio")
 
+    logger.info("Writing generated voiceover WAV to %s at %s Hz", output_path, sample_rate)
     sf.write(str(output_path), wavs[0], sample_rate)
     duration = get_audio_duration(str(output_path))
+    logger.info("Generated voiceover %s (duration %.2fs)", output_path.name, duration)
 
     return {
         "id": output_path.name,

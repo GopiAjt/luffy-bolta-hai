@@ -43,3 +43,25 @@ export const generateSlideshow = async (audioId) => {
     await handleApiError(response);
     return parseJsonResponse(response);
 };
+
+export const getOutputUsage = async () => {
+    const response = await fetch('/api/v1/output-usage');
+    await handleApiError(response);
+    return parseJsonResponse(response);
+};
+
+export const cleanupOutput = async ({ maxAgeHours = 24, force = false } = {}) => {
+    const response = await fetch('/api/v1/cleanup-output', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            max_age_hours: maxAgeHours,
+            force
+        })
+    });
+
+    await handleApiError(response);
+    return parseJsonResponse(response);
+};

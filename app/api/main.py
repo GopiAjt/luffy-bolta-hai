@@ -13,6 +13,7 @@ from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
 from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
+from app.utils.manga_pdf_processor import create_pdf_slides, load_manga_pdf_manifest, process_manga_pdf
 import re
 import json
 import glob
@@ -23,6 +24,7 @@ from app.config import (
     VIDEO_RESOLUTION,
     VIDEO_BACKGROUND_COLOR,
     SUBTITLE_RESOLUTION,
+    MAX_PDF_SIZE,
     HOST,
     PORT,
     DEBUG,
@@ -275,6 +277,121 @@ def upload_audio():
         return jsonify({
             'error': 'Internal server error'
         }), 500
+
+
+@app.route('/api/v1/upload-manga-pdf', methods=['POST'])
+def upload_manga_pdf():
+    """
+    Upload and process an English manga PDF for the PDF-to-video workflow.
+    """
+    try:
+        if 'pdf' not in request.files:
+            return jsonify({'error': 'No PDF file provided'}), 400
+
+        file = request.files['pdf']
+        if not file.filename:
+            return jsonify({'error': 'No selected file'}), 400
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': 'Only PDF files are supported'}), 400
+
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        if file_size > MAX_PDF_SIZE:
+            return jsonify({'error': f'PDF file too large. Maximum size: {MAX_PDF_SIZE/1024/1024:.1f}MB'}), 400
+
+        result = process_manga_pdf(file)
+        return jsonify({
+            'status': 'success',
+            'message': 'Manga PDF processed successfully',
+            'output': result
+        })
+    except Exception as e:
+        logger.error(f"Error uploading manga PDF: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/generate-script-from-pdf', methods=['POST'])
+def generate_script_from_pdf_endpoint():
+    """
+    Generate an English script grounded in a processed manga PDF.
+    """
+    try:
+        data = request.json or {}
+        pdf_id = data.get('pdf_id')
+        topic = data.get('topic') or data.get('angle')
+        if not pdf_id:
+            return jsonify({'error': 'pdf_id is required'}), 400
+
+        try:
+            manifest = load_manga_pdf_manifest(pdf_id)
+        except FileNotFoundError as e:
+            return jsonify({'error': str(e)}), 404
+
+        context_text = manifest.get('extracted_text', '')
+        if not context_text.strip() and not topic:
+            return jsonify({
+                'error': 'No extractable PDF text found. Provide a topic/angle or install OCR support.'
+            }), 400
+
+        result = generate_script(
+            topic_override=topic,
+            language='english',
+            context_text=context_text
+        )
+        return jsonify({
+            'status': 'success',
+            'message': 'Script generated from manga PDF successfully',
+            'output': {
+                'title': result.get('title', ''),
+                'script': result.get('script', ''),
+                'description': result.get('description', ''),
+                'hashtags': result.get('hashtags', ''),
+                'pdf_id': pdf_id
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error generating PDF script: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/generate-pdf-slides', methods=['POST'])
+def generate_pdf_slides_endpoint():
+    """
+    Generate slide JSON from local manga PDF panel crops.
+    """
+    try:
+        data = request.json or {}
+        pdf_id = data.get('pdf_id')
+        audio_id = data.get('audio_id')
+        if not pdf_id:
+            return jsonify({'error': 'pdf_id is required'}), 400
+        if not audio_id:
+            return jsonify({'error': 'audio_id is required'}), 400
+
+        audio_path = UPLOADS_DIR / audio_id
+        if not audio_path.exists():
+            return jsonify({'error': f'Audio file not found: {audio_id}'}), 404
+
+        try:
+            load_manga_pdf_manifest(pdf_id)
+        except FileNotFoundError as e:
+            return jsonify({'error': str(e)}), 404
+
+        duration = get_audio_duration(str(audio_path))
+        result = create_pdf_slides(pdf_id, duration)
+        return jsonify({
+            'status': 'success',
+            'message': 'PDF slides generated successfully',
+            'output_path': result['slides_json'],
+            'slides': result['slides'],
+            'slide_count': result['slide_count']
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error generating PDF slides: {str(e)}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/v1/generate-voiceover', methods=['POST'])

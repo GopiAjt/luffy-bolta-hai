@@ -36,7 +36,7 @@ def is_generic_topic(topic: str) -> bool:
     return any(phrase in normalized for phrase in generic_phrases)
 
 
-def generate_script(topic_override: str = None, language: str = "english") -> dict:
+def generate_script(topic_override: str = None, language: str = "english", context_text: str = None) -> dict:
     """Generate a 30-60s One Piece narration script via Gemini."""
     try:
         topics = [
@@ -100,7 +100,10 @@ def generate_script(topic_override: str = None, language: str = "english") -> di
 
 "Nika’s True Origin EXPOSED – The Sun God’s Lost Power",
         ]
+        context_text = (context_text or "").strip()
         topic = topic_override.strip() if not is_generic_topic(topic_override) else random.choice(topics)
+        if context_text and is_generic_topic(topic_override):
+            topic = "Latest One Piece manga chapter theory"
         language = (language or "english").strip().lower()
         is_hindi = language in {"hindi", "hi", "hinglish"}
         if is_hindi:
@@ -148,12 +151,24 @@ def generate_script(topic_override: str = None, language: str = "english") -> di
             fomo_rule = "- MUST include at least one FOMO phrase in English ('Most fans missed this...', 'I ignored this clue at first...').\n"
             final_quality_rule = "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear English sentences, natural fan energy, maximum scroll-stopping engagement."
 
+        context_block = ""
+        if context_text:
+            trimmed_context = context_text[:12000]
+            context_block = (
+                "MANGA PDF CONTEXT:\n"
+                "Use the following extracted manga text as the main source of this video. "
+                "Ground the theory in these details, but you may use safe general One Piece knowledge to connect ideas. "
+                "Do not invent page text that is not supported by this context.\n"
+                f"{trimmed_context}\n\n"
+            )
+
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
             "Write in a Gen-Z, hype, casual tone, but keep it readable.\n\n"
             f"{language_rules}"
             
             f"TOPIC: \"{topic}\"\n\n"
+            f"{context_block}"
 
             "OUTPUT STRUCTURE (in this exact order):\n"
             f"TITLE: [engaging {language_label} title, under 80 chars]\n\n"

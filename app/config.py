@@ -13,10 +13,12 @@ UPLOADS_DIR = BASE_DIR / "output" / "data"
 IMAGE_SLIDES_DIR = BASE_DIR / "output" / "image_slides"
 EXPRESSIONS_DIR = BASE_DIR / "static" / "expressions"
 COMPILED_VIDEO_DIR = BASE_DIR / "output" / "compiled_video"
+MANGA_PDF_DIR = BASE_DIR / "output" / "manga_pdf"
 
 # --- AUDIO ---
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ALLOWED_EXTENSIONS = {"mp3", "wav"}
+MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
 
 # # --- VIDEO ---
 VIDEO_RESOLUTION = (1080, 1920)
@@ -49,3 +51,4 @@ VECTOR_DB_CONFIG = {
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 COMPILED_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+MANGA_PDF_DIR.mkdir(parents=True, exist_ok=True)

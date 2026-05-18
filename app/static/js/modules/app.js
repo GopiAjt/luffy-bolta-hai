@@ -2,6 +2,7 @@ import { generateScript } from './api/scriptApi.js';
 import { uploadAudio, generateVoiceover, getAudioMetadata } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
 import { generateVideo, generateSlideshow, getOutputUsage, cleanupOutput } from './api/videoApi.js';
+import { uploadMangaPdf, generateScriptFromPdf, generatePdfSlides } from './api/mangaPdfApi.js';
 import { LoadingIndicator } from './ui/loadingIndicator.js';
 import { AudioPlayer } from './ui/audioPlayer.js';
 import { VideoPlayer } from './ui/videoPlayer.js';
@@ -32,6 +33,7 @@ export class LuffyBoltHaiApp {
 
             // State
             this.currentAudioId = null;
+            this.currentPdfId = null;
 
             // Bind event handlers
             console.log('Setting up event listeners...');
@@ -203,6 +205,33 @@ export class LuffyBoltHaiApp {
             }
         } else {
             console.warn('Generate slideshow button not found');
+        }
+
+        const mangaPdfInput = document.getElementById('mangaPdfFile');
+        if (mangaPdfInput) {
+            mangaPdfInput.addEventListener('change', (e) => {
+                this.handleMangaPdfUpload(e).catch(error => {
+                    console.error('Error in handleMangaPdfUpload:', error);
+                });
+            });
+        }
+
+        const generatePdfScriptButton = document.getElementById('generatePdfScriptButton');
+        if (generatePdfScriptButton) {
+            generatePdfScriptButton.addEventListener('click', () => {
+                this.handleGeneratePdfScript().catch(error => {
+                    console.error('Error in handleGeneratePdfScript:', error);
+                });
+            });
+        }
+
+        const generatePdfSlidesButton = document.getElementById('generatePdfSlidesButton');
+        if (generatePdfSlidesButton) {
+            generatePdfSlidesButton.addEventListener('click', () => {
+                this.handleGeneratePdfSlides().catch(error => {
+                    console.error('Error in handleGeneratePdfSlides:', error);
+                });
+            });
         }
 
         const cleanupOutputButton = document.getElementById('cleanupOutputButton');
@@ -406,7 +435,6 @@ export class LuffyBoltHaiApp {
         console.log('=== Generate Voiceover Started ===');
         const scriptInput = document.getElementById('scriptInput');
         const voiceLanguage = document.getElementById('voiceLanguage');
-        const voiceInstruct = document.getElementById('voiceInstruct');
         const voiceoverButton = document.getElementById('generateVoiceoverButton');
         const uploadStatus = document.getElementById('uploadStatus');
         const uploadProgress = document.getElementById('uploadProgress');
@@ -445,8 +473,7 @@ export class LuffyBoltHaiApp {
         try {
             const result = await generateVoiceover(
                 scriptText,
-                voiceLanguage ? voiceLanguage.value : 'English',
-                voiceInstruct ? voiceInstruct.value : ''
+                voiceLanguage ? voiceLanguage.value : 'English'
             );
 
             if (!result || !result.id) {
@@ -792,6 +819,130 @@ export class LuffyBoltHaiApp {
         }
     }, {
         errorElement: document.getElementById('slidesStatus')
+    });
+
+    handleMangaPdfUpload = withErrorHandling(async (event) => {
+        const file = event.target.files[0];
+        const status = document.getElementById('mangaPdfStatus');
+        const preview = document.getElementById('mangaPdfPreview');
+        const generatePdfScriptButton = document.getElementById('generatePdfScriptButton');
+
+        if (!file) {
+            return;
+        }
+        if (status) {
+            status.textContent = 'Uploading and processing manga PDF...';
+        }
+        if (generatePdfScriptButton) {
+            generatePdfScriptButton.disabled = true;
+        }
+
+        const result = await uploadMangaPdf(file);
+        const output = result.output;
+        this.currentPdfId = output.pdf_id;
+
+        if (status) {
+            const warningText = output.warnings && output.warnings.length ? ` Warnings: ${output.warnings.length}` : '';
+            status.textContent = `PDF ready: ${output.page_count} pages, ${output.panel_count} visuals, ${output.text_length} text chars.${warningText}`;
+        }
+        if (preview) {
+            preview.textContent = output.text_preview || 'No embedded text was found. Add a topic/angle before generating the script.';
+            preview.style.display = 'block';
+        }
+        if (generatePdfScriptButton) {
+            generatePdfScriptButton.disabled = false;
+        }
+
+        return result;
+    }, {
+        errorElement: document.getElementById('mangaPdfStatus')
+    });
+
+    handleGeneratePdfScript = withErrorHandling(async () => {
+        const status = document.getElementById('mangaPdfStatus');
+        const angleInput = document.getElementById('mangaPdfAngle');
+        const button = document.getElementById('generatePdfScriptButton');
+
+        if (!this.currentPdfId) {
+            throw new Error('Please upload a manga PDF first');
+        }
+        if (button) {
+            button.disabled = true;
+        }
+        if (status) {
+            status.textContent = 'Generating script from manga PDF context...';
+        }
+
+        try {
+            const result = await generateScriptFromPdf(
+                this.currentPdfId,
+                angleInput ? angleInput.value : ''
+            );
+            const output = result.output;
+
+            const scriptOutput = document.getElementById('scriptOutput');
+            const scriptInput = document.getElementById('scriptInput');
+            const titleElement = document.getElementById('titleText');
+            const titleContainer = document.getElementById('scriptTitle');
+
+            if (scriptOutput) {
+                scriptOutput.textContent = output.script;
+                scriptOutput.style.display = 'block';
+            }
+            if (scriptInput) {
+                scriptInput.value = output.script;
+            }
+            if (output.title && titleElement && titleContainer) {
+                titleElement.textContent = output.title;
+                titleContainer.style.display = 'block';
+            }
+            if (status) {
+                status.textContent = 'Manga PDF script generated. Generate voiceover next.';
+            }
+            return result;
+        } finally {
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    }, {
+        errorElement: document.getElementById('mangaPdfStatus')
+    });
+
+    handleGeneratePdfSlides = withErrorHandling(async () => {
+        const status = document.getElementById('mangaPdfStatus');
+        const button = document.getElementById('generatePdfSlidesButton');
+
+        if (!this.currentPdfId) {
+            throw new Error('Please upload a manga PDF first');
+        }
+        if (!this.currentAudioId) {
+            throw new Error('Please generate or upload audio before creating PDF slides');
+        }
+        if (button) {
+            button.disabled = true;
+        }
+        if (status) {
+            status.textContent = 'Generating manga panel slides from PDF...';
+        }
+
+        try {
+            const result = await generatePdfSlides(this.currentPdfId, this.currentAudioId);
+            if (status) {
+                status.textContent = `Generated ${result.slide_count} manga panel slides. You can render the final video now.`;
+            }
+            const finalButton = document.getElementById('generateFinalVideoButton');
+            if (finalButton) {
+                finalButton.disabled = false;
+            }
+            return result;
+        } finally {
+            if (button) {
+                button.disabled = false;
+            }
+        }
+    }, {
+        errorElement: document.getElementById('mangaPdfStatus')
     });
 
     refreshOutputUsage = async () => {

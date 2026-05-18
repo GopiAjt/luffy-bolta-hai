@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 from typing import Iterable
 
-from app.config import COMPILED_VIDEO_DIR, IMAGE_SLIDES_DIR, UPLOADS_DIR
+from app.config import COMPILED_VIDEO_DIR, IMAGE_SLIDES_DIR, MANGA_PDF_DIR, UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIRS = (UPLOADS_DIR, IMAGE_SLIDES_DIR, COMPILED_VIDEO_DIR)
+OUTPUT_DIRS = (UPLOADS_DIR, IMAGE_SLIDES_DIR, COMPILED_VIDEO_DIR, MANGA_PDF_DIR)
 DEFAULT_MAX_AGE_HOURS = 24
 
 

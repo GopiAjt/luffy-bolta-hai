@@ -58,17 +58,13 @@ export const uploadAudio = async (file, onProgress) => {
     });
 };
 
-export const generateVoiceover = async (script, language = 'English', voiceInstruct = '') => {
+export const generateVoiceover = async (script, language = 'English') => {
     const response = await fetch('/api/v1/generate-voiceover', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            script,
-            language,
-            voice_instruct: voiceInstruct
-        })
+        body: JSON.stringify({ script, language })
     });
 
     await handleApiError(response);

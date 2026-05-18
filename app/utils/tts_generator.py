@@ -1,5 +1,7 @@
 import logging
 import os
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -26,6 +28,51 @@ DEFAULT_VOICE_INSTRUCT = (
 
 _tts_model = None
 _tts_model_id = None
+
+
+def _master_voiceover(raw_path: Path, output_path: Path) -> None:
+    """Apply light voiceover mastering with FFmpeg, falling back to raw audio."""
+    if os.getenv("QWEN_TTS_MASTERING", "1").strip().lower() in {"0", "false", "no"}:
+        shutil.move(str(raw_path), str(output_path))
+        logger.info("Voiceover mastering disabled; using raw generated audio")
+        return
+
+    try:
+        raw_duration = get_audio_duration(str(raw_path))
+    except Exception:
+        raw_duration = 0.0
+
+    fade_out_start = max(0.0, raw_duration - 0.08)
+    audio_filter = (
+        "loudnorm=I=-16:TP=-1.5:LRA=11,"
+        "acompressor=threshold=-18dB:ratio=2.2:attack=20:release=250,"
+        "alimiter=limit=0.95,"
+        "afade=t=in:st=0:d=0.04,"
+        f"afade=t=out:st={fade_out_start:.3f}:d=0.08"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(raw_path),
+        "-af",
+        audio_filter,
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        str(output_path),
+    ]
+
+    try:
+        logger.info("Mastering voiceover with FFmpeg")
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        raw_path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Voiceover mastering failed, using raw audio: %s", exc)
+        if output_path.exists():
+            output_path.unlink()
+        shutil.move(str(raw_path), str(output_path))
 
 
 @contextmanager
@@ -124,6 +171,7 @@ def generate_voiceover(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{uuid.uuid4()}.wav"
+    raw_output_path = output_path.with_suffix(".raw.wav")
     voice_instruct = (instruct or DEFAULT_VOICE_INSTRUCT).strip()
     language = (language or "English").strip()
 
@@ -149,8 +197,9 @@ def generate_voiceover(
     if not wavs:
         raise RuntimeError("Qwen TTS returned no audio")
 
-    logger.info("Writing generated voiceover WAV to %s at %s Hz", output_path, sample_rate)
-    sf.write(str(output_path), wavs[0], sample_rate)
+    logger.info("Writing generated voiceover WAV to %s at %s Hz", raw_output_path, sample_rate)
+    sf.write(str(raw_output_path), wavs[0], sample_rate)
+    _master_voiceover(raw_output_path, output_path)
     duration = get_audio_duration(str(output_path))
     logger.info("Generated voiceover %s (duration %.2fs)", output_path.name, duration)
 

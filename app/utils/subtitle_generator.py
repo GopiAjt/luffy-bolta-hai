@@ -2,6 +2,7 @@ import os
 import json
 import textwrap
 import re
+import subprocess
 from typing import List, Dict, Set, Optional, Callable
 import logging
 import tempfile
@@ -12,6 +13,8 @@ from pydub import AudioSegment, silence
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+DEVANAGARI_RE = re.compile(r'[\u0900-\u097F]')
 
 class SubtitleGenerator:
     # One Piece specific terms for enhanced styling
@@ -43,6 +46,49 @@ class SubtitleGenerator:
         'dream', 'freedom', 'friendship', 'family', 'promise', 'hope', 'courage', 'will',
         'nakama', 'treasure', 'adventure', 'journey', 'destiny', 'legend', 'myth'
     }
+    _devanagari_font_cache: Optional[str] = None
+
+    @classmethod
+    def _get_devanagari_font(cls) -> Optional[str]:
+        """Return an installed font family that can render Hindi/Devanagari text."""
+        if cls._devanagari_font_cache is not None:
+            return cls._devanagari_font_cache or None
+
+        candidates = [
+            "Noto Sans Devanagari",
+            "Noto Serif Devanagari",
+            "Lohit Devanagari",
+            "Mangal",
+            "Nirmala UI",
+            "Kokila",
+            "Arial Unicode MS",
+        ]
+
+        for family in candidates:
+            try:
+                result = subprocess.run(
+                    ["fc-match", family],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+
+            matched = result.stdout.strip().lower()
+            if family.lower() in matched:
+                cls._devanagari_font_cache = family
+                logger.info("Using Devanagari subtitle font: %s", family)
+                return family
+
+        cls._devanagari_font_cache = ""
+        logger.warning(
+            "No Devanagari-capable font found. Install fonts-noto-core or "
+            "fonts-noto-extra so Hindi subtitles can render."
+        )
+        return None
+
     def __init__(self, audio_path: str, script_text: str = None, style: str = 'epic'):
         """
         Initialize subtitle generator with audio path and optional script text.
@@ -479,6 +525,7 @@ class SubtitleGenerator:
     def _apply_style(self, word: str, style_config: dict) -> str:
         """Apply the given style configuration to a word and return the styled ASS tag."""
         clean_word = word.replace('{', '').replace('}', '')
+        devanagari_font = self._get_devanagari_font() if DEVANAGARI_RE.search(clean_word) else None
         style_parts = []
         
         # Add color (default to white if not specified)
@@ -508,7 +555,7 @@ class SubtitleGenerator:
         style_parts.append('\\i1' if style_config.get('italic', False) else '\\i0')
         
         # Add font family
-        style_parts.append(f'\\fn{style_config.get("font", "NimbusSans")}')
+        style_parts.append(f'\\fn{devanagari_font or style_config.get("font", "NimbusSans")}')
         
         # Combine all style parts and apply to word
         style_str = '\\'.join(style_parts)
@@ -562,6 +609,8 @@ class SubtitleGenerator:
                 f"Invalid resolution '{resolution}', defaulting to 1080x1920")
             res_x, res_y = 1080, 1920
 
+        default_font = self._get_devanagari_font() or "DejaVu Sans"
+
         header = textwrap.dedent(f"""
             [Script Info]
             Title: Generated Subtitles
@@ -575,7 +624,7 @@ class SubtitleGenerator:
 
             [V4+ Styles]
             Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-            Style: Default,NimbusSans,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,1,5,30,30,0,1
+            Style: Default,{default_font},72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,1,5,30,30,0,1
 
             [Events]
             Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

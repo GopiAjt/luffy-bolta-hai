@@ -943,6 +943,26 @@ def convert_to_jpg(image_path, quality=95):
         return None
 
 
+def create_placeholder_slide(image_dir, resolution, label="One Piece"):
+    """Create a simple fallback image so missing downloads do not shorten videos."""
+    os.makedirs(image_dir, exist_ok=True)
+    output_path = os.path.join(image_dir, "slide_placeholder.jpg")
+    if os.path.exists(output_path):
+        return output_path
+
+    res_w, res_h = resolution
+    frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    frame[:] = (18, 18, 24)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    title = label[:32] if label else "One Piece"
+    subtitle = "image unavailable"
+    cv2.putText(frame, title, (max(24, res_w // 12), res_h // 2 - 20), font, 1.5, (245, 245, 245), 3, cv2.LINE_AA)
+    cv2.putText(frame, subtitle, (max(24, res_w // 12), res_h // 2 + 40), font, 0.9, (180, 180, 190), 2, cv2.LINE_AA)
+    cv2.imwrite(output_path, frame)
+    return output_path
+
+
 def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0):
     """
     Generates the final slideshow video using OpenCV.
@@ -1088,6 +1108,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
 
     # Initialize frames_written counter
     frames_written = 0
+    last_valid_img_path = None
 
     for idx, slide in enumerate(slides):
         try:
@@ -1159,11 +1180,22 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 except Exception as e:
                     logger.warning(f"Error while searching for slide {idx+1}: {e}")
             
-            # If still no image found, log a warning and skip this slide
+            # If still no image found, reuse the previous visual so timing stays intact.
             if not img_path or not os.path.exists(img_path):
-                logger.warning(f"Image for slide {idx+1} not found in {image_dir}. Tried multiple naming patterns. Skipping this slide.")
+                if last_valid_img_path and os.path.exists(last_valid_img_path):
+                    logger.warning(
+                        f"Image for slide {idx+1} not found in {image_dir}. "
+                        f"Reusing previous image to preserve slide timing: {last_valid_img_path}"
+                    )
+                    img_path = last_valid_img_path
+                else:
+                    label = slide.get("summary") or slide.get("image_search_query") or f"Slide {idx+1}"
+                    img_path = create_placeholder_slide(image_dir, resolution, label=label)
+                    logger.warning(
+                        f"Image for slide {idx+1} not found in {image_dir}. "
+                        f"Using generated placeholder: {img_path}"
+                    )
                 logger.debug(f"Searched for patterns: slide_{idx+1:03d}_*.{{jpg,png,jpeg}}, slide_{idx+1}*.{{jpg,png,jpeg}}")
-                continue
 
             # Convert image to JPG if it's not already
             _, ext = os.path.splitext(img_path)
@@ -1175,6 +1207,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     img_path = jpg_path
 
             logger.info(f"Processing image: {img_path}")
+            last_valid_img_path = img_path
             # Use preselected transition for this boundary to keep frame plan consistent
             selected_transition_type = boundary_transition_types[idx]
             if selected_transition_type and selected_transition_type != 'none' and idx > 0:

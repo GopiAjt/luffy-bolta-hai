@@ -49,6 +49,43 @@ PRIORITY_DOMAINS: List[str] = [
     "gamerant.com",
 ]
 
+ONE_PIECE_RELEVANCE_TERMS = [
+    "one piece", "luffy", "zoro", "sanji", "nami", "usopp", "chopper",
+    "robin", "franky", "brook", "jinbe", "straw hat", "mugiwara",
+    "blackbeard", "whitebeard", "teach", "edward newgate", "gorosei",
+    "shanks", "mihawk", "kaido", "big mom", "ace", "sabo", "marineford",
+    "wano", "egghead", "void century", "devil fruit", "yami yami",
+    "gura gura", "nika", "joy boy", "imu", "world government"
+]
+
+FANDOM_PAGE_ALIASES = {
+    "blackbeard": [
+        "Marshall D. Teach",
+        "Blackbeard Pirates",
+        "Yami Yami no Mi",
+        "Gura Gura no Mi",
+    ],
+    "teach": ["Marshall D. Teach", "Blackbeard Pirates"],
+    "yami yami": ["Yami Yami no Mi", "Marshall D. Teach"],
+    "gura gura": ["Gura Gura no Mi", "Edward Newgate", "Marshall D. Teach"],
+    "whitebeard": ["Edward Newgate", "Whitebeard Pirates", "Gura Gura no Mi"],
+    "gorosei": [
+        "Five Elders",
+        "Jaygarcia Saturn",
+        "Shepherd Ju Peter",
+        "Topman Warcury",
+        "Marcus Mars",
+        "Ethanbaron V. Nusjuro",
+    ],
+    "five elders": ["Five Elders"],
+    "marineford": ["Marineford", "Marineford Arc", "Summit War of Marineford"],
+    "void century": ["Void Century", "Joy Boy", "Poneglyph"],
+    "grand line": ["Grand Line", "World", "Log Pose"],
+    "one piece logo": ["One Piece", "One Piece (Manga)", "One Piece Wiki"],
+}
+
+GOOGLE_CSE_DISABLED = False
+
 
 def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
     """Parse .ass file and extract dialogues with timestamps.
@@ -418,6 +455,11 @@ def _google_image_search_impl(query: str, api_key: str, cse_id: str, num_results
         "safe": "active"
     }
     
+    global GOOGLE_CSE_DISABLED
+    if GOOGLE_CSE_DISABLED:
+        logger.debug("Skipping Google CSE query because the API is rate-limited/forbidden for this run.")
+        return []
+
     try:
         logger.debug(f"Executing search: {query}")
         resp = requests.get(url, params=params, timeout=15)
@@ -425,7 +467,15 @@ def _google_image_search_impl(query: str, api_key: str, cse_id: str, num_results
         results = resp.json()
         return results.get("items", [])
     except requests.exceptions.RequestException as e:
-        logger.error(f"Google Image Search API error for query '{query}': {str(e)}")
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if status else e.__class__.__name__
+        logger.error(f"Google Image Search API error for query '{query}': {detail}")
+        if status in (403, 429):
+            GOOGLE_CSE_DISABLED = True
+            logger.warning(
+                "Disabling Google CSE for the rest of this image download run "
+                "because it returned %s.", detail
+            )
         return []
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON response for query '{query}': {str(e)}")
@@ -455,7 +505,7 @@ def google_image_search(query: str, api_key: Optional[str] = None, cse_id: Optio
     items = _google_image_search_impl(query, api_key, cse_id, num_results)
     
     # If no results, try a broader search by removing any special characters
-    if not items and any(c in query for c in ':"'):
+    if not items and "site:" not in query and any(c in query for c in ':"'):
         simplified_query = re.sub(r'[:"]', '', query)
         logger.debug(f"No results, trying simplified query: {simplified_query}")
         items = _google_image_search_impl(simplified_query, api_key, cse_id, num_results)
@@ -628,25 +678,131 @@ def _generate_fallback_queries(base_query: str) -> List[str]:
     seen = set()
     return [f for f in fallbacks if not (f in seen or seen.add(f))]
 
-def search_fandom_pages(query: str, limit: int = 3) -> List[Dict]:
+
+def _unique_queries(*query_groups: List[str]) -> List[str]:
+    """Return unique non-empty queries while preserving order."""
+    queries = []
+    seen = set()
+    for group in query_groups:
+        for query in group:
+            normalized = query.strip()
+            if normalized and normalized not in seen:
+                queries.append(normalized)
+                seen.add(normalized)
+    return queries
+
+
+def _fandom_page_aliases(query: str) -> List[str]:
+    """Return known One Piece Wiki page titles related to a search query."""
+    query_lower = query.lower()
+    aliases = []
+    for term, page_titles in FANDOM_PAGE_ALIASES.items():
+        if term in query_lower:
+            aliases.extend(page_titles)
+    return _unique_queries(aliases)
+
+
+def _image_relevance_score(img: Dict, query: str) -> int:
+    """Score a Fandom image using title/description/query overlap."""
+    haystack = " ".join([
+        img.get("title", ""),
+        img.get("description", ""),
+        img.get("url", ""),
+    ]).lower()
+    words = [w for w in re.findall(r'\b[\w-]+\b', query.lower()) if len(w) > 2]
+    score = sum(3 for word in words if word in haystack)
+
+    for term in ONE_PIECE_RELEVANCE_TERMS:
+        if term in haystack:
+            score += 1
+
+    noisy_terms = ["logo", "icon", "symbol", "wiki", "placeholder", "question mark"]
+    score -= sum(4 for term in noisy_terms if term in haystack)
+    score += min(img.get("width", 0), 2000) // 500
+    return score
+
+
+def _query_keywords(query: str) -> Set[str]:
+    """Extract useful words for comparing slide image queries."""
+    stopwords = {"one", "piece", "the", "and", "for", "with", "from", "logo", "image"}
+    return {
+        word
+        for word in re.findall(r'\b[\w-]+\b', query.lower())
+        if len(word) > 2 and word not in stopwords
+    }
+
+
+def _best_previous_image(query: str, previous_images: List[Dict]) -> Optional[str]:
+    """Pick the most relevant prior downloaded image for this query."""
+    if not previous_images:
+        return None
+
+    query_words = _query_keywords(query)
+    best = max(
+        previous_images,
+        key=lambda item: (
+            len(query_words & item.get("keywords", set())),
+            item.get("index", -1),
+        ),
+    )
+    return best.get("path")
+
+def search_fandom_pages(query: str, limit: int = 5) -> List[Dict]:
     """Search for pages on One Piece Fandom."""
+    searches = [
+        f'intitle:"{query}"',
+        query,
+    ]
+    pages = []
+    seen_titles = set()
+
+    for search in searches:
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": search,
+            "format": "json",
+            "srlimit": limit,
+            "srwhat": "text"
+        }
+
+        try:
+            response = requests.get(FANDOM_API_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            for page in data.get("query", {}).get("search", []):
+                title = page.get("title")
+                if title and title not in seen_titles:
+                    pages.append(page)
+                    seen_titles.add(title)
+        except Exception as e:
+            logger.error(f"Fandom search error for '{query}': {str(e)}")
+
+        if len(pages) >= limit:
+            break
+
+    return pages[:limit]
+
+
+def get_fandom_page_title(page_title: str) -> Optional[str]:
+    """Return the canonical title if a Fandom page exists."""
     params = {
         "action": "query",
-        "list": "search",
-        "srsearch": f"intitle:{query}",
+        "titles": page_title,
         "format": "json",
-        "srlimit": limit,
-        "srwhat": "text"
+        "redirects": 1,
     }
-    
+
     try:
         response = requests.get(FANDOM_API_URL, params=params, timeout=10)
         response.raise_for_status()
-        data = response.json()
-        return data.get("query", {}).get("search", [])
+        pages = response.json().get("query", {}).get("pages", {})
+        for page in pages.values():
+            if "missing" not in page and page.get("title"):
+                return page["title"]
     except Exception as e:
-        logger.error(f"Fandom search error for '{query}': {str(e)}")
-        return []
+        logger.debug(f"Fandom page lookup error for '{page_title}': {str(e)}")
+    return None
 
 def get_page_images(page_title: str) -> List[Dict]:
     """Get all images from a specific Fandom page."""
@@ -719,16 +875,24 @@ def fetch_fandom_images(query: str, max_results: int = 5) -> List[Dict]:
     """Fetch relevant images from One Piece Fandom for a given query."""
     logger.debug(f"[Fandom] Searching for: {query}")
     
-    # 1. Search for relevant pages
+    # 1. Search for relevant pages, plus known canonical page aliases.
+    page_titles = []
+    for alias in _fandom_page_aliases(query):
+        canonical_title = get_fandom_page_title(alias)
+        if canonical_title:
+            page_titles.append(canonical_title)
+
     pages = search_fandom_pages(query)
-    if not pages:
+    page_titles.extend(page["title"] for page in pages if page.get("title"))
+    page_titles = _unique_queries(page_titles)
+
+    if not page_titles:
         logger.debug(f"[Fandom] No pages found for: {query}")
         return []
         
     # 2. Get images from top pages
     all_images = []
-    for page in pages[:3]:  # Limit to top 3 pages to avoid too many requests
-        page_title = page["title"]
+    for page_title in page_titles[:6]:  # Limit to top pages to avoid too many requests
         logger.debug(f"[Fandom] Getting images for page: {page_title}")
         
         image_titles = get_page_images(page_title)
@@ -747,8 +911,8 @@ def fetch_fandom_images(query: str, max_results: int = 5) -> List[Dict]:
     filtered = []
     seen = set()
     
-    # Prefer larger images with common One Piece aspect ratios
-    for img in sorted(all_images, key=lambda x: x.get("width", 0), reverse=True):
+    # Prefer query-relevant larger images with common One Piece aspect ratios.
+    for img in sorted(all_images, key=lambda x: (_image_relevance_score(x, query), x.get("width", 0)), reverse=True):
         if len(filtered) >= max_results:
             break
             
@@ -783,6 +947,9 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
         json_path: Path to the JSON file containing slide data
         out_dir: Directory to save downloaded images
     """
+    global GOOGLE_CSE_DISABLED
+    GOOGLE_CSE_DISABLED = False
+
     # Clear the output directory before downloading new images
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
@@ -803,6 +970,9 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
     # Track downloaded image hashes to avoid duplicates
     downloaded_hashes = set()
     
+    last_downloaded_path = None
+    previous_images = []
+
     for idx, slide in enumerate(slides):
         search_query = slide.get("image_search_query")
         if not search_query:
@@ -816,45 +986,67 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
 
         # Prepare the list of queries: try site-restricted searches on preferred domains first
         fallback_queries = _generate_fallback_queries(search_query)
+        candidate_queries = _unique_queries([search_query], fallback_queries)
+        fandom_queries = [
+            q for q in candidate_queries
+            if q.lower() != "one piece" or search_query.lower() == "one piece" or "logo" in search_query.lower()
+        ]
 
         # 1) First try One Piece Fandom API for high-quality, relevant images
         if not downloaded:
-            logger.info(f"[Slide {idx+1}] Trying Fandom API for: {search_query}")
-            fandom_images = fetch_fandom_images(search_query, max_results=5)
-            
-            for img in fandom_images:
+            duplicate_fandom_count = 0
+            for fandom_query in fandom_queries:
                 if downloaded:
                     break
-                    
-                try:
-                    # Generate a hash from the image URL for deduplication
-                    image_hash = _get_image_hash(img["url"])
-                    
-                    # Skip duplicates
-                    if image_hash in downloaded_hashes:
-                        logger.debug(f"[Slide {idx+1}] Skipping duplicate Fandom image")
-                        continue
-                    
-                    # Download the image
-                    filename = f"slide_{idx+1:03d}_fandom_{image_hash[:8]}.jpg"
-                    save_path = os.path.join(out_dir, filename)
-                    
-                    if download_image(img["url"], save_path):
-                        downloaded_hashes.add(image_hash)
-                        slide["image_path"] = save_path
-                        slide["image_source"] = "fandom"
-                        downloaded = True
-                        logger.info(f"[Slide {idx+1}] Downloaded from Fandom: {os.path.basename(save_path)}")
+                logger.info(f"[Slide {idx+1}] Trying Fandom API for: {fandom_query}")
+                fandom_images = fetch_fandom_images(fandom_query, max_results=10)
+
+                for img in fandom_images:
+                    if downloaded:
                         break
-                        
-                except Exception as e:
-                    logger.warning(f"[Slide {idx+1}] Error processing Fandom image: {str(e)}")
-                    continue
+
+                    try:
+                        image_hash = _get_image_hash(img["url"])
+
+                        if image_hash in downloaded_hashes:
+                            duplicate_fandom_count += 1
+                            logger.debug(
+                                f"[Slide {idx+1}] Skipping duplicate Fandom image: "
+                                f"{img.get('title') or img.get('url')}"
+                            )
+                            continue
+
+                        filename = f"slide_{idx+1:03d}_fandom_{image_hash[:8]}.jpg"
+                        save_path = os.path.join(out_dir, filename)
+
+                        if download_image(img["url"], save_path):
+                            downloaded_hashes.add(image_hash)
+                            slide["image_path"] = save_path
+                            slide["image_source"] = "fandom"
+                            last_downloaded_path = save_path
+                            previous_images.append({
+                                "path": save_path,
+                                "keywords": _query_keywords(search_query),
+                                "index": idx,
+                            })
+                            downloaded = True
+                            logger.info(f"[Slide {idx+1}] Downloaded from Fandom: {os.path.basename(save_path)}")
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"[Slide {idx+1}] Error processing Fandom image: {str(e)}")
+                        continue
+
+            if not downloaded and duplicate_fandom_count:
+                logger.info(
+                    f"[Slide {idx+1}] Fandom only returned duplicate images "
+                    f"({duplicate_fandom_count} skipped); trying other sources."
+                )
         
         # 2) Fall back to Google CSE with priority domains if Fandom didn't work
         if not downloaded:
             combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS[1:]]) + ")"  # Skip fandom.com as we already tried it
-            for q in [search_query] + fallback_queries:
+            for q in candidate_queries:
                 if downloaded:
                     break
                     
@@ -868,47 +1060,47 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
 
                 logger.info(f"[Slide {idx+1}] Found {len(items)} results across priority sites")
 
-            # Process search results
-            for item in items:
-                if downloaded:
-                    break
+                for item in items:
+                    if downloaded:
+                        break
 
-                item_link = item.get('link', '')
-                item_title = item.get('title', '').lower()
-                item_mime = item.get('mime', '')
+                    item_link = item.get('link', '')
+                    item_title = item.get('title', '').lower()
+                    item_mime = item.get('mime', '')
 
-                # Skip if no link or invalid MIME type
-                if not item_link or not item_mime.startswith('image/'):
-                    continue
+                    if not item_link or not item_mime.startswith('image/'):
+                        continue
 
-                # Check for One Piece relevance
-                is_onepiece = ('one piece' in item_title or 
-                               any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+                    is_onepiece = any(term in item_title for term in ONE_PIECE_RELEVANCE_TERMS)
 
-                if not is_onepiece:
-                    logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
-                    continue
+                    if not is_onepiece:
+                        logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
+                        continue
 
-                # Check for duplicates
-                is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
-                if is_duplicate:
-                    logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
-                    continue
+                    is_duplicate, image_hash = _is_duplicate_image(item, downloaded_hashes)
+                    if is_duplicate:
+                        logger.debug(f"[Slide {idx+1}] Skipping duplicate image: {item_title}")
+                        continue
 
-                # Try to download the image
-                filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
-                save_path = os.path.join(out_dir, filename)
+                    filename = f"slide_{idx+1:03d}_{image_hash[:8]}.jpg"
+                    save_path = os.path.join(out_dir, filename)
 
-                if download_image(item_link, save_path):
-                    downloaded_hashes.add(image_hash)
-                    slide["image_path"] = save_path
-                    downloaded = True
-                    logger.info(f"[Slide {idx+1}] Downloaded from priority sites: {os.path.basename(save_path)}")
-                    break
+                    if download_image(item_link, save_path):
+                        downloaded_hashes.add(image_hash)
+                        slide["image_path"] = save_path
+                        last_downloaded_path = save_path
+                        previous_images.append({
+                            "path": save_path,
+                            "keywords": _query_keywords(search_query),
+                            "index": idx,
+                        })
+                        downloaded = True
+                        logger.info(f"[Slide {idx+1}] Downloaded from priority sites: {os.path.basename(save_path)}")
+                        break
 
         # 3) If still not downloaded, fall back to generic searches as a last resort
         if not downloaded:
-            for query in [search_query] + fallback_queries:
+            for query in candidate_queries:
                 if downloaded:
                     break
 
@@ -935,8 +1127,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                         continue
 
                     # Check for One Piece relevance
-                    is_onepiece = ('one piece' in item_title or 
-                                   any(char in item_title for char in ['luffy', 'zoro', 'straw hat', 'mugiwara']))
+                    is_onepiece = any(term in item_title for term in ONE_PIECE_RELEVANCE_TERMS)
 
                     if not is_onepiece:
                         logger.debug(f"[Slide {idx+1}] Skipping non-One Piece image: {item_title}")
@@ -955,17 +1146,46 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                     if download_image(item_link, save_path):
                         downloaded_hashes.add(image_hash)
                         slide["image_path"] = save_path
+                        last_downloaded_path = save_path
+                        previous_images.append({
+                            "path": save_path,
+                            "keywords": _query_keywords(search_query),
+                            "index": idx,
+                        })
                         downloaded = True
                         logger.info(f"[Slide {idx+1}] Successfully downloaded: {os.path.basename(save_path)}")
                         break
+
+        fallback_image_path = _best_previous_image(search_query, previous_images) or last_downloaded_path
+        if not downloaded and fallback_image_path:
+            slide["image_path"] = fallback_image_path
+            slide["image_source"] = "reused_previous"
+            logger.warning(
+                f"[Slide {idx+1}] No image downloaded. Reusing closest previous image to preserve timing: "
+                f"{os.path.basename(fallback_image_path)}"
+            )
     
     # Save the updated slides with image paths
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(slides, f, indent=2, ensure_ascii=False)
     
-    # Log download statistics
-    downloaded_count = sum(1 for slide in slides if "image_path" in slide)
-    logger.info(f"Download complete. Successfully downloaded {downloaded_count}/{len(slides)} images.")
+    # Log download statistics. A slide can have an image_path because it reused
+    # a previous image, so keep that separate from real unique downloads.
+    assigned_count = sum(1 for slide in slides if "image_path" in slide)
+    reused_count = sum(1 for slide in slides if slide.get("image_source") == "reused_previous")
+    unique_image_paths = {
+        slide["image_path"]
+        for slide in slides
+        if slide.get("image_path") and slide.get("image_source") != "reused_previous"
+    }
+    logger.info(
+        "Image assignment complete. %s/%s slides have image paths; "
+        "%s unique images downloaded; %s slides reused a previous image.",
+        assigned_count,
+        len(slides),
+        len(unique_image_paths),
+        reused_count,
+    )
 
     # Clean up any temporary attributes we added
     for slide in slides:
@@ -973,4 +1193,4 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
             if attr in slide:
                 del slide[attr]
     
-    return downloaded_count
+    return assigned_count

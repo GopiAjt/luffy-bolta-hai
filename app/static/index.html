@@ -239,18 +239,43 @@
                             <div class="form-text text-white">Choose a style for your subtitles</div>
                         </div>
                     </div>
-                    <!-- Audio Upload Section -->
+                    <!-- Audio / Voiceover Section -->
                     <div class="section">
-                        <h2 class="text-center mb-4"><i class="bi bi-mic me-2"></i>Upload Audio</h2>
+                        <h2 class="text-center mb-4"><i class="bi bi-mic me-2"></i>Audio</h2>
                         <div class="row justify-content-center">
                             <div class="col-md-8">
                                 <div class="card bg-dark">
                                     <div class="card-body">
                                         <div class="d-grid gap-2">
+                                            <button id="generateVoiceoverButton" class="btn btn-success btn-lg">
+                                                <i class="bi bi-soundwave me-2"></i>Generate Voiceover
+                                            </button>
                                             <input type="file" id="audioFile" accept="audio/*" class="d-none">
                                             <label for="audioFile" class="btn btn-primary btn-lg">
-                                                <i class="bi bi-upload me-2"></i>Select Audio File
+                                                <i class="bi bi-upload me-2"></i>Select Audio File Instead
                                             </label>
+                                        </div>
+
+                                        <div class="mt-3">
+                                            <label for="voiceLanguage" class="form-label text-white">Voice language:</label>
+                                            <select class="form-select" id="voiceLanguage">
+                                                <option value="English">English (Recommended)</option>
+                                                <option value="Auto">Auto</option>
+                                                <option value="Chinese">Chinese</option>
+                                                <option value="Japanese">Japanese</option>
+                                                <option value="Korean">Korean</option>
+                                                <option value="German">German</option>
+                                                <option value="French">French</option>
+                                                <option value="Russian">Russian</option>
+                                                <option value="Portuguese">Portuguese</option>
+                                                <option value="Spanish">Spanish</option>
+                                                <option value="Italian">Italian</option>
+                                            </select>
+                                        </div>
+
+                                        <div class="mt-3">
+                                            <label for="voiceInstruct" class="form-label text-white">Voice design:</label>
+                                            <textarea class="form-control bg-dark text-white" id="voiceInstruct" rows="3">Young energetic male anime narrator, bright and adventurous, expressive anime fan energy, clear English delivery, medium-fast pace, excited but not shouting</textarea>
                                         </div>
 
                                         <div class="mt-3">

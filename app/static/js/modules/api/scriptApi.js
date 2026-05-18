@@ -5,7 +5,7 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  */
 
 export const generateScript = async (prompt = null) => {
-    const payload = { language: 'hindi' };
+    const payload = { language: 'english' };
     if (prompt && prompt.trim()) {
         payload.topic = prompt.trim();
     }

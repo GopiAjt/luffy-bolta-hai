@@ -1,5 +1,5 @@
 import { generateScript } from './api/scriptApi.js';
-import { uploadAudio, getAudioMetadata } from './api/audioApi.js';
+import { uploadAudio, generateVoiceover, getAudioMetadata } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
 import { generateVideo, generateSlideshow } from './api/videoApi.js';
 import { LoadingIndicator } from './ui/loadingIndicator.js';
@@ -95,6 +95,22 @@ export class LuffyBoltHaiApp {
             }
         } else {
             console.error('Audio file input not found in the DOM');
+        }
+
+        const generateVoiceoverButton = document.getElementById('generateVoiceoverButton');
+        if (generateVoiceoverButton) {
+            console.log('Found generate voiceover button');
+            if (generateVoiceoverButton.getAttribute('data-event-listener-attached') !== 'true') {
+                generateVoiceoverButton.addEventListener('click', () => {
+                    console.log('Generate voiceover button clicked');
+                    this.handleGenerateVoiceover().catch(error => {
+                        console.error('Error in handleGenerateVoiceover:', error);
+                    });
+                });
+                generateVoiceoverButton.setAttribute('data-event-listener-attached', 'true');
+            }
+        } else {
+            console.warn('Generate voiceover button not found');
         }
 
         // Subtitle generation
@@ -368,6 +384,78 @@ export class LuffyBoltHaiApp {
             setTimeout(() => {
                 uploadProgress.style.display = 'none';
             }, 2000);
+        }
+    }, {
+        errorElement: document.getElementById('uploadStatus')
+    });
+
+    handleGenerateVoiceover = withErrorHandling(async () => {
+        console.log('=== Generate Voiceover Started ===');
+        const scriptInput = document.getElementById('scriptInput');
+        const voiceLanguage = document.getElementById('voiceLanguage');
+        const voiceInstruct = document.getElementById('voiceInstruct');
+        const voiceoverButton = document.getElementById('generateVoiceoverButton');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadProgress = document.getElementById('uploadProgress');
+
+        const scriptText = scriptInput ? scriptInput.value.trim() : '';
+        if (!scriptText) {
+            throw new Error('Please generate or paste a script first');
+        }
+
+        if (voiceoverButton) {
+            voiceoverButton.disabled = true;
+            voiceoverButton.textContent = 'Generating voiceover...';
+        }
+        if (uploadStatus) {
+            uploadStatus.textContent = 'Generating voiceover with Qwen3-TTS. First run can take several minutes on CPU...';
+        }
+        if (uploadProgress) {
+            uploadProgress.style.display = 'block';
+        }
+
+        try {
+            const result = await generateVoiceover(
+                scriptText,
+                voiceLanguage ? voiceLanguage.value : 'English',
+                voiceInstruct ? voiceInstruct.value : ''
+            );
+
+            if (!result || !result.id) {
+                throw new Error('Invalid voiceover response: missing file ID');
+            }
+
+            this.currentAudioId = result.id;
+            this.audioPlayer.setName(`Generated voiceover (${result.id})`);
+            this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
+            this.audioPlayer.setDuration(result.duration);
+
+            const audioPreview = document.getElementById('audioPreview');
+            if (audioPreview) {
+                audioPreview.style.display = 'block';
+            }
+
+            const generateSubtitlesButton = document.getElementById('generateSubtitlesButton');
+            if (generateSubtitlesButton) {
+                generateSubtitlesButton.disabled = false;
+            }
+
+            if (uploadStatus) {
+                uploadStatus.textContent = 'Voiceover generated successfully!';
+            }
+
+            console.log('=== Generate Voiceover Completed Successfully ===');
+            return result;
+        } finally {
+            if (voiceoverButton) {
+                voiceoverButton.disabled = false;
+                voiceoverButton.innerHTML = '<i class="bi bi-soundwave me-2"></i>Generate Voiceover';
+            }
+            if (uploadProgress) {
+                setTimeout(() => {
+                    uploadProgress.style.display = 'none';
+                }, 2000);
+            }
         }
     }, {
         errorElement: document.getElementById('uploadStatus')

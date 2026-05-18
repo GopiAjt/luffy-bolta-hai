@@ -46,6 +46,10 @@ wordcloud>=1.8.0
 
 # Audio Processing
 whisper-openai>=20231117  # For audio transcription
+qwen-tts==0.1.1  # For local Qwen3-TTS voiceover generation
+soundfile>=0.12.1  # For saving generated TTS WAV files
+torchaudio==2.2.0  # Keep aligned with the existing torch 2.2.0 install
+nltk>=3.8.1
 
 # New additions from the code block
 pandas>=1.5.0

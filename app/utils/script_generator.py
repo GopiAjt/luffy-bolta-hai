@@ -31,11 +31,12 @@ def is_generic_topic(topic: str) -> bool:
         "30-60 second",
         "30–60 second",
         "script in hindi",
+        "script in english",
     ]
     return any(phrase in normalized for phrase in generic_phrases)
 
 
-def generate_script(topic_override: str = None, language: str = "hindi") -> dict:
+def generate_script(topic_override: str = None, language: str = "english") -> dict:
     """Generate a 30-60s One Piece narration script via Gemini."""
     try:
         topics = [
@@ -100,24 +101,52 @@ def generate_script(topic_override: str = None, language: str = "hindi") -> dict
 "Nika’s True Origin EXPOSED – The Sun God’s Lost Power",
         ]
         topic = topic_override.strip() if not is_generic_topic(topic_override) else random.choice(topics)
-        language = (language or "hindi").strip().lower()
-        language_rules = (
-            "LANGUAGE RULES:\n"
-            "- Write TITLE, SCRIPT, and DESCRIPTION in natural Hindi/Hinglish.\n"
-            "- Prefer Devanagari Hindi for narration, but keep iconic names like Luffy, Zoro, Shanks, Nika readable.\n"
-            "- Use casual Indian anime-fan energy, like a friend explaining a wild theory.\n"
-            "- Do NOT translate One Piece names awkwardly.\n"
-            "- Do NOT use any non-Hindi/non-English language phrase. Avoid Indonesian/Malay/Spanish/Japanese filler unless it is a canon One Piece term.\n"
-            "- Keep section labels exactly in English: TITLE:, SCRIPT:, DESCRIPTION:, HASHTAGS:.\n"
-            "- Hashtags can stay lowercase English/romanized for reach.\n\n"
-        )
-
-        if language not in {"hindi", "hi", "hinglish"}:
+        language = (language or "english").strip().lower()
+        is_hindi = language in {"hindi", "hi", "hinglish"}
+        if is_hindi:
+            language_label = "Hindi/Hinglish"
             language_rules = (
                 "LANGUAGE RULES:\n"
-                "- Write TITLE, SCRIPT, and DESCRIPTION in clear English.\n"
+                "- Write TITLE, SCRIPT, and DESCRIPTION in natural Hindi/Hinglish.\n"
+                "- Prefer Devanagari Hindi for narration, but keep iconic names like Luffy, Zoro, Shanks, Nika readable.\n"
+                "- Use casual Indian anime-fan energy, like a friend explaining a wild theory.\n"
+                "- Do NOT translate One Piece names awkwardly.\n"
+                "- Do NOT use any non-Hindi/non-English language phrase. Avoid Indonesian/Malay/Spanish/Japanese filler unless it is a canon One Piece term.\n"
+                "- Keep section labels exactly in English: TITLE:, SCRIPT:, DESCRIPTION:, HASHTAGS:.\n"
+                "- Hashtags can stay lowercase English/romanized for reach.\n\n"
+            )
+            title_rule = "- Write the title in Hindi/Hinglish, not pure English.\n\n"
+            power_words_rule = "- Use exactly 2-3 power words in Hindi/Hinglish (e.g., shocking, khatarnak, hidden truth).\n"
+            reference_example = (
+                "SCRIPT: Think about Chapter 907 for a second. Shanks walks into Mary Geoise and meets the Gorosei... "
+                "but was he really just giving a warning? His calm eyes in that room feel way too controlled. "
+                "Imu's shadow and the Nika fruit may not be separate threads. "
+                "I think Shanks is hiding one of the most dangerous secrets in One Piece. "
+                "So tell me, is he a hero or the final manipulator? Follow for the next wild truth.\n\n"
+            )
+            fomo_rule = "- MUST include at least one FOMO phrase in Hindi/Hinglish ('Most fans ne ye miss kiya...', 'Maine bhi pehle ignore kar diya...').\n"
+            final_quality_rule = "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear Hindi/Hinglish sentences, natural fan energy, maximum scroll-stopping engagement."
+        else:
+            language_label = "English"
+            language_rules = (
+                "LANGUAGE RULES:\n"
+                "- Write TITLE, SCRIPT, and DESCRIPTION in clear, natural English.\n"
+                "- Use casual anime-fan energy, like a friend explaining a wild theory.\n"
+                "- Do NOT translate One Piece names awkwardly.\n"
+                "- Avoid non-English filler unless it is a canon One Piece term.\n"
                 "- Keep section labels exactly in English: TITLE:, SCRIPT:, DESCRIPTION:, HASHTAGS:.\n\n"
             )
+            title_rule = "- Write the title in punchy English.\n\n"
+            power_words_rule = "- Use exactly 2-3 power words in English (e.g., shocking, dangerous, hidden truth).\n"
+            reference_example = (
+                "SCRIPT: Think about Chapter 907 for a second. Shanks walks into Mary Geoise and meets the Gorosei... "
+                "but was he really just giving a warning? His calm eyes in that room feel way too controlled. "
+                "Imu's shadow and the Nika fruit may not be separate threads. "
+                "I think Shanks is hiding one of the most dangerous secrets in One Piece. "
+                "So tell me, is he a hero or the final manipulator? Follow for the next wild truth.\n\n"
+            )
+            fomo_rule = "- MUST include at least one FOMO phrase in English ('Most fans missed this...', 'I ignored this clue at first...').\n"
+            final_quality_rule = "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear English sentences, natural fan energy, maximum scroll-stopping engagement."
 
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
@@ -127,18 +156,18 @@ def generate_script(topic_override: str = None, language: str = "hindi") -> dict
             f"TOPIC: \"{topic}\"\n\n"
 
             "OUTPUT STRUCTURE (in this exact order):\n"
-            "TITLE: [engaging Hindi/Hinglish title, under 80 chars]\n\n"
-            "SCRIPT: [human-like Hindi/Hinglish narration, 35-45s, ~85-95 spoken words]\n\n"
-            "DESCRIPTION: [Hindi/Hinglish, personal, under 500 chars, BULLET POINTS + emojis, 3-5 lines, include sticky FOMO]\n\n"
+            f"TITLE: [engaging {language_label} title, under 80 chars]\n\n"
+            f"SCRIPT: [human-like {language_label} narration, 35-45s, ~85-95 spoken words]\n\n"
+            f"DESCRIPTION: [{language_label}, personal, under 500 chars, BULLET POINTS + emojis, 3-5 lines, include sticky FOMO]\n\n"
             "HASHTAGS: [10–15 relevant hashtags, lowercase]\n\n"
 
             "RULES FOR STYLE:\n"
-            "- SOUND like a real Indian anime fan talking to friends.\n"
+            "- SOUND like a real anime fan talking to friends.\n"
             "- Use hype language for energy, max 2-3 slang terms.\n"
             "- Keep sentences short, fast-paced, easy to follow.\n"
-            "- Blend casual Hindi with light Hinglish, but keep the narration easy to speak.\n"
+            f"- Keep the narration easy to speak in {language_label}.\n"
             "- Always add curiosity, suspense, or debate bait.\n"
-            "- Avoid vague lines like 'wo pal' unless the exact scene was named first.\n\n"
+            "- Avoid vague lines like 'that moment' unless the exact scene was named first.\n\n"
 
             "TOPIC LOCK RULES:\n"
             "- Pick ONE main subject from TOPIC and stay with it from start to end.\n"
@@ -167,7 +196,7 @@ def generate_script(topic_override: str = None, language: str = "hindi") -> dict
             "TITLE RULES:\n"
             "- Must grab instantly (under 80 chars).\n"
             "- Randomly use ONE of these tones: shocking question, urgent warning, hidden truth, impossible claim.\n"
-            "- Write the title in Hindi/Hinglish, not pure English.\n\n"
+            f"{title_rule}"
 
             "SCRIPT REQUIREMENTS:\n"
             "- PURE narration only, no SFX/music.\n"
@@ -176,27 +205,23 @@ def generate_script(topic_override: str = None, language: str = "hindi") -> dict
             "- Keep fast pace, vary sentence length.\n"
             "- Add vivid, sensory detail within first 15s.\n"
             "- Show personal emotions + uncertainty (hesitations, incomplete thoughts).\n"
-            "- Use exactly 2-3 power words in Hindi/Hinglish (e.g., shocking, खतरनाक, छुपा हुआ).\n"
+            f"{power_words_rule}"
             "- Include 1 specific detail in the first two sentences (chapter/episode/arc/place OR exact quote).\n"
             "- Include exactly 1 named scene location when possible, like Mary Geoise, Wano, Marineford, Egghead.\n"
             "- Mid-escalation: show rising excitement/doubt naturally.\n"
             "- End with a curiosity-driven CTA inviting debate (max 12 words).\n"
             "- After debate CTA, ADD a second CTA to gain followers\n"
-            "- TOTAL WORD COUNT: 85-95 spoken Hindi/Hinglish words (auto-enforce brevity).\n\n"
+            f"- TOTAL WORD COUNT: 85-95 spoken {language_label} words (auto-enforce brevity).\n\n"
 
             "REFERENCE STYLE EXAMPLE (do not copy, match quality only):\n"
-            "SCRIPT: सोचो ज़रा, Chapter 907 में Shanks का Gorosei से मिलना... "
-            "क्या वो सच में बस warning देने आया था? Mary Geoise में उसकी calm आँखें normal नहीं लगतीं। "
-            "Imu की shadow और Nika fruit... ये दोनों बातें शायद अलग नहीं हैं। "
-            "मुझे लगता है Shanks कहानी का सबसे dangerous secret छुपा रहा है। "
-            "तुम बताओ, वो hero है या final manipulator? Follow karo, अगला truth और wild है.\n\n"
+            f"{reference_example}"
 
             "DESCRIPTION REQUIREMENTS:\n"
             "- MUST be 5-6 bullet points.\n"
             "- Each bullet MUST start with an emoji (🤯🔥💀😱⚡🚨).\n"
-            "- Each bullet MUST be 8-15 Hindi/Hinglish words long (not shorter).\n"
+            f"- Each bullet MUST be 8-15 {language_label} words long (not shorter).\n"
             "- MUST include at least one controversial/debate-trigger line.\n"
-            "- MUST include at least one FOMO phrase in Hindi/Hinglish ('Most fans ne ye miss kiya...', 'Maine bhi pehle ignore kar diya...').\n"
+            f"{fomo_rule}"
             "- MUST end with a vulnerable CTA + community challenge ('Bet you can’t prove me wrong 👀👇').\n"
             "- ALSO add a soft CTA for followers: 'Follow for more hidden One Piece truths ⚡'.\n"
             "- Entire description MUST be between 400-500 characters.\n\n"
@@ -208,7 +233,7 @@ def generate_script(topic_override: str = None, language: str = "hindi") -> dict
             "- Include 1 arc-specific tag.\n"
             "- Include 1+ viral bait tags (#mindblown, #plottwist).\n\n"
 
-            "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear Hindi/Hinglish sentences, natural fan energy, maximum scroll-stopping engagement."
+            f"{final_quality_rule}"
         )
 
         response = model.generate_content(prompt)

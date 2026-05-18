@@ -11,6 +11,7 @@ from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
+from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
 import re
 import json
 import glob
@@ -113,7 +114,7 @@ def generate_script_endpoint():
     try:
         data = request.json or {}
         topic = data.get('script') or data.get('topic')
-        language = data.get('language', 'hindi')
+        language = data.get('language', 'english')
 
         # Generate script along with description and hashtags
         result = generate_script(topic_override=topic, language=language)
@@ -273,6 +274,52 @@ def upload_audio():
         return jsonify({
             'error': 'Internal server error'
         }), 500
+
+
+@app.route('/api/v1/generate-voiceover', methods=['POST'])
+def generate_voiceover_endpoint():
+    """
+    Generate a voiceover audio file from script text using Qwen3-TTS VoiceDesign.
+
+    Request:
+    {
+        "script": "Text to speak",
+        "language": "English",
+        "voice_instruct": "Natural language voice description"
+    }
+
+    Returns:
+        JSON: {id: str, duration: float, message: str}
+    """
+    try:
+        data = request.json or {}
+        script = data.get('script') or data.get('text')
+        language = data.get('language', 'English')
+        voice_instruct = data.get('voice_instruct') or DEFAULT_VOICE_INSTRUCT
+
+        if not script or not script.strip():
+            return jsonify({'error': 'script is required'}), 400
+
+        result = generate_voiceover(
+            text=script,
+            language=language,
+            instruct=voice_instruct,
+        )
+
+        return jsonify({
+            'id': result['id'],
+            'duration': result['duration'],
+            'message': 'Voiceover generated successfully'
+        })
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        logger.error(f"Voiceover generation runtime error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Error generating voiceover: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to generate voiceover'}), 500
 
 
 @app.route('/api/v1/generate-subtitles', methods=['POST'])

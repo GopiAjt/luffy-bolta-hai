@@ -120,7 +120,7 @@ class VideoGenerator:
 
             if background_video_path and os.path.exists(background_video_path):
                 base_video_input = ['-i', str(background_video_path)]
-                filter_complex = f"[0:v]setpts=PTS-STARTPTS,subtitles='{subtitle_path}'[vout]"
+                filter_complex = f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone,subtitles='{subtitle_path}'[vout]"
                 audio_input_idx = 1
             else:
                 base_video_input = [
@@ -460,8 +460,8 @@ class VideoGenerator:
             if background_video_path:
                 # Input 0 is the background video
                 base_video_input = ['-i', str(background_video_path)]
-                # Initial filter to set PTS for the background video
-                filter_steps = [f"[0:v]setpts=PTS-STARTPTS[bg_video]"]
+                # Initial filter to set PTS for the background video and pad to infinite
+                filter_steps = [f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone[bg_video]"]
                 last_label = '[bg_video]'
                 input_idx = 1  # First overlay image will be input 1
             else:

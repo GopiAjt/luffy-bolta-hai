@@ -34,6 +34,7 @@ export class LuffyBoltHaiApp {
             // State
             this.currentAudioId = null;
             this.currentPdfId = null;
+            this.currentSlidesJson = null;
 
             // Bind event handlers
             console.log('Setting up event listeners...');
@@ -385,6 +386,7 @@ export class LuffyBoltHaiApp {
 
             // Update UI with audio metadata
             this.currentAudioId = uploadResult.id; // Changed from uploadResult.audio_id to uploadResult.id
+            this.currentSlidesJson = null;
             console.log('Audio uploaded successfully. Current audio ID:', this.currentAudioId);
 
             this.audioPlayer.setName(file.name);
@@ -481,6 +483,7 @@ export class LuffyBoltHaiApp {
             }
 
             this.currentAudioId = result.id;
+            this.currentSlidesJson = null;
             this.audioPlayer.setName(`Generated voiceover (${result.id})`);
             this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
             this.audioPlayer.setDuration(result.duration);
@@ -615,14 +618,18 @@ export class LuffyBoltHaiApp {
             const expressionsFile = await getLatestExpressionsFile();
             console.log('Latest expressions file:', expressionsFile);
 
-            // Get the latest image slides JSON if it exists
-            const imageSlidesResponse = await fetch('/api/v1/latest-image-slides');
-            let slidesJson = null;
-            if (imageSlidesResponse.ok) {
-                const data = await imageSlidesResponse.json();
-                if (data && data.path) {
-                    slidesJson = data.path;
-                    console.log('Found existing image slides:', slidesJson);
+            let slidesJson = this.currentSlidesJson;
+            if (slidesJson) {
+                console.log('Using active slides JSON:', slidesJson);
+            } else {
+                // Get the latest image slides JSON if it exists
+                const imageSlidesResponse = await fetch('/api/v1/latest-image-slides');
+                if (imageSlidesResponse.ok) {
+                    const data = await imageSlidesResponse.json();
+                    if (data && data.path) {
+                        slidesJson = data.path;
+                        console.log('Found existing image slides:', slidesJson);
+                    }
                 }
             }
 
@@ -793,6 +800,7 @@ export class LuffyBoltHaiApp {
             if (slidesStatus) {
                 slidesStatus.textContent = 'Image slides generated successfully!';
             }
+            this.currentSlidesJson = result.output_path || null;
 
             // Enable the final video generation button
             const generateVideoButton = document.getElementById('generateFinalVideoButton');
@@ -840,13 +848,20 @@ export class LuffyBoltHaiApp {
         const result = await uploadMangaPdf(file);
         const output = result.output;
         this.currentPdfId = output.pdf_id;
+        this.currentSlidesJson = null;
 
         if (status) {
             const warningText = output.warnings && output.warnings.length ? ` Warnings: ${output.warnings.length}` : '';
-            status.textContent = `PDF ready: ${output.page_count} pages, ${output.panel_count} visuals, ${output.text_length} text chars.${warningText}`;
+            const chapterText = output.chapter_number ? ` Chapter ${output.chapter_number}.` : '';
+            const quality = output.text_quality ? ` Text quality: ${output.text_quality.level} (${output.text_quality.score}).` : '';
+            const contextText = output.context_sources && output.context_sources.length ? ' Ohara context found.' : ' No Ohara context found yet.';
+            status.textContent = `PDF ready:${chapterText} ${output.page_count} pages, ${output.panel_count} visuals, ${output.usable_text_length || 0} usable text chars.${quality}${contextText}${warningText}`;
         }
         if (preview) {
-            preview.textContent = output.text_preview || 'No embedded text was found. Add a topic/angle before generating the script.';
+            const contextLines = output.context_sources && output.context_sources.length
+                ? `\n\nContext: ${output.context_sources.map(source => source.title || source.url || source.source).join(', ')}`
+                : '';
+            preview.textContent = (output.text_preview || 'No reliable PDF text was found. The app will use matching Ohara context if available.') + contextLines;
             preview.style.display = 'block';
         }
         if (generatePdfScriptButton) {
@@ -897,7 +912,11 @@ export class LuffyBoltHaiApp {
                 titleContainer.style.display = 'block';
             }
             if (status) {
-                status.textContent = 'Manga PDF script generated. Generate voiceover next.';
+                const sources = output.context_sources && output.context_sources.length
+                    ? ` Context: ${output.context_sources.map(source => source.title || source.source).join(', ')}.`
+                    : '';
+                const quality = output.text_quality ? ` PDF text quality: ${output.text_quality.level}.` : '';
+                status.textContent = `Manga PDF script generated for Chapter ${output.chapter_number || 'unknown'}. Generate voiceover next.${quality}${sources}`;
             }
             return result;
         } finally {
@@ -928,6 +947,7 @@ export class LuffyBoltHaiApp {
 
         try {
             const result = await generatePdfSlides(this.currentPdfId, this.currentAudioId);
+            this.currentSlidesJson = result.slides_json || result.output_path || null;
             if (status) {
                 status.textContent = `Generated ${result.slide_count} manga panel slides. You can render the final video now.`;
             }

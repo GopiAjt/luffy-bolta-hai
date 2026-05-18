@@ -3,18 +3,35 @@ import logging
 import re
 import shutil
 import uuid
+from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote_plus
 
 import cv2
 import fitz
 import numpy as np
+import requests
 
 from app.config import MANGA_PDF_DIR, UPLOADS_DIR, VIDEO_RESOLUTION
 
 logger = logging.getLogger(__name__)
 
 PDF_MANIFEST = "manifest.json"
+OHARA_BASE_URL = "https://thelibraryofohara.com"
+MIN_USABLE_TEXT_SCORE = 0.45
+_EASYOCR_READER = None
+
+SCAN_CREDIT_PATTERNS = [
+    r"\btcb\s*scans?\b",
+    r"\btcbonepiecechapters\.com\b",
+    r"\breall?cbscans\b",
+    r"\bread on\b",
+    r"\btwitter\b",
+    r"\bscanlation\b",
+    r"\bmanga_light\b",
+]
 
 
 def ass_format(seconds: float) -> str:
@@ -27,6 +44,86 @@ def ass_format(seconds: float) -> str:
 def _clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text or "")
     return text.strip()
+
+
+def parse_chapter_number(value: str) -> Optional[int]:
+    """Extract a One Piece chapter number from a filename, title, or heading."""
+    if not value:
+        return None
+    patterns = [
+        r"chapters?\s*[-_:]?\s*(\d{3,5})",
+        r"\bch(?:apter)?\.?\s*(\d{3,5})\b",
+        r"\b(\d{3,5})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _strip_scan_credit_lines(text: str) -> str:
+    lines = []
+    for line in re.split(r"[\r\n]+|(?<=\.)\s{2,}", text or ""):
+        cleaned = _clean_text(line)
+        if not cleaned:
+            continue
+        if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in SCAN_CREDIT_PATTERNS):
+            continue
+        lines.append(cleaned)
+    return _clean_text(" ".join(lines))
+
+
+def score_text_quality(text: str, confidence: Optional[float] = None) -> Dict:
+    """Score OCR usefulness so symbol soup never becomes trusted context."""
+    cleaned = _strip_scan_credit_lines(text)
+    chars = len(cleaned)
+    alpha_chars = sum(1 for ch in cleaned if ch.isalpha())
+    allowed_punct = set(".,!?;:'\"-()[]{}&/% ")
+    garbage_chars = sum(1 for ch in cleaned if not ch.isalnum() and ch not in allowed_punct and not ch.isspace())
+    words = re.findall(r"[A-Za-z][A-Za-z'-]{1,}", cleaned)
+    tokens = [w.lower().strip("'") for w in words if w.strip("'")]
+
+    alpha_ratio = alpha_chars / max(chars, 1)
+    garbage_ratio = garbage_chars / max(chars, 1)
+    word_count = len(words)
+    avg_word_len = sum(len(w) for w in words) / max(word_count, 1)
+    repeated_ratio = 0.0
+    if tokens:
+        repeated_ratio = max(tokens.count(token) for token in set(tokens)) / len(tokens)
+
+    confidence_score = 0.5
+    if confidence is not None:
+        confidence_score = max(0.0, min(float(confidence) / 100.0, 1.0))
+
+    score = 0.0
+    score += min(alpha_ratio / 0.72, 1.0) * 0.25
+    score += max(0.0, 1.0 - garbage_ratio / 0.18) * 0.20
+    score += min(word_count / 45.0, 1.0) * 0.20
+    score += max(0.0, 1.0 - repeated_ratio / 0.35) * 0.15
+    score += max(0.0, min(avg_word_len / 4.0, 1.0)) * 0.08
+    score += confidence_score * 0.12
+
+    usable = score >= MIN_USABLE_TEXT_SCORE and word_count >= 8 and garbage_ratio < 0.22
+    if score >= 0.72 and usable:
+        level = "good"
+    elif usable:
+        level = "fair"
+    else:
+        level = "poor"
+
+    return {
+        "text": cleaned,
+        "score": round(score, 3),
+        "level": level,
+        "usable": usable,
+        "word_count": word_count,
+        "char_count": chars,
+        "alpha_ratio": round(alpha_ratio, 3),
+        "garbage_ratio": round(garbage_ratio, 3),
+        "repeated_ratio": round(repeated_ratio, 3),
+        "confidence": round(float(confidence), 2) if confidence is not None else None,
+    }
 
 
 def _enhance_panel(image: np.ndarray) -> np.ndarray:
@@ -106,18 +203,176 @@ def detect_panels(page_image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     return boxes[:12]
 
 
-def _ocr_page_text(page_image: np.ndarray) -> Tuple[str, Optional[str]]:
+def _tesseract_ocr_page_text(page_image: np.ndarray) -> Tuple[str, Optional[float], Optional[str]]:
     try:
         import pytesseract
     except ImportError:
-        return "", "pytesseract is not installed; OCR fallback skipped"
+        return "", None, "pytesseract is not installed; OCR fallback skipped"
 
     try:
         gray = cv2.cvtColor(page_image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.bilateralFilter(gray, 5, 50, 50)
         gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-        return _clean_text(pytesseract.image_to_string(gray, lang="eng")), None
+        data = pytesseract.image_to_data(gray, lang="eng", output_type=pytesseract.Output.DICT)
+        words = []
+        confidences = []
+        for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
+            token = _clean_text(raw_text)
+            if not token:
+                continue
+            try:
+                conf = float(raw_conf)
+            except (TypeError, ValueError):
+                conf = -1
+            if conf >= 0:
+                confidences.append(conf)
+            words.append(token)
+        confidence = sum(confidences) / len(confidences) if confidences else None
+        return _clean_text(" ".join(words)), confidence, None
     except Exception as exc:
-        return "", f"OCR fallback failed: {exc}"
+        return "", None, f"Tesseract OCR fallback failed: {exc}"
+
+
+def _get_easyocr_reader():
+    global _EASYOCR_READER
+    if _EASYOCR_READER is None:
+        import easyocr
+        logger.info("Loading EasyOCR reader for English manga OCR fallback")
+        _EASYOCR_READER = easyocr.Reader(["en"], gpu=False, verbose=False)
+    return _EASYOCR_READER
+
+
+def _easyocr_page_text(page_image: np.ndarray) -> Tuple[str, Optional[float], Optional[str]]:
+    try:
+        reader = _get_easyocr_reader()
+        rgb = cv2.cvtColor(page_image, cv2.COLOR_BGR2RGB)
+        results = reader.readtext(rgb, detail=1, paragraph=False)
+        words = []
+        confidences = []
+        for _bbox, text, confidence in results:
+            cleaned = _clean_text(text)
+            if cleaned:
+                words.append(cleaned)
+                confidences.append(float(confidence) * 100.0)
+        avg_confidence = sum(confidences) / len(confidences) if confidences else None
+        return _clean_text(" ".join(words)), avg_confidence, None
+    except ImportError:
+        return "", None, "easyocr is not installed; EasyOCR fallback skipped"
+    except Exception as exc:
+        return "", None, f"EasyOCR fallback failed: {exc}"
+
+
+def _select_best_text(candidates: List[Dict]) -> Dict:
+    scored = []
+    for candidate in candidates:
+        quality = score_text_quality(candidate.get("text", ""), candidate.get("confidence"))
+        scored.append({**candidate, "quality": quality, "text": quality["text"]})
+    scored.sort(key=lambda item: item["quality"]["score"], reverse=True)
+    if not scored:
+        return {
+            "text": "",
+            "source": "none",
+            "engine": "none",
+            "confidence": None,
+            "quality": score_text_quality(""),
+        }
+    best = scored[0]
+    if not best["quality"]["usable"]:
+        best["text"] = ""
+    return best
+
+
+def _chapter_matches_title(title: str, chapter_number: int) -> bool:
+    if not title or not chapter_number:
+        return False
+    normalized = re.sub(r"\s+", " ", title)
+    if re.search(rf"\bchapter\s+{chapter_number}\b", normalized, re.IGNORECASE):
+        return True
+    for start, end in re.findall(r"\b(\d{3,5})\s*[-–]\s*(\d{3,5})\b", normalized):
+        if int(start) <= chapter_number <= int(end):
+            return True
+    return False
+
+
+def _html_to_text(html: str) -> str:
+    html = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", html)
+    html = re.sub(r"(?i)<br\s*/?>", "\n", html)
+    html = re.sub(r"(?i)</p>|</h[1-6]>", "\n", html)
+    text = re.sub(r"(?s)<[^>]+>", " ", html)
+    return unescape(re.sub(r"[ \t]+", " ", text))
+
+
+def _extract_ohara_chapter_section(article_text: str, chapter_number: int) -> str:
+    lines = [_clean_text(line) for line in article_text.splitlines()]
+    lines = [line for line in lines if line]
+    start_index = None
+    heading_pattern = re.compile(rf"^chapter\s+{chapter_number}\b", re.IGNORECASE)
+    any_heading_pattern = re.compile(r"^chapter\s+\d{3,5}\b", re.IGNORECASE)
+
+    for idx, line in enumerate(lines):
+        if heading_pattern.search(line):
+            start_index = idx
+            break
+
+    if start_index is None:
+        joined = _clean_text(" ".join(lines))
+        match = re.search(rf"(Chapter\s+{chapter_number}\b.*)", joined, re.IGNORECASE)
+        return match.group(1)[:9000] if match else joined[:9000]
+
+    section = []
+    for line in lines[start_index:]:
+        if section and any_heading_pattern.search(line):
+            break
+        if line.lower().startswith(("published by", "view all posts", "leave a reply")):
+            break
+        section.append(line)
+    return _clean_text(" ".join(section))[:9000]
+
+
+def fetch_ohara_context(chapter_number: Optional[int]) -> Tuple[Optional[Dict], Optional[str]]:
+    if not chapter_number:
+        return None, "No chapter number found for Ohara context lookup"
+
+    try:
+        search_url = f"{OHARA_BASE_URL}/?s={quote_plus(f'Chapter Secrets One Piece Chapter {chapter_number}')}"
+        response = requests.get(search_url, timeout=12, headers={"User-Agent": "luffy-bolta-hai/1.0"})
+        response.raise_for_status()
+        search_html = response.text
+
+        candidates = []
+        link_pattern = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
+        for url, raw_title in link_pattern.findall(search_html):
+            title = _clean_text(_html_to_text(raw_title))
+            if "thelibraryofohara.com" not in url:
+                continue
+            if "chapter secrets" not in title.lower():
+                continue
+            if _chapter_matches_title(title, chapter_number):
+                candidates.append((title, url))
+
+        if not candidates:
+            return None, f"No matching Library of Ohara article found for Chapter {chapter_number}"
+
+        title, url = candidates[0]
+        article_response = requests.get(url, timeout=12, headers={"User-Agent": "luffy-bolta-hai/1.0"})
+        article_response.raise_for_status()
+        article_text = _html_to_text(article_response.text)
+        section = _extract_ohara_chapter_section(article_text, chapter_number)
+        quality = score_text_quality(section, 95)
+        if not section or quality["word_count"] < 80:
+            return None, f"Library of Ohara context was too sparse for Chapter {chapter_number}"
+
+        return {
+            "source": "the_library_of_ohara",
+            "title": title,
+            "url": url,
+            "chapter_number": chapter_number,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "text": section,
+            "quality": quality,
+        }, None
+    except Exception as exc:
+        return None, f"Library of Ohara context lookup failed: {exc}"
 
 
 def process_manga_pdf(file_storage) -> Dict:
@@ -133,8 +388,10 @@ def process_manga_pdf(file_storage) -> Dict:
     file_storage.save(str(source_path))
 
     doc = fitz.open(source_path)
+    raw_title = doc.metadata.get("title", "") or file_storage.filename
+    chapter_number = parse_chapter_number(f"{raw_title} {file_storage.filename}")
     metadata = {
-        "title": doc.metadata.get("title", "") or file_storage.filename,
+        "title": raw_title,
         "author": doc.metadata.get("author", ""),
         "page_count": len(doc),
         "file_size": source_path.stat().st_size,
@@ -144,11 +401,12 @@ def process_manga_pdf(file_storage) -> Dict:
     panel_records = []
     text_parts = []
     warnings = []
+    page_quality_scores = []
 
     for page_index, page in enumerate(doc):
         page_number = page_index + 1
         embedded_text = _clean_text(page.get_text("text"))
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.2, 2.2), alpha=False)
+        pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0), alpha=False)
         image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 3:
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -159,18 +417,55 @@ def process_manga_pdf(file_storage) -> Dict:
         page_path = pages_dir / f"page_{page_number:03d}.jpg"
         cv2.imwrite(str(page_path), page_image, [cv2.IMWRITE_JPEG_QUALITY, 94])
 
-        text_source = "embedded"
-        page_text = embedded_text
-        if len(page_text) < 40:
-            ocr_text, warning = _ocr_page_text(page_image)
+        candidates = []
+        if embedded_text:
+            candidates.append({
+                "text": embedded_text,
+                "source": "embedded",
+                "engine": "pymupdf",
+                "confidence": 100.0,
+            })
+
+        needs_ocr = len(embedded_text) < 80 or not score_text_quality(embedded_text, 100)["usable"]
+        if needs_ocr:
+            tesseract_text, tesseract_confidence, warning = _tesseract_ocr_page_text(page_image)
             if warning:
                 warnings.append(f"Page {page_number}: {warning}")
-            if ocr_text:
-                page_text = ocr_text
-                text_source = "ocr"
+            if tesseract_text:
+                candidates.append({
+                    "text": tesseract_text,
+                    "source": "ocr",
+                    "engine": "tesseract",
+                    "confidence": tesseract_confidence,
+                })
 
-        if page_text:
+        best_text = _select_best_text(candidates)
+        if needs_ocr and best_text["quality"]["score"] < 0.62:
+            easyocr_text, easyocr_confidence, warning = _easyocr_page_text(page_image)
+            if warning:
+                warnings.append(f"Page {page_number}: {warning}")
+            if easyocr_text:
+                candidates.append({
+                    "text": easyocr_text,
+                    "source": "ocr",
+                    "engine": "easyocr",
+                    "confidence": easyocr_confidence,
+                })
+                best_text = _select_best_text(candidates)
+
+        page_text = best_text["text"]
+        text_source = best_text["source"]
+        ocr_engine = best_text["engine"]
+        text_quality = best_text["quality"]
+        page_quality_scores.append(text_quality["score"])
+
+        if page_text and text_quality["usable"]:
             text_parts.append(f"Page {page_number}: {page_text}")
+        elif best_text.get("quality", {}).get("char_count", 0):
+            warnings.append(
+                f"Page {page_number}: OCR text rejected as {text_quality['level']} quality "
+                f"(score={text_quality['score']})"
+            )
 
         panel_boxes = detect_panels(page_image)
         used_full_page = False
@@ -199,17 +494,50 @@ def process_manga_pdf(file_storage) -> Dict:
             "image_path": str(page_path),
             "text": page_text,
             "text_source": text_source,
+            "ocr_engine": ocr_engine,
+            "ocr_confidence": text_quality["confidence"],
+            "text_quality": text_quality,
             "panels": page_panel_records,
         })
 
     doc.close()
 
     extracted_text = "\n".join(text_parts).strip()
+    usable_text_length = len(extracted_text)
+    avg_quality_score = sum(page_quality_scores) / len(page_quality_scores) if page_quality_scores else 0.0
+    usable_pages = sum(1 for page in page_records if page.get("text_quality", {}).get("usable"))
+    text_quality = {
+        "score": round(avg_quality_score, 3),
+        "level": "good" if avg_quality_score >= 0.72 else "fair" if avg_quality_score >= MIN_USABLE_TEXT_SCORE else "poor",
+        "usable": usable_text_length >= 350 and usable_pages >= max(2, len(page_records) // 5),
+        "usable_pages": usable_pages,
+        "total_pages": len(page_records),
+    }
+
+    ohara_context, ohara_warning = fetch_ohara_context(chapter_number)
+    context_sources = []
+    if ohara_context:
+        context_sources.append({
+            "source": ohara_context["source"],
+            "title": ohara_context["title"],
+            "url": ohara_context["url"],
+            "chapter_number": ohara_context["chapter_number"],
+            "fetched_at": ohara_context["fetched_at"],
+            "quality": ohara_context["quality"],
+        })
+    elif ohara_warning:
+        warnings.append(ohara_warning)
+
     manifest = {
         "pdf_id": pdf_id,
         "source_pdf": str(source_path),
         "metadata": metadata,
+        "chapter_number": chapter_number,
+        "text_quality": text_quality,
+        "usable_text_length": usable_text_length,
         "extracted_text": extracted_text,
+        "ohara_context": ohara_context,
+        "context_sources": context_sources,
         "pages": page_records,
         "panels": panel_records,
         "warnings": warnings,
@@ -220,6 +548,10 @@ def process_manga_pdf(file_storage) -> Dict:
     return {
         "pdf_id": pdf_id,
         "metadata": metadata,
+        "chapter_number": chapter_number,
+        "text_quality": text_quality,
+        "usable_text_length": usable_text_length,
+        "context_sources": context_sources,
         "text_preview": extracted_text[:1600],
         "text_length": len(extracted_text),
         "page_count": len(page_records),

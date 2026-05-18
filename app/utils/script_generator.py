@@ -36,7 +36,14 @@ def is_generic_topic(topic: str) -> bool:
     return any(phrase in normalized for phrase in generic_phrases)
 
 
-def generate_script(topic_override: str = None, language: str = "english", context_text: str = None) -> dict:
+def generate_script(
+    topic_override: str = None,
+    language: str = "english",
+    context_text: str = None,
+    chapter_number: int = None,
+    ohara_context: str = None,
+    context_sources: list = None,
+) -> dict:
     """Generate a 30-60s One Piece narration script via Gemini."""
     try:
         topics = [
@@ -101,9 +108,10 @@ def generate_script(topic_override: str = None, language: str = "english", conte
 "Nika’s True Origin EXPOSED – The Sun God’s Lost Power",
         ]
         context_text = (context_text or "").strip()
+        ohara_context = (ohara_context or "").strip()
         topic = topic_override.strip() if not is_generic_topic(topic_override) else random.choice(topics)
-        if context_text and is_generic_topic(topic_override):
-            topic = "Latest One Piece manga chapter theory"
+        if (context_text or ohara_context) and is_generic_topic(topic_override):
+            topic = f"One Piece Chapter {chapter_number} theory" if chapter_number else "Latest One Piece manga chapter theory"
         language = (language or "english").strip().lower()
         is_hindi = language in {"hindi", "hi", "hinglish"}
         if is_hindi:
@@ -152,15 +160,47 @@ def generate_script(topic_override: str = None, language: str = "english", conte
             final_quality_rule = "CRITICAL: Keep it Gen-Z hype but NOT spammy. Clear English sentences, natural fan energy, maximum scroll-stopping engagement."
 
         context_block = ""
-        if context_text:
-            trimmed_context = context_text[:12000]
-            context_block = (
-                "MANGA PDF CONTEXT:\n"
-                "Use the following extracted manga text as the main source of this video. "
-                "Ground the theory in these details, but you may use safe general One Piece knowledge to connect ideas. "
-                "Do not invent page text that is not supported by this context.\n"
-                f"{trimmed_context}\n\n"
+        chapter_topic_rule = ""
+        if chapter_number:
+            chapter_topic_rule = (
+                f"- If a HARD CHAPTER LOCK is provided, the first sentence must name Chapter {chapter_number}.\n"
             )
+        if context_text or ohara_context:
+            trimmed_context = context_text[:12000]
+            trimmed_ohara = ohara_context[:9000]
+            sources_text = ""
+            if context_sources:
+                source_lines = []
+                for source in context_sources[:3]:
+                    title = source.get("title") or source.get("source") or "context source"
+                    url = source.get("url", "")
+                    source_lines.append(f"- {title} {url}".strip())
+                sources_text = "CONTEXT SOURCES:\n" + "\n".join(source_lines) + "\n\n"
+            chapter_lock = (
+                f"HARD CHAPTER LOCK: This video is about One Piece Chapter {chapter_number}. "
+                f"Do not mention another chapter number unless comparing directly to Chapter {chapter_number}.\n"
+                if chapter_number else ""
+            )
+            context_block = (
+                f"{chapter_lock}"
+                f"{sources_text}"
+                "GROUNDING RULES FOR PDF MODE:\n"
+                "- Use PDF extracted text for direct scene/dialogue anchors only when it is readable.\n"
+                "- Use The Library of Ohara context for interpretation and chapter analysis when provided.\n"
+                "- Do NOT invent characters, family links, flashbacks, locations, or page text absent from the context below.\n"
+                "- Do NOT drift to unrelated arcs such as Egghead, Wano, or Mary Geoise unless this context explicitly mentions them.\n"
+                "- If OCR text is messy, prefer the clean Ohara context over guessing from corrupted words.\n\n"
+            )
+            if trimmed_context:
+                context_block += (
+                    "CLEANED MANGA PDF TEXT:\n"
+                    f"{trimmed_context}\n\n"
+                )
+            if trimmed_ohara:
+                context_block += (
+                    "THE LIBRARY OF OHARA CHAPTER CONTEXT:\n"
+                    f"{trimmed_ohara}\n\n"
+                )
 
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
@@ -187,6 +227,7 @@ def generate_script(topic_override: str = None, language: str = "english", conte
             "TOPIC LOCK RULES:\n"
             "- Pick ONE main subject from TOPIC and stay with it from start to end.\n"
             "- Pick ONE canon anchor that directly fits TOPIC: chapter, episode, arc, island, scene, or quote.\n"
+            f"{chapter_topic_rule}"
             "- Do NOT switch arcs mid-script. If the anchor is Wano/Kaido, do not suddenly move to Egghead/Vegapunk.\n"
             "- If the anchor is Egghead/Vegapunk, do not open with Wano/Kaido.\n"
             "- Mention at most 2 bigger lore pieces, and both must clearly support the same theory.\n"

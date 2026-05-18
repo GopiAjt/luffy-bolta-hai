@@ -13,7 +13,7 @@ from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
 from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
-from app.utils.manga_pdf_processor import create_pdf_slides, load_manga_pdf_manifest, process_manga_pdf
+from app.utils.manga_pdf_processor import create_pdf_slides, fetch_ohara_context, load_manga_pdf_manifest, process_manga_pdf, score_text_quality
 import re
 import json
 import glob
@@ -329,15 +329,50 @@ def generate_script_from_pdf_endpoint():
             return jsonify({'error': str(e)}), 404
 
         context_text = manifest.get('extracted_text', '')
-        if not context_text.strip() and not topic:
+        text_quality = manifest.get('text_quality') or {}
+        if not text_quality and context_text.strip():
+            text_quality = score_text_quality(context_text, 70)
+        chapter_number = manifest.get('chapter_number')
+        ohara_context = manifest.get('ohara_context') or None
+        context_sources = manifest.get('context_sources') or []
+        warnings = list(manifest.get('warnings') or [])
+
+        if chapter_number and not ohara_context:
+            ohara_context, ohara_warning = fetch_ohara_context(chapter_number)
+            if ohara_context:
+                context_sources.append({
+                    'source': ohara_context.get('source'),
+                    'title': ohara_context.get('title'),
+                    'url': ohara_context.get('url'),
+                    'chapter_number': ohara_context.get('chapter_number'),
+                    'fetched_at': ohara_context.get('fetched_at'),
+                    'quality': ohara_context.get('quality'),
+                })
+            elif ohara_warning:
+                warnings.append(ohara_warning)
+
+        has_usable_pdf_text = bool(context_text.strip()) and bool(text_quality.get('usable'))
+        has_usable_ohara_context = bool(ohara_context and ohara_context.get('text'))
+        if not has_usable_pdf_text and not has_usable_ohara_context:
             return jsonify({
-                'error': 'No extractable PDF text found. Provide a topic/angle or install OCR support.'
+                'error': (
+                    'Could not find reliable text for this PDF. OCR quality is too low and no matching '
+                    'Library of Ohara context was found. Provide a manual topic/summary or try a cleaner PDF.'
+                ),
+                'details': {
+                    'chapter_number': chapter_number,
+                    'text_quality': text_quality,
+                    'warnings': warnings,
+                }
             }), 400
 
         result = generate_script(
             topic_override=topic,
             language='english',
-            context_text=context_text
+            context_text=context_text if has_usable_pdf_text else '',
+            chapter_number=chapter_number,
+            ohara_context=ohara_context.get('text', '') if ohara_context else '',
+            context_sources=context_sources
         )
         return jsonify({
             'status': 'success',
@@ -347,7 +382,11 @@ def generate_script_from_pdf_endpoint():
                 'script': result.get('script', ''),
                 'description': result.get('description', ''),
                 'hashtags': result.get('hashtags', ''),
-                'pdf_id': pdf_id
+                'pdf_id': pdf_id,
+                'chapter_number': chapter_number,
+                'text_quality': text_quality,
+                'context_sources': context_sources,
+                'warnings': warnings,
             }
         })
     except Exception as e:
@@ -384,6 +423,7 @@ def generate_pdf_slides_endpoint():
             'status': 'success',
             'message': 'PDF slides generated successfully',
             'output_path': result['slides_json'],
+            'slides_json': result['slides_json'],
             'slides': result['slides'],
             'slide_count': result['slide_count']
         })

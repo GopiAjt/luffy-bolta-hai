@@ -33,6 +33,7 @@ def generate_final_video(
     output_filename: str = None,
     generate_slides: bool = True,  # New parameter to control slides generation
     blur_amount: int = 5,  # Controls transition blur (0 = no blur, higher values = softer crossfades)
+    quality_mode: str = "pro",
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -50,6 +51,10 @@ def generate_final_video(
     """
     slideshow_output_path = None  # Initialize to None
     try:
+        quality_mode = (quality_mode or "standard").lower()
+        pro_mode = quality_mode == "pro"
+        logger.info("Using video quality mode: %s", quality_mode)
+
         # 1. Get audio duration to sync the slideshow
         audio_path = UPLOADS_DIR / f"{audio_id}"
         if not audio_path.exists():
@@ -69,7 +74,10 @@ def generate_final_video(
                 output_path=str(slideshow_output_path),
                 total_duration=total_audio_duration,
                 resolution=VIDEO_RESOLUTION,
-                blur_amount=blur_amount,
+                blur_amount=3 if pro_mode else blur_amount,
+                transition_type='pro' if pro_mode else 'auto',
+                transition_duration=0.38 if pro_mode else 0.5,
+                quality_mode=quality_mode,
             )
             logger.info("Slideshow video generated successfully.")
         else:
@@ -122,6 +130,7 @@ def generate_final_video(
                 output_path=str(final_output_path),
                 background_video_path=str(slideshow_output_path),
                 expr_img_dir=str(EXPRESSIONS_DIR),
+                quality_mode=quality_mode,
             )
         else:
             logger.info("No expressions file found, generating video without expressions.")
@@ -130,6 +139,7 @@ def generate_final_video(
                 subtitle_path=subtitle_path,
                 output_path=str(final_output_path),
                 background_video_path=str(slideshow_output_path),
+                quality_mode=quality_mode,
             )
 
         logger.info(f"Final video generated successfully at: {final_video_path}")

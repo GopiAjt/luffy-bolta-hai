@@ -340,7 +340,7 @@ def generate_subtitles():
         data = request.json
         audio_id = data.get('audio_id')
         script = data.get('script')  # This is now optional
-        subtitle_style = data.get('subtitle_style', 'epic')
+        subtitle_style = data.get('subtitle_style', 'pro')
 
         if not audio_id:
             return jsonify({
@@ -755,6 +755,7 @@ def generate_final_video_endpoint():
         subtitle_file = data.get('subtitle_file')
         expressions_file = data.get('expressions_file')
         force_regenerate = data.get('force_regenerate_slides', False)
+        quality_mode = data.get('quality_mode', 'pro')
         
         logger.info(f"Processing request with audio_id={audio_id}, subtitle_file={subtitle_file}")
 
@@ -835,7 +836,8 @@ def generate_final_video_endpoint():
                 slides_json_path=slides_json,
                 subtitle_path=subtitle_file,
                 expressions_path=expressions_file,
-                generate_slides=force_regenerate
+                generate_slides=force_regenerate,
+                quality_mode=quality_mode
             )
             logger.info(f"Final video generated at: {final_video_path}")
             

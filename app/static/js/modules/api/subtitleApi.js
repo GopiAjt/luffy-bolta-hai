@@ -4,7 +4,7 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  * API client for subtitle operations
  */
 
-export const generateSubtitles = async (audioId, script, subtitleStyle = 'karaoke') => {
+export const generateSubtitles = async (audioId, script, subtitleStyle = 'pro') => {
     console.log('=== Starting generateSubtitles API call ===');
     console.log('Audio ID:', audioId);
     console.log('Script length:', script ? script.length : 0);

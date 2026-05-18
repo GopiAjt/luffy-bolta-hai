@@ -73,7 +73,8 @@ class VideoGenerator:
         subtitle_effect: str = 'fade',  
         font_size: int = 72,          
         font: str = 'Roboto',          
-        convert_to_mp4: bool = True
+        convert_to_mp4: bool = True,
+        quality_mode: str = 'standard',
     ) -> str:
         """
         Generate a video with audio and animated subtitles using MoviePy.
@@ -111,6 +112,46 @@ class VideoGenerator:
             except Exception as e:
                 logger.warning(f"Invalid resolution '{resolution}', defaulting to 1080x1920. Error: {e}")
                 res_x, res_y = 1080, 1920
+
+            quality_mode = (quality_mode or 'standard').lower()
+            pro_mode = quality_mode == 'pro'
+            duration = self.get_audio_duration(audio_path)
+            os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+            if background_video_path and os.path.exists(background_video_path):
+                base_video_input = ['-i', str(background_video_path)]
+                filter_complex = f"[0:v]setpts=PTS-STARTPTS,subtitles='{subtitle_path}'[vout]"
+                audio_input_idx = 1
+            else:
+                base_video_input = [
+                    '-f', 'lavfi',
+                    '-i', f'color=c={color}:s={res_x}x{res_y}:d={duration}:r={fps}'
+                ]
+                filter_complex = f"[0:v]subtitles='{subtitle_path}'[vout]"
+                audio_input_idx = 1
+
+            cmd = [
+                self.ffmpeg, '-y',
+                *base_video_input,
+                '-i', audio_path,
+                '-filter_complex', filter_complex,
+                '-map', '[vout]', '-map', f'{audio_input_idx}:a',
+                '-c:v', 'libx264',
+                '-preset', 'slow' if pro_mode else 'medium',
+                '-crf', '19' if pro_mode else '23',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-movflags', '+faststart',
+                '-shortest',
+                str(output_path)
+            ]
+            logger.info("Running FFmpeg video generation without expressions")
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                raise RuntimeError(f"Output video file was not created: {output_path}")
+            logger.info(f"Successfully generated video at {output_path}")
+            return output_path
 
             # Load audio
             logger.info(f"Loading audio from {audio_path}")
@@ -354,7 +395,8 @@ class VideoGenerator:
         color: str = 'green',
         fps: int = 30,
         expr_img_dir: str = None,
-        convert_to_mp4: bool = True
+        convert_to_mp4: bool = True,
+        quality_mode: str = 'standard',
     ) -> str:
         """
         Generate a video with audio, burned-in subtitles, and facial expression overlays.
@@ -377,8 +419,11 @@ class VideoGenerator:
             expr_img_dir = os.path.join(os.path.dirname(
                 __file__), '../static/expressions')
         try:
+            quality_mode = (quality_mode or 'standard').lower()
+            pro_mode = quality_mode == 'pro'
             logger.info(
                 f"generate_video_with_expressions called with background_video_path: {background_video_path}")
+            logger.info(f"Video quality mode: {quality_mode}")
             duration = self.get_audio_duration(audio_path)
             os.makedirs(os.path.dirname(
                 os.path.abspath(output_path)), exist_ok=True)
@@ -453,13 +498,29 @@ class VideoGenerator:
                         logger.warning(
                             f"Skipping invalid interval for label '{label}': start={start}, end={end}")
                         continue
-                    overlay_inputs.append('-i')
-                    overlay_inputs.append(img_path)
+                    interval_duration = end - start
+                    fade_duration = max(0.05, min(0.18, interval_duration / 3))
+                    fade_out_start = max(0.0, interval_duration - fade_duration)
+                    overlay_inputs.extend([
+                        '-loop', '1',
+                        '-t', f'{interval_duration:.3f}',
+                        '-i', img_path
+                    ])
                     img_label = f"[{input_idx}:v]"
-                    # No fade/transition, just overlay with enable
+                    expr_label = f"[expr{overlay_step}]"
+                    scale_expr = (
+                        f"scale=w='iw*(0.96+0.04*min(1\\,t/{fade_duration:.3f}))':"
+                        f"h='ih*(0.96+0.04*min(1\\,t/{fade_duration:.3f}))':eval=frame"
+                    )
+                    filter_steps.append(
+                        f"{img_label}format=rgba,{scale_expr},"
+                        f"fade=t=in:st=0:d={fade_duration:.3f}:alpha=1,"
+                        f"fade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f}:alpha=1,"
+                        f"setpts=PTS+{start:.3f}/TB{expr_label}"
+                    )
                     enable_expr = f"between(t,{start},{end})"
                     overlay_filters.append(
-                        f"{last_label}{img_label} overlay=x=(W-w)/2:y=H-h-200:enable='{enable_expr}'[bg{overlay_step}]"
+                        f"{last_label}{expr_label} overlay=x=(W-w)/2:y=H-h-200:enable='{enable_expr}':eval=frame[bg{overlay_step}]"
                     )
                     last_label = f"[bg{overlay_step}]"
                     overlay_step += 1
@@ -498,10 +559,14 @@ class VideoGenerator:
                 '-i', audio_path,
                 '-filter_complex', filter_complex_clean,  # Pass cleaned filtergraph as string
                 '-map', '[vout]', '-map', f'{audio_input_idx}:a',
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p',
-                '-c:a', 'libmp3lame' if not str(
-                    audio_path).lower().endswith('.mp3') else 'copy',
-                '-b:a', '192k', '-shortest', str(output_path)
+                '-c:v', 'libx264',
+                '-preset', 'slow' if pro_mode else 'medium',
+                '-crf', '19' if pro_mode else '23',
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-movflags', '+faststart',
+                '-shortest', str(output_path)
             ]
             
             # Log the full command and filter graph for debugging

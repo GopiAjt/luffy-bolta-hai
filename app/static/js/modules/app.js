@@ -519,7 +519,7 @@ export class LuffyBoltHaiApp {
         try {
             // Get selected subtitle style
             const subtitleStyleSelector = document.getElementById('subtitleStyle');
-            let subtitleStyle = 'epic'; // Default to 'epic' (Epic Battles)
+            let subtitleStyle = 'pro'; // Default to pro clean captions
             if (subtitleStyleSelector && subtitleStyleSelector.value) {
                 subtitleStyle = subtitleStyleSelector.value;
                 console.log('Selected subtitle style:', subtitleStyle);
@@ -605,7 +605,8 @@ export class LuffyBoltHaiApp {
                 expressions_file: expressionsFile && expressionsFile.path ? expressionsFile.path : null,
                 force_regenerate_slides: false,  // Don't force regenerate slides
                 slides_json: slidesJson,         // Pass the existing slides JSON if available
-                use_existing_slides: true        // Indicate we want to use existing slides
+                use_existing_slides: true,       // Indicate we want to use existing slides
+                quality_mode: 'pro'
             };
 
             console.log('Request data for final video generation:', JSON.stringify(requestData, null, 2));

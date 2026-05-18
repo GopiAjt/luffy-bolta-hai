@@ -594,6 +594,36 @@ class SubtitleGenerator:
             
         return ' '.join(styled)
 
+    def _wrap_subtitle_text(self, text: str, max_chars: int = 28, max_lines: int = 2) -> str:
+        """Wrap subtitle text into a compact ASS-friendly two-line caption."""
+        words = text.split()
+        lines = []
+        current = []
+
+        for word in words:
+            candidate = ' '.join(current + [word])
+            if current and len(candidate) > max_chars:
+                lines.append(' '.join(current))
+                current = [word]
+            else:
+                current.append(word)
+
+        if current:
+            lines.append(' '.join(current))
+
+        if len(lines) > max_lines:
+            kept = lines[:max_lines]
+            overflow = ' '.join(lines[max_lines:])
+            kept[-1] = f"{kept[-1]} {overflow}".strip()
+            lines = kept
+
+        return r'\N'.join(lines)
+
+    def _style_phrase_pro(self, phrase: str) -> str:
+        """Return clean, readable subtitle text for professional short-form videos."""
+        wrapped = self._wrap_subtitle_text(phrase)
+        return f"{{\\fad(80,80)}}{wrapped}"
+
     def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920') -> None:
         """
         Generate a visually rich, dynamically styled ASS subtitle file using NLTK.
@@ -609,7 +639,14 @@ class SubtitleGenerator:
                 f"Invalid resolution '{resolution}', defaulting to 1080x1920")
             res_x, res_y = 1080, 1920
 
-        default_font = self._get_devanagari_font() or "DejaVu Sans"
+        pro_mode = self.style == 'pro'
+        has_devanagari = any(DEVANAGARI_RE.search(str(phrase.get('text', ''))) for phrase in phrases)
+        default_font = (self._get_devanagari_font() if has_devanagari else None) or "DejaVu Sans"
+        default_font_size = 82 if pro_mode else 72
+        outline = 5 if pro_mode else 3
+        shadow = 2 if pro_mode else 1
+        alignment = 2 if pro_mode else 5
+        margin_v = int(res_y * 0.17) if pro_mode else 0
 
         header = textwrap.dedent(f"""
             [Script Info]
@@ -624,7 +661,7 @@ class SubtitleGenerator:
 
             [V4+ Styles]
             Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-            Style: Default,{default_font},72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,3,1,5,30,30,0,1
+            Style: Default,{default_font},{default_font_size},&H00FFFFFF,&H000000FF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},70,70,{margin_v},1
 
             [Events]
             Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -656,7 +693,7 @@ class SubtitleGenerator:
                 else:
                     logger.debug(f"Allowing minor overlap ({overlap:.2f}s) for: {phrase_text}")
             
-            ass_text = self._style_phrase(phrase_text)
+            ass_text = self._style_phrase_pro(phrase_text) if pro_mode else self._style_phrase(phrase_text)
             content.append(
                 f"Dialogue: 0,{start},{end},Default,,0,0,0,,{ass_text}\n")
             last_end = max(last_end, phrase['end'])  # Update to the latest end time

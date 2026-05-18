@@ -113,14 +113,17 @@ def prepare_slide_canvas(img_path, resolution, blur_amount=0):
     return scaled, scaled_w
 
 
-def crop_panned_frame(scaled, scaled_w, resolution, idx, t):
+def crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=1.0):
     """Return a sub-pixel accurate pan crop for smoother motion."""
     res_w, res_h = resolution
     max_x = max(0.0, float(scaled_w - res_w))
     t = ease_progress(t, PAN_EASING)
+    pan_strength = max(0.0, min(1.0, float(pan_strength)))
 
     if max_x > 0:
-        x = t * max_x if idx % 2 == 0 else (1.0 - t) * max_x
+        travel = max_x * pan_strength
+        start_x = (max_x - travel) / 2.0
+        x = start_x + (t * travel if idx % 2 == 0 else (1.0 - t) * travel)
     else:
         x = 0.0
 
@@ -314,7 +317,7 @@ def crossfade_effect(current_frame, next_frame, progress, blur_amount=5):
         return current_frame
 
 
-def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=0, start_frame=0):
+def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=0, start_frame=0, pan_strength=1.0):
     """
     Fits the image height to the video height, then pans horizontally
     so that over the course of `duration` seconds, the window moves
@@ -341,7 +344,7 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     direction = "left→right" if idx % 2 == 0 else "right→left"
     effective_blur = normalize_blur_amount(blur_amount, max_kernel=9)
     blur_status = f"with blur (kernel size: {effective_blur})" if effective_blur > 0 else "without blur"
-    logger.info(f"Processing slide {os.path.basename(img_path)} with index {idx}, panning {direction} {blur_status}")
+    logger.info(f"Processing slide {os.path.basename(img_path)} with index {idx}, panning {direction} {blur_status}, pan_strength={pan_strength:.2f}")
     logger.debug(f"  - Start frame: {start_frame}, Total frames: {num_frames}, Duration: {duration:.2f}s")
 
     scaled, scaled_w = prepare_slide_canvas(img_path, resolution, effective_blur)
@@ -367,7 +370,7 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
         t = max(0.0, min(1.0, t))
         
         logger.debug(f"Frame {i}: t={t:.2f}, max_x={max_x}, direction={'left→right' if idx % 2 == 0 else 'right→left'}")
-        frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t)
+        frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
         
         frame_path = os.path.join(temp_frame_dir, f"frame_{frame_counter:05d}.jpg")
         try:
@@ -385,7 +388,7 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     return frame_counter # Return updated frame_counter
 
 
-def render_panned_frame(img_path, resolution, idx, t, blur_amount=0):
+def render_panned_frame(img_path, resolution, idx, t, blur_amount=0, pan_strength=1.0):
     """Render a single frame of a slide at a given pan progress t in [0,1].
     Mirrors the preprocessing in apply_panoramic_pan to ensure visual continuity.
     """
@@ -394,7 +397,7 @@ def render_panned_frame(img_path, resolution, idx, t, blur_amount=0):
     if scaled is None:
         logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
         return np.zeros((res_h, res_w, 3), dtype=np.uint8)
-    return crop_panned_frame(scaled, scaled_w, resolution, idx, t)
+    return crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
 
 
 def weighted_choice(weighted_items):
@@ -963,7 +966,7 @@ def create_placeholder_slide(image_dir, resolution, label="One Piece"):
     return output_path
 
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0):
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0, quality_mode='standard', pan_strength=1.0):
     """
     Generates the final slideshow video using OpenCV.
     
@@ -982,8 +985,17 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     resolution = sanitize_size(resolution)
     res_w, res_h = resolution
     
+    quality_mode = (quality_mode or 'standard').lower()
+    if quality_mode == 'pro':
+        transition_type = 'pro' if transition_type == 'auto' else transition_type
+        transition_duration = min(float(transition_duration), 0.42)
+        pan_strength = min(float(pan_strength), 0.35)
+        slide_blur_amount = 0
+        logger.info("Using pro slideshow mode: restrained transitions, subtle pan, no slide blur")
+
     blur_amount = normalize_blur_amount(blur_amount, max_kernel=15)
     slide_blur_amount = normalize_blur_amount(slide_blur_amount, max_kernel=9)
+    pan_strength = max(0.0, min(1.0, float(pan_strength)))
     if blur_amount > 0:
         logger.info(f"Applying transition blur with kernel: {blur_amount}")
     if slide_blur_amount > 0:
@@ -1030,7 +1042,14 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         if idx > 0 and transition_duration > 0:
             if isinstance(transition_type, str):
                 tt = transition_type.lower()
-                if tt == 'random':
+                if tt == 'pro':
+                    transitions_pool = ['crossfade', 'zoom_dissolve', 'fade_eased']
+                    selected_transition_type = random.choices(
+                        transitions_pool,
+                        weights=[0.55, 0.30, 0.15],
+                        k=1
+                    )[0]
+                elif tt == 'random':
                     transitions_pool = [
                         'fade', 'crossfade', 'fade_eased', 'zoom_dissolve', 'radial_wipe',
                         'slide_up', 'slide_down',
@@ -1239,7 +1258,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 # We will skip the first content frame after transition (start_frame=1),
                 # so align the transition's last frame to that first used progress
                 start_t = (1 / (next_num_frames - 1)) if next_num_frames > 1 else 0.0
-                next_frame = render_panned_frame(img_path, resolution, idx=slides_processed, t=start_t, blur_amount=slide_blur_amount)
+                next_frame = render_panned_frame(img_path, resolution, idx=slides_processed, t=start_t, blur_amount=slide_blur_amount, pan_strength=pan_strength)
                 logger.debug(
                     f"Next frame prepared via render_panned_frame | t={start_t:.4f}, frames={next_num_frames}, idx={slides_processed}"
                 )
@@ -1465,7 +1484,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         idx=slides_processed,
                         fps=fps,
                         blur_amount=slide_blur_amount,
-                        start_frame=start_frame
+                        start_frame=start_frame,
+                        pan_strength=pan_strength
                     )
                     
                     frames_written_this_slide = frames_written - frames_before
@@ -1510,8 +1530,11 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         "-i", os.path.join(temp_frame_dir, "frame_%05d.jpg"),
         "-vframes", str(frames_written),
         "-c:v", "libx264",
+        "-preset", "slow" if quality_mode == 'pro' else "medium",
+        "-crf", "19" if quality_mode == 'pro' else "23",
         "-pix_fmt", "yuv420p",
         "-r", str(fps),
+        "-movflags", "+faststart",
         output_path
     ]
 

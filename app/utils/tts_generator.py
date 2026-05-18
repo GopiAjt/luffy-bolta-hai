@@ -14,8 +14,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
 DEFAULT_VOICE_INSTRUCT = (
-    "Young energetic male anime narrator, bright and adventurous, expressive "
-    "anime fan energy, clear English delivery, medium-fast pace, excited but not shouting"
+    "Young energetic male anime narrator, Gen-Z fan energy. "
+    "Fast-paced, expressive, slightly dramatic. "
+    "Start immediately with a strong exciting hook, no intro pause. "
+    "Quick natural delivery, emotional highs and lows. "
+    "Very short pauses after shocking reveals only. "
+    "Brief slowdowns for major twists, then speed back up. "
+    "Strong debate-style ending. "
+    "Natural human imperfections, not robotic."
 )
 
 _tts_model = None

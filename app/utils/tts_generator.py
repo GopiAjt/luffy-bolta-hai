@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -7,9 +8,9 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from app.config import UPLOADS_DIR
+from app.config import UPLOADS_DIR, normalize_video_profile
 from app.utils.audio_processor import get_audio_duration
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,80 @@ DEFAULT_VOICE_INSTRUCT = (
 
 _tts_model = None
 _tts_model_id = None
+
+
+def _split_text_for_tts(text: str, max_chars: int) -> List[str]:
+    """Split long narration into sentence-aware chunks for Qwen TTS."""
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?।])\s+", text)
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            words = sentence.split()
+            word_chunk = []
+            for word in words:
+                candidate = " ".join([*word_chunk, word])
+                if len(candidate) > max_chars and word_chunk:
+                    chunks.append(" ".join(word_chunk))
+                    word_chunk = [word]
+                else:
+                    word_chunk.append(word)
+            if word_chunk:
+                chunks.append(" ".join(word_chunk))
+            continue
+
+        candidate = f"{current} {sentence}".strip()
+        if len(candidate) > max_chars and current:
+            chunks.append(current.strip())
+            current = sentence
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current.strip())
+    return chunks
+
+
+def _concat_wav_files(input_paths: List[Path], output_path: Path) -> None:
+    concat_path = output_path.with_suffix(".concat.txt")
+    try:
+        lines = []
+        for path in input_paths:
+            escaped = str(path).replace("'", "'\\''")
+            lines.append(f"file '{escaped}'\n")
+        concat_path.write_text("".join(lines), encoding="utf-8")
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_path),
+            "-c:a",
+            "pcm_s16le",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            str(output_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    finally:
+        concat_path.unlink(missing_ok=True)
 
 
 def _master_voiceover(raw_path: Path, output_path: Path) -> None:
@@ -158,6 +233,7 @@ def generate_voiceover(
     language: str = "English",
     instruct: Optional[str] = None,
     model_id: str = DEFAULT_TTS_MODEL,
+    video_profile: str = "short_vertical",
 ) -> dict:
     """
     Generate a voiceover WAV with Qwen3-TTS VoiceDesign.
@@ -174,6 +250,7 @@ def generate_voiceover(
     raw_output_path = output_path.with_suffix(".raw.wav")
     voice_instruct = (instruct or DEFAULT_VOICE_INSTRUCT).strip()
     language = (language or "English").strip()
+    video_profile = normalize_video_profile(video_profile)
 
     model = _load_qwen_tts_model(model_id)
 
@@ -185,20 +262,48 @@ def generate_voiceover(
             "Install it with `pip install soundfile`."
         ) from exc
 
-    logger.info("Generating Qwen voiceover (%d chars, language=%s)", len(text), language)
+    max_chars = int(os.getenv("QWEN_TTS_MAX_CHARS", "2400"))
+    chunks = _split_text_for_tts(text, max_chars if video_profile == "long_youtube" else len(text))
+    if not chunks:
+        raise ValueError("Text is required to generate a voiceover")
+
+    logger.info(
+        "Generating Qwen voiceover (%d chars, %d chunk(s), language=%s, profile=%s)",
+        len(text),
+        len(chunks),
+        language,
+        video_profile,
+    )
     logger.info("Voice design prompt: %s", voice_instruct)
-    with _progress_logger("Qwen voiceover generation"):
-        wavs, sample_rate = model.generate_voice_design(
-            text=text,
-            language=language,
-            instruct=voice_instruct,
-        )
 
-    if not wavs:
-        raise RuntimeError("Qwen TTS returned no audio")
+    chunk_paths = []
+    sample_rate = None
+    try:
+        for idx, chunk in enumerate(chunks, 1):
+            chunk_path = output_path.with_suffix(f".part{idx}.raw.wav")
+            logger.info("Generating TTS chunk %d/%d (%d chars)", idx, len(chunks), len(chunk))
+            with _progress_logger(f"Qwen voiceover generation chunk {idx}/{len(chunks)}"):
+                wavs, sample_rate = model.generate_voice_design(
+                    text=chunk,
+                    language=language,
+                    instruct=voice_instruct,
+                )
 
-    logger.info("Writing generated voiceover WAV to %s at %s Hz", raw_output_path, sample_rate)
-    sf.write(str(raw_output_path), wavs[0], sample_rate)
+            if not wavs:
+                raise RuntimeError(f"Qwen TTS returned no audio for chunk {idx}")
+            logger.info("Writing generated chunk WAV to %s at %s Hz", chunk_path, sample_rate)
+            sf.write(str(chunk_path), wavs[0], sample_rate)
+            chunk_paths.append(chunk_path)
+
+        if len(chunk_paths) == 1:
+            shutil.move(str(chunk_paths[0]), str(raw_output_path))
+        else:
+            logger.info("Concatenating %d generated voiceover chunks", len(chunk_paths))
+            _concat_wav_files(chunk_paths, raw_output_path)
+    finally:
+        for chunk_path in chunk_paths:
+            chunk_path.unlink(missing_ok=True)
+
     _master_voiceover(raw_output_path, output_path)
     duration = get_audio_duration(str(output_path))
     logger.info("Generated voiceover %s (duration %.2fs)", output_path.name, duration)

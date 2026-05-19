@@ -18,8 +18,9 @@ from app.config import (
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
-    VIDEO_RESOLUTION,
     COMPILED_VIDEO_DIR,
+    get_video_profile_config,
+    normalize_video_profile,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,7 @@ def generate_final_video(
     blur_amount: int = 5,  # Controls transition blur (0 = no blur, higher values = softer crossfades)
     quality_mode: str = "pro",
     background_music_path: str = None,
+    video_profile: str = "short_vertical",
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -81,7 +83,11 @@ def generate_final_video(
     try:
         quality_mode = (quality_mode or "standard").lower()
         pro_mode = quality_mode == "pro"
+        video_profile = normalize_video_profile(video_profile)
+        profile_config = get_video_profile_config(video_profile)
+        video_resolution = profile_config["video_resolution"]
         logger.info("Using video quality mode: %s", quality_mode)
+        logger.info("Using video profile: %s (%sx%s)", video_profile, video_resolution[0], video_resolution[1])
         selected_music_path = pick_background_music(background_music_path)
         logger.info("Background music: %s", selected_music_path or "disabled")
 
@@ -93,7 +99,7 @@ def generate_final_video(
         logger.info(f"Total audio duration: {total_audio_duration:.2f}s")
 
         # 2. Generate the slideshow video (as a temporary file)
-        slideshow_output_path = COMPILED_VIDEO_DIR / f"slideshow_temp_{Path(audio_id).stem}.mp4"
+        slideshow_output_path = COMPILED_VIDEO_DIR / f"slideshow_temp_{Path(audio_id).stem}_{video_profile}.mp4"
         
         # Only generate slides if needed or if file doesn't exist
         if generate_slides or not slideshow_output_path.exists():
@@ -103,7 +109,7 @@ def generate_final_video(
                 image_dir=images_dir,
                 output_path=str(slideshow_output_path),
                 total_duration=total_audio_duration,
-                resolution=VIDEO_RESOLUTION,
+                resolution=video_resolution,
                 blur_amount=3 if pro_mode else blur_amount,
                 transition_type='pro' if pro_mode else 'auto',
                 transition_duration=0.38 if pro_mode else 0.5,
@@ -119,7 +125,7 @@ def generate_final_video(
         # 4. Define the final output path
         if not output_filename:
             base_name = Path(audio_id).stem
-            output_filename = f"final_video_{base_name}.mp4"
+            output_filename = f"final_video_{base_name}_{video_profile}.mp4"
 
         final_output_path = COMPILED_VIDEO_DIR / output_filename
 
@@ -162,6 +168,7 @@ def generate_final_video(
                 expr_img_dir=str(EXPRESSIONS_DIR),
                 quality_mode=quality_mode,
                 background_music_path=selected_music_path,
+                resolution=f"{video_resolution[0]}x{video_resolution[1]}",
             )
         else:
             logger.info("No expressions file found, generating video without expressions.")
@@ -172,6 +179,7 @@ def generate_final_video(
                 background_video_path=str(slideshow_output_path),
                 quality_mode=quality_mode,
                 background_music_path=selected_music_path,
+                resolution=f"{video_resolution[0]}x{video_resolution[1]}",
             )
 
         logger.info(f"Final video generated successfully at: {final_video_path}")
@@ -200,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--expressions_file", default=None, help="Path to the expressions JSON file (optional).")
     parser.add_argument("--output_filename", default=None, help="Name for the final output video file (optional).")
     parser.add_argument("--blur", type=int, default=5, help="Amount of blur to apply to slides (0 = no blur, 5 = default, higher values = more blur, typical range: 0-10).")
+    parser.add_argument("--video_profile", default="short_vertical", choices=["short_vertical", "long_youtube"], help="Video profile to render.")
 
     args = parser.parse_args()
 
@@ -227,6 +236,7 @@ if __name__ == "__main__":
             expressions_path=str(expressions_full_path) if expressions_full_path else None,
             output_filename=args.output_filename,
             blur_amount=args.blur,
+            video_profile=args.video_profile,
         )
         print(f"Successfully created final video: {final_path}")
     except Exception as e:

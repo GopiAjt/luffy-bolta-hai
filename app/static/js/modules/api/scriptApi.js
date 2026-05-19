@@ -4,8 +4,8 @@ import { parseJsonResponse, handleApiError } from '../utils/responseParser.js';
  * API client for script generation
  */
 
-export const generateScript = async (prompt = null) => {
-    const payload = { language: 'english' };
+export const generateScript = async (prompt = null, videoProfile = 'short_vertical') => {
+    const payload = { language: 'english', video_profile: videoProfile };
     if (prompt && prompt.trim()) {
         payload.topic = prompt.trim();
     }

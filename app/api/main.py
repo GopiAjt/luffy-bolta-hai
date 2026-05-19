@@ -29,13 +29,13 @@ from app.config import (
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
-    VIDEO_RESOLUTION,
     VIDEO_BACKGROUND_COLOR,
-    SUBTITLE_RESOLUTION,
     MAX_PDF_SIZE,
     HOST,
     PORT,
     DEBUG,
+    get_video_profile_config,
+    normalize_video_profile,
 )
 
 
@@ -90,7 +90,11 @@ def _build_pdf_script_context(manifest: dict) -> dict:
     }
 
 
-def _generate_pdf_script_from_manifest(manifest: dict, topic: Optional[str] = None) -> dict:
+def _generate_pdf_script_from_manifest(
+    manifest: dict,
+    topic: Optional[str] = None,
+    video_profile: str = 'short_vertical',
+) -> dict:
     context = _build_pdf_script_context(manifest)
     if not context['has_usable_context']:
         raise ValueError(
@@ -104,7 +108,8 @@ def _generate_pdf_script_from_manifest(manifest: dict, topic: Optional[str] = No
         context_text=context['context_text'],
         chapter_number=context['chapter_number'],
         ohara_context=context['ohara_context'].get('text', '') if context['ohara_context'] else '',
-        context_sources=context['context_sources']
+        context_sources=context['context_sources'],
+        video_profile=video_profile,
     )
     return {
         'title': result.get('title', ''),
@@ -115,10 +120,16 @@ def _generate_pdf_script_from_manifest(manifest: dict, topic: Optional[str] = No
         'text_quality': context['text_quality'],
         'context_sources': context['context_sources'],
         'warnings': context['warnings'],
+        'video_profile': normalize_video_profile(video_profile),
     }
 
 
-def _generate_subtitle_assets(audio_id: str, script: Optional[str], subtitle_style: str = 'pro') -> dict:
+def _generate_subtitle_assets(
+    audio_id: str,
+    script: Optional[str],
+    subtitle_style: str = 'pro',
+    video_profile: str = 'short_vertical',
+) -> dict:
     audio_path = os.path.join(UPLOADS_DIR, audio_id)
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f'Audio file not found: {audio_id}')
@@ -133,7 +144,12 @@ def _generate_subtitle_assets(audio_id: str, script: Optional[str], subtitle_sty
         raise RuntimeError('Failed to generate subtitles: No phrases generated')
 
     ass_path = os.path.join(UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
-    subtitle_generator.generate_ass_file(phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
+    profile = get_video_profile_config(video_profile)
+    subtitle_generator.generate_ass_file(
+        phrases,
+        ass_path,
+        resolution=profile['subtitle_resolution'],
+    )
     if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
         raise RuntimeError('Failed to generate subtitles: ASS file not generated correctly')
 
@@ -161,6 +177,7 @@ def _generate_subtitle_assets(audio_id: str, script: Optional[str], subtitle_sty
         'expressions_file': os.path.basename(expr_json_path) if expr_json_path else None,
         'expressions': expressions,
         'phrases': phrases,
+        'video_profile': normalize_video_profile(video_profile),
     }
 
 # Serve static files
@@ -239,9 +256,14 @@ def generate_script_endpoint():
         data = request.json or {}
         topic = data.get('script') or data.get('topic')
         language = data.get('language', 'english')
+        video_profile = normalize_video_profile(data.get('video_profile'))
 
         # Generate script along with description and hashtags
-        result = generate_script(topic_override=topic, language=language)
+        result = generate_script(
+            topic_override=topic,
+            language=language,
+            video_profile=video_profile,
+        )
 
         return jsonify({
             'status': 'success',
@@ -250,7 +272,8 @@ def generate_script_endpoint():
                 'title': result.get('title', ''),
                 'script': result.get('script', ''),
                 'description': result.get('description', ''),
-                'hashtags': result.get('hashtags', '')
+                'hashtags': result.get('hashtags', ''),
+                'video_profile': video_profile,
             }
         })
     except Exception as e:
@@ -281,6 +304,8 @@ def generate_slideshow():
             return jsonify({'error': 'Missing audio_id parameter'}), 400
             
         audio_id = data['audio_id']
+        video_profile = normalize_video_profile(data.get('video_profile'))
+        profile_config = get_video_profile_config(video_profile)
         audio_path = UPLOADS_DIR / audio_id
         
         if not audio_path.exists():
@@ -318,12 +343,14 @@ def generate_slideshow():
             json_path=str(image_slides_json),
             image_dir=str(image_dir),
             output_path=str(output_path),
-            total_duration=duration
+            total_duration=duration,
+            resolution=profile_config['video_resolution'],
         )
         
         return jsonify({
             'slideshow_video_id': slideshow_id,
-            'message': 'Slideshow generated successfully'
+            'message': 'Slideshow generated successfully',
+            'video_profile': video_profile,
         })
         
     except Exception as e:
@@ -441,6 +468,7 @@ def generate_script_from_pdf_endpoint():
         data = request.json or {}
         pdf_id = data.get('pdf_id')
         topic = data.get('topic') or data.get('angle')
+        video_profile = normalize_video_profile(data.get('video_profile'))
         if not pdf_id:
             return jsonify({'error': 'pdf_id is required'}), 400
 
@@ -450,7 +478,11 @@ def generate_script_from_pdf_endpoint():
             return jsonify({'error': str(e)}), 404
 
         try:
-            result = _generate_pdf_script_from_manifest(manifest, topic)
+            result = _generate_pdf_script_from_manifest(
+                manifest,
+                topic,
+                video_profile=video_profile,
+            )
         except ValueError as e:
             context = _build_pdf_script_context(manifest)
             return jsonify({
@@ -470,6 +502,7 @@ def generate_script_from_pdf_endpoint():
             "chapter_number": result.get('chapter_number'),
             "text_quality": result.get('text_quality'),
             "context_sources": result.get('context_sources', []),
+            "video_profile": video_profile,
         })
         return jsonify({
             'status': 'success',
@@ -484,6 +517,7 @@ def generate_script_from_pdf_endpoint():
                 'text_quality': result.get('text_quality'),
                 'context_sources': result.get('context_sources', []),
                 'warnings': result.get('warnings', []),
+                'video_profile': video_profile,
             }
         })
     except Exception as e:
@@ -500,6 +534,7 @@ def generate_pdf_slides_endpoint():
         data = request.json or {}
         pdf_id = data.get('pdf_id')
         audio_id = data.get('audio_id')
+        video_profile = normalize_video_profile(data.get('video_profile'))
         if not pdf_id:
             return jsonify({'error': 'pdf_id is required'}), 400
         if not audio_id:
@@ -520,6 +555,7 @@ def generate_pdf_slides_endpoint():
             "audio_id": audio_id,
             "slides_json": result['slides_json'],
             "slide_count": result['slide_count'],
+            "video_profile": video_profile,
         })
         return jsonify({
             'status': 'success',
@@ -527,7 +563,8 @@ def generate_pdf_slides_endpoint():
             'output_path': result['slides_json'],
             'slides_json': result['slides_json'],
             'slides': result['slides'],
-            'slide_count': result['slide_count']
+            'slide_count': result['slide_count'],
+            'video_profile': video_profile,
         })
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -551,6 +588,7 @@ def generate_manga_video_endpoint():
         subtitle_style = data.get('subtitle_style', 'pro')
         quality_mode = data.get('quality_mode', 'pro')
         background_music_path = data.get('background_music_path')
+        video_profile = normalize_video_profile(data.get('video_profile'))
 
         if not pdf_id:
             return jsonify({'error': 'pdf_id is required'}), 400
@@ -564,10 +602,15 @@ def generate_manga_video_endpoint():
             "quality_mode": quality_mode,
             "subtitle_style": subtitle_style,
             "language": language,
+            "video_profile": video_profile,
         })
 
         update_manga_session(pdf_id, "script", "running")
-        script_result = _generate_pdf_script_from_manifest(manifest, topic)
+        script_result = _generate_pdf_script_from_manifest(
+            manifest,
+            topic,
+            video_profile=video_profile,
+        )
         update_manga_session(pdf_id, "script", "completed", {
             "title": script_result.get('title', ''),
             "script": script_result.get('script', ''),
@@ -576,28 +619,37 @@ def generate_manga_video_endpoint():
             "chapter_number": script_result.get('chapter_number'),
             "text_quality": script_result.get('text_quality'),
             "context_sources": script_result.get('context_sources', []),
+            "video_profile": video_profile,
         })
 
         update_manga_session(pdf_id, "voiceover", "running")
         voiceover_result = generate_voiceover(
             text=script_result['script'],
             language=language,
+            video_profile=video_profile,
         )
         audio_id = voiceover_result['id']
         update_manga_session(pdf_id, "voiceover", "completed", {
             "audio_id": audio_id,
             "duration": voiceover_result.get('duration'),
             "path": voiceover_result.get('path'),
+            "video_profile": video_profile,
         })
 
         update_manga_session(pdf_id, "subtitles", "running")
-        subtitle_assets = _generate_subtitle_assets(audio_id, script_result['script'], subtitle_style)
+        subtitle_assets = _generate_subtitle_assets(
+            audio_id,
+            script_result['script'],
+            subtitle_style,
+            video_profile=video_profile,
+        )
         update_manga_session(pdf_id, "subtitles", "completed", {
             "ass_file": subtitle_assets['ass_file'],
             "ass_path": subtitle_assets['ass_path'],
             "expressions_file": subtitle_assets['expressions_file'],
             "expressions_path": subtitle_assets['expressions_path'],
             "phrase_count": len(subtitle_assets['phrases']),
+            "video_profile": video_profile,
         })
 
         update_manga_session(pdf_id, "slides", "running")
@@ -606,6 +658,7 @@ def generate_manga_video_endpoint():
         update_manga_session(pdf_id, "slides", "completed", {
             "slides_json": slides_result['slides_json'],
             "slide_count": slides_result['slide_count'],
+            "video_profile": video_profile,
         })
 
         update_manga_session(pdf_id, "final_video", "running")
@@ -617,6 +670,7 @@ def generate_manga_video_endpoint():
             generate_slides=False,
             quality_mode=quality_mode,
             background_music_path=background_music_path,
+            video_profile=video_profile,
         )
         video_filename = os.path.basename(final_video_path)
         video_url = url_for('download_file', filename=video_filename, _external=True)
@@ -624,11 +678,13 @@ def generate_manga_video_endpoint():
             "video_file": video_filename,
             "video_path": final_video_path,
             "download_url": video_url,
+            "video_profile": video_profile,
         })
         session = update_manga_session(pdf_id, "completed", "completed", {
             "video_file": video_filename,
             "audio_id": audio_id,
             "slides_json": slides_result['slides_json'],
+            "video_profile": video_profile,
         })
 
         return jsonify({
@@ -653,6 +709,7 @@ def generate_manga_video_endpoint():
                 },
                 'video_file': video_filename,
                 'download_url': video_url,
+                'video_profile': video_profile,
                 'session': session,
             }
         })
@@ -700,6 +757,7 @@ def generate_voiceover_endpoint():
         script = data.get('script') or data.get('text')
         language = data.get('language', 'English')
         voice_instruct = data.get('voice_instruct') or DEFAULT_VOICE_INSTRUCT
+        video_profile = normalize_video_profile(data.get('video_profile'))
 
         if not script or not script.strip():
             return jsonify({'error': 'script is required'}), 400
@@ -708,11 +766,13 @@ def generate_voiceover_endpoint():
             text=script,
             language=language,
             instruct=voice_instruct,
+            video_profile=video_profile,
         )
 
         return jsonify({
             'id': result['id'],
             'duration': result['duration'],
+            'video_profile': video_profile,
             'message': 'Voiceover generated successfully'
         })
 
@@ -744,6 +804,7 @@ def generate_subtitles():
         audio_id = data.get('audio_id')
         script = data.get('script')  # This is now optional
         subtitle_style = data.get('subtitle_style', 'pro')
+        video_profile = normalize_video_profile(data.get('video_profile'))
 
         if not audio_id:
             return jsonify({
@@ -764,7 +825,12 @@ def generate_subtitles():
             logger.info("No script provided, will transcribe from audio")
 
         try:
-            subtitle_assets = _generate_subtitle_assets(audio_id, script, subtitle_style)
+            subtitle_assets = _generate_subtitle_assets(
+                audio_id,
+                script,
+                subtitle_style,
+                video_profile=video_profile,
+            )
         except Exception as e:
             logger.error(f"Error generating subtitle assets: {str(e)}")
             return jsonify({
@@ -778,7 +844,8 @@ def generate_subtitles():
                 'ass_file': subtitle_assets['ass_file'],
                 'phrases': subtitle_assets['phrases'],
                 'expressions_file': subtitle_assets['expressions_file'],
-                'expressions': subtitle_assets['expressions']
+                'expressions': subtitle_assets['expressions'],
+                'video_profile': video_profile,
             }
         })
 
@@ -807,6 +874,7 @@ def generate_image_slides_endpoint():
         ass_path = data.get('ass_path')
         audio_id = data.get('audio_id')
         out_path = data.get('out_path')
+        video_profile = normalize_video_profile(data.get('video_profile'))
         
         if not audio_id:
             return jsonify({'error': 'audio_id is required'}), 400
@@ -867,7 +935,8 @@ def generate_image_slides_endpoint():
         return jsonify({
             'status': 'success',
             'slides': slides,
-            'output_path': result_path
+            'output_path': result_path,
+            'video_profile': video_profile,
         })
         
     except Exception as e:
@@ -1100,6 +1169,7 @@ def generate_final_video_endpoint():
         force_regenerate = data.get('force_regenerate_slides', False)
         quality_mode = data.get('quality_mode', 'pro')
         background_music_path = data.get('background_music_path')
+        video_profile = normalize_video_profile(data.get('video_profile'))
         
         logger.info(f"Processing request with audio_id={audio_id}, subtitle_file={subtitle_file}")
 
@@ -1137,7 +1207,11 @@ def generate_final_video_endpoint():
                 with app.test_request_context(
                     '/api/v1/generate-image-slides',
                     method='POST',
-                    json={'audio_id': audio_id, 'ass_path': 'auto'}
+                    json={
+                        'audio_id': audio_id,
+                        'ass_path': 'auto',
+                        'video_profile': video_profile,
+                    }
                 ):
                     # Call the endpoint function directly with the test context
                     slides_result = generate_image_slides_endpoint()
@@ -1183,6 +1257,7 @@ def generate_final_video_endpoint():
                 generate_slides=force_regenerate,
                 quality_mode=quality_mode,
                 background_music_path=background_music_path,
+                video_profile=video_profile,
             )
             logger.info(f"Final video generated at: {final_video_path}")
             
@@ -1201,7 +1276,8 @@ def generate_final_video_endpoint():
                 'message': 'Final video generated successfully',
                 'video_file': video_filename,
                 'download_url': video_url,
-                'slides_json': slides_json
+                'slides_json': slides_json,
+                'video_profile': video_profile,
             })
             
         except Exception as e:

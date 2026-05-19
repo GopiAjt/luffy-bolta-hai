@@ -260,6 +260,11 @@ export class LuffyBoltHaiApp {
         console.log('=== Finished initializeEventListeners ===');
     }
 
+    getVideoProfile() {
+        const toggle = document.getElementById('longYoutubeToggle');
+        return toggle && toggle.checked ? 'long_youtube' : 'short_vertical';
+    }
+
     // Event handlers with error handling
     handleGenerateScript = withErrorHandling(async () => {
         console.log('handleGenerateScript called');
@@ -281,7 +286,7 @@ export class LuffyBoltHaiApp {
 
         try {
             console.log('Calling generateScript API');
-            const data = await generateScript();
+            const data = await generateScript(null, this.getVideoProfile());
             console.log('Received response from generateScript:', data);
 
             if (!data || !data.output || !data.output.script) {
@@ -484,7 +489,8 @@ export class LuffyBoltHaiApp {
         try {
             const result = await generateVoiceover(
                 scriptText,
-                voiceLanguage ? voiceLanguage.value : 'English'
+                voiceLanguage ? voiceLanguage.value : 'English',
+                this.getVideoProfile()
             );
 
             if (!result || !result.id) {
@@ -566,7 +572,12 @@ export class LuffyBoltHaiApp {
                 console.warn('Subtitle style selector not found, using default style:', subtitleStyle);
             }
 
-            const result = await generateSubtitles(this.currentAudioId, scriptText, subtitleStyle);
+            const result = await generateSubtitles(
+                this.currentAudioId,
+                scriptText,
+                subtitleStyle,
+                this.getVideoProfile()
+            );
             subtitleOutput.textContent = 'Subtitles generated successfully!';
             subtitleOutput.style.display = 'block';
 
@@ -649,7 +660,8 @@ export class LuffyBoltHaiApp {
                 force_regenerate_slides: false,  // Don't force regenerate slides
                 slides_json: slidesJson,         // Pass the existing slides JSON if available
                 use_existing_slides: true,       // Indicate we want to use existing slides
-                quality_mode: 'pro'
+                quality_mode: 'pro',
+                video_profile: this.getVideoProfile()
             };
 
             console.log('Request data for final video generation:', JSON.stringify(requestData, null, 2));
@@ -779,7 +791,8 @@ export class LuffyBoltHaiApp {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     audio_id: this.currentAudioId,
-                    ass_path: 'auto'  // Let server find the latest ASS file
+                    ass_path: 'auto',  // Let server find the latest ASS file
+                    video_profile: this.getVideoProfile()
                 })
             });
 
@@ -913,7 +926,8 @@ export class LuffyBoltHaiApp {
                 {
                     language: 'English',
                     subtitleStyle: subtitleStyleSelector && subtitleStyleSelector.value ? subtitleStyleSelector.value : 'pro',
-                    qualityMode: 'pro'
+                    qualityMode: 'pro',
+                    videoProfile: this.getVideoProfile()
                 }
             );
             const output = result.output;
@@ -998,7 +1012,8 @@ export class LuffyBoltHaiApp {
         try {
             const result = await generateScriptFromPdf(
                 this.currentPdfId,
-                angleInput ? angleInput.value : ''
+                angleInput ? angleInput.value : '',
+                this.getVideoProfile()
             );
             const output = result.output;
 
@@ -1053,7 +1068,11 @@ export class LuffyBoltHaiApp {
         }
 
         try {
-            const result = await generatePdfSlides(this.currentPdfId, this.currentAudioId);
+            const result = await generatePdfSlides(
+                this.currentPdfId,
+                this.currentAudioId,
+                this.getVideoProfile()
+            );
             this.currentSlidesJson = result.slides_json || result.output_path || null;
             if (status) {
                 status.textContent = `Generated ${result.slide_count} manga panel slides. You can render the final video now.`;

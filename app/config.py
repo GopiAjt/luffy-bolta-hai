@@ -23,18 +23,37 @@ MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
 ENABLE_BACKGROUND_MUSIC = os.getenv("ENABLE_BACKGROUND_MUSIC", "true").lower() not in {"0", "false", "no"}
 BACKGROUND_MUSIC_VOLUME = float(os.getenv("BACKGROUND_MUSIC_VOLUME", "0.16"))
 
-# # --- VIDEO ---
-VIDEO_RESOLUTION = (1080, 1920)
+# --- VIDEO PROFILES ---
+DEFAULT_VIDEO_PROFILE = "short_vertical"
+VIDEO_PROFILES = {
+    "short_vertical": {
+        "label": "Short vertical",
+        "video_resolution": (1080, 1920),
+        "subtitle_resolution": "1080x1920",
+    },
+    "long_youtube": {
+        "label": "Long YouTube",
+        "video_resolution": (1920, 1080),
+        "subtitle_resolution": "1920x1080",
+    },
+}
+
+
+def normalize_video_profile(video_profile: str = None) -> str:
+    profile = (video_profile or DEFAULT_VIDEO_PROFILE).strip().lower()
+    return profile if profile in VIDEO_PROFILES else DEFAULT_VIDEO_PROFILE
+
+
+def get_video_profile_config(video_profile: str = None) -> dict:
+    return VIDEO_PROFILES[normalize_video_profile(video_profile)]
+
+
+# Backwards-compatible defaults for callers that have not been profile-aware yet.
+VIDEO_RESOLUTION = VIDEO_PROFILES[DEFAULT_VIDEO_PROFILE]["video_resolution"]
 VIDEO_BACKGROUND_COLOR = "green"
 
 # --- SUBTITLES ---
-SUBTITLE_RESOLUTION = '1080x1920'
-
-# VIDEO_RESOLUTION = (1920, 1080)
-# VIDEO_BACKGROUND_COLOR = "green"
-
-# # --- SUBTITLES ---
-# SUBTITLE_RESOLUTION = '1920x1080'
+SUBTITLE_RESOLUTION = VIDEO_PROFILES[DEFAULT_VIDEO_PROFILE]["subtitle_resolution"]
 
 # --- API ---
 HOST = "0.0.0.0"

@@ -13,13 +13,14 @@ export const uploadMangaPdf = async (file) => {
     return parseJsonResponse(response);
 };
 
-export const generateScriptFromPdf = async (pdfId, topic = '') => {
+export const generateScriptFromPdf = async (pdfId, topic = '', videoProfile = 'short_vertical') => {
     const response = await fetch('/api/v1/generate-script-from-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             pdf_id: pdfId,
-            topic
+            topic,
+            video_profile: videoProfile
         })
     });
 
@@ -27,13 +28,14 @@ export const generateScriptFromPdf = async (pdfId, topic = '') => {
     return parseJsonResponse(response);
 };
 
-export const generatePdfSlides = async (pdfId, audioId) => {
+export const generatePdfSlides = async (pdfId, audioId, videoProfile = 'short_vertical') => {
     const response = await fetch('/api/v1/generate-pdf-slides', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             pdf_id: pdfId,
-            audio_id: audioId
+            audio_id: audioId,
+            video_profile: videoProfile
         })
     });
 
@@ -50,7 +52,8 @@ export const generateMangaVideo = async (pdfId, topic = '', options = {}) => {
             topic,
             language: options.language || 'English',
             subtitle_style: options.subtitleStyle || 'pro',
-            quality_mode: options.qualityMode || 'pro'
+            quality_mode: options.qualityMode || 'pro',
+            video_profile: options.videoProfile || 'short_vertical'
         })
     });
 

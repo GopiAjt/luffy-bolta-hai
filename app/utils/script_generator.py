@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 import logging
 
+from app.config import normalize_video_profile
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -43,9 +45,12 @@ def generate_script(
     chapter_number: int = None,
     ohara_context: str = None,
     context_sources: list = None,
+    video_profile: str = "short_vertical",
 ) -> dict:
-    """Generate a 30-60s One Piece narration script via Gemini."""
+    """Generate a One Piece narration script via Gemini."""
     try:
+        video_profile = normalize_video_profile(video_profile)
+        long_form = video_profile == "long_youtube"
         topics = [
             # 🔥 Character Secrets
 
@@ -202,6 +207,69 @@ def generate_script(
                     f"{trimmed_ohara}\n\n"
                 )
 
+        if long_form:
+            script_output_rule = (
+                f"SCRIPT: [human-like {language_label} narration, 5-8 minutes, "
+                "~750-1000 spoken words]\n\n"
+            )
+            quality_blueprint = (
+                "LONG-FORM QUALITY BLUEPRINT:\n"
+                "- Opening hook: 2-3 sharp sentences that name the canon anchor and central mystery.\n"
+                "- Setup: explain the scene/chapter context clearly for viewers who need a reminder.\n"
+                "- Evidence breakdown: use 3-5 concrete clues from the anchor/context, each tied back to the same theory.\n"
+                "- Theory chain: connect the clues step by step to 2-3 larger lore pieces, not a random lore dump.\n"
+                "- Counterpoint: include one fair objection fans may raise, then answer it.\n"
+                "- Conclusion: restate the theory in one memorable claim, ask a debate question, then add a follow CTA.\n"
+                "- Use section-like transitions in natural narration, but do not output headings inside SCRIPT.\n\n"
+            )
+            script_requirements = (
+                "SCRIPT REQUIREMENTS:\n"
+                "- PURE narration only, no SFX/music.\n"
+                "- Open with a 1-sentence powerful hook (max 12 words).\n"
+                "- First 20s must clearly establish the mystery, the canon anchor, and why it matters.\n"
+                "- Keep a YouTube essay rhythm: energetic, clear, and paced for 5-8 minutes.\n"
+                "- Use short paragraphs and natural transitions so TTS can breathe.\n"
+                "- Add vivid, sensory detail early, then build evidence patiently.\n"
+                "- Show personal emotions + uncertainty without becoming vague.\n"
+                f"{power_words_rule}"
+                "- Include 3-5 specific canon/context details across the script.\n"
+                "- Include named scene locations only when they directly support the theory.\n"
+                "- Include one counterargument and one rebuttal before the conclusion.\n"
+                "- End with a curiosity-driven debate CTA, then a second CTA to gain followers.\n"
+                f"- TOTAL WORD COUNT: 750-1000 spoken {language_label} words.\n\n"
+            )
+        else:
+            script_output_rule = (
+                f"SCRIPT: [human-like {language_label} narration, 35-45s, ~85-95 spoken words]\n\n"
+            )
+            quality_blueprint = (
+                "QUALITY BLUEPRINT:\n"
+                "- Sentence 1: Name a concrete canon anchor (chapter/episode/arc/place/scene).\n"
+                "- Sentence 2: Ask one suspicious question about that anchor.\n"
+                "- Sentence 3: Point to one visual or behavioral clue from the scene.\n"
+                "- Sentence 4: Connect that clue to 2 bigger lore pieces, not more.\n"
+                "- Sentence 5: State one clear theory in first person.\n"
+                "- Final lines: Ask a binary debate question, then add a follow CTA.\n"
+                "- The theory chain must be easy to follow: anchor -> clue -> connection -> claim.\n"
+                "- Do not name-drop Imu, Joy Boy, Nika, Ancient Weapons, Gorosei all together unless the topic truly needs them.\n\n"
+            )
+            script_requirements = (
+                "SCRIPT REQUIREMENTS:\n"
+                "- PURE narration only, no SFX/music.\n"
+                "- Open with a 1-sentence powerful hook (max 9 words).\n"
+                "- First 10s must spark curiosity (hidden truth, contradiction, twist).\n"
+                "- Keep fast pace, vary sentence length.\n"
+                "- Add vivid, sensory detail within first 15s.\n"
+                "- Show personal emotions + uncertainty (hesitations, incomplete thoughts).\n"
+                f"{power_words_rule}"
+                "- Include 1 specific detail in the first two sentences (chapter/episode/arc/place OR exact quote).\n"
+                "- Include exactly 1 named scene location when possible, like Mary Geoise, Wano, Marineford, Egghead.\n"
+                "- Mid-escalation: show rising excitement/doubt naturally.\n"
+                "- End with a curiosity-driven CTA inviting debate (max 12 words).\n"
+                "- After debate CTA, ADD a second CTA to gain followers\n"
+                f"- TOTAL WORD COUNT: 85-95 spoken {language_label} words (auto-enforce brevity).\n\n"
+            )
+
         prompt = (
             "You are a creative anime scriptwriter and passionate One Piece fan.\n"
             "Write in a Gen-Z, hype, casual tone, but keep it readable.\n\n"
@@ -212,7 +280,7 @@ def generate_script(
 
             "OUTPUT STRUCTURE (in this exact order):\n"
             f"TITLE: [engaging {language_label} title, under 80 chars]\n\n"
-            f"SCRIPT: [human-like {language_label} narration, 35-45s, ~85-95 spoken words]\n\n"
+            f"{script_output_rule}"
             f"DESCRIPTION: [{language_label}, personal, under 500 chars, BULLET POINTS + emojis, 3-5 lines, include sticky FOMO]\n\n"
             "HASHTAGS: [10–15 relevant hashtags, lowercase]\n\n"
 
@@ -233,15 +301,7 @@ def generate_script(
             "- Mention at most 2 bigger lore pieces, and both must clearly support the same theory.\n"
             "- Every sentence must connect to the same theory. Remove anything that feels like a different video.\n\n"
 
-            "QUALITY BLUEPRINT:\n"
-            "- Sentence 1: Name a concrete canon anchor (chapter/episode/arc/place/scene).\n"
-            "- Sentence 2: Ask one suspicious question about that anchor.\n"
-            "- Sentence 3: Point to one visual or behavioral clue from the scene.\n"
-            "- Sentence 4: Connect that clue to 2 bigger lore pieces, not more.\n"
-            "- Sentence 5: State one clear theory in first person.\n"
-            "- Final lines: Ask a binary debate question, then add a follow CTA.\n"
-            "- The theory chain must be easy to follow: anchor -> clue -> connection -> claim.\n"
-            "- Do not name-drop Imu, Joy Boy, Nika, Ancient Weapons, Gorosei all together unless the topic truly needs them.\n\n"
+            f"{quality_blueprint}"
 
             "SELF-CHECK BEFORE FINAL ANSWER:\n"
             "- Does the first line and final theory discuss the same subject? If no, rewrite.\n"
@@ -254,20 +314,7 @@ def generate_script(
             "- Randomly use ONE of these tones: shocking question, urgent warning, hidden truth, impossible claim.\n"
             f"{title_rule}"
 
-            "SCRIPT REQUIREMENTS:\n"
-            "- PURE narration only, no SFX/music.\n"
-            "- Open with a 1-sentence powerful hook (max 9 words).\n"
-            "- First 10s must spark curiosity (hidden truth, contradiction, twist).\n"
-            "- Keep fast pace, vary sentence length.\n"
-            "- Add vivid, sensory detail within first 15s.\n"
-            "- Show personal emotions + uncertainty (hesitations, incomplete thoughts).\n"
-            f"{power_words_rule}"
-            "- Include 1 specific detail in the first two sentences (chapter/episode/arc/place OR exact quote).\n"
-            "- Include exactly 1 named scene location when possible, like Mary Geoise, Wano, Marineford, Egghead.\n"
-            "- Mid-escalation: show rising excitement/doubt naturally.\n"
-            "- End with a curiosity-driven CTA inviting debate (max 12 words).\n"
-            "- After debate CTA, ADD a second CTA to gain followers\n"
-            f"- TOTAL WORD COUNT: 85-95 spoken {language_label} words (auto-enforce brevity).\n\n"
+            f"{script_requirements}"
 
             "REFERENCE STYLE EXAMPLE (do not copy, match quality only):\n"
             f"{reference_example}"

@@ -26,6 +26,44 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+def _x264_speed_settings(quality_mode: str) -> Tuple[str, str]:
+    """Return slideshow-friendly x264 preset/crf values."""
+    quality_mode = (quality_mode or 'standard').lower()
+    if quality_mode == 'pro':
+        return os.getenv("VIDEO_X264_PRESET_PRO", "fast"), os.getenv("VIDEO_X264_CRF_PRO", "22")
+    return os.getenv("VIDEO_X264_PRESET", "veryfast"), os.getenv("VIDEO_X264_CRF", "23")
+
+
+def _video_threads() -> str:
+    """Return FFmpeg encoder thread count; 0 lets x264 auto-select."""
+    return os.getenv("VIDEO_FFMPEG_THREADS", os.getenv("FFMPEG_THREADS", "0"))
+
+
+def _video_encoder() -> str:
+    """Return configured final-video encoder."""
+    return os.getenv("VIDEO_ENCODER", "libx264").strip()
+
+
+def _video_encoder_args(quality_mode: str) -> List[str]:
+    """Build encoder args for CPU x264 or opt-in hardware encoders."""
+    encoder = _video_encoder()
+    preset, crf = _x264_speed_settings(quality_mode)
+    if encoder == "libx264":
+        return [
+            "-c:v", encoder,
+            "-preset", preset,
+            "-crf", crf,
+            "-threads", _video_threads(),
+        ]
+    if encoder == "h264_qsv":
+        return [
+            "-c:v", encoder,
+            "-preset", os.getenv("QSV_PRESET", "veryfast"),
+            "-global_quality", os.getenv("QSV_GLOBAL_QUALITY", "23"),
+        ]
+    return ["-c:v", encoder]
+
+
 class VideoGenerator:
     def __init__(self, ffmpeg_path: str = 'ffmpeg', ffprobe_path: str = 'ffprobe'):
         """
@@ -203,15 +241,16 @@ class VideoGenerator:
 
             cmd = [
                 self.ffmpeg, '-y',
+                '-hide_banner',
+                '-nostats',
+                '-progress', 'pipe:2',
                 *base_video_input,
                 '-i', audio_path,
                 *extra_inputs,
                 '-filter_complex', filter_complex,
                 '-map', '[vout]', '-map', audio_map,
                 '-t', f'{duration:.3f}',
-                '-c:v', 'libx264',
-                '-preset', 'slow' if pro_mode else 'medium',
-                '-crf', '19' if pro_mode else '23',
+                *_video_encoder_args(quality_mode),
                 '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
                 '-b:a', '192k',
@@ -648,6 +687,9 @@ class VideoGenerator:
 
             cmd = [
                 self.ffmpeg, '-y',
+                '-hide_banner',
+                '-nostats',
+                '-progress', 'pipe:2',
                 *base_video_input,  # Use the determined base video input
                 *overlay_inputs,
                 '-i', audio_path,
@@ -655,9 +697,7 @@ class VideoGenerator:
                 '-filter_complex', filter_complex_clean,  # Pass cleaned filtergraph as string
                 '-map', '[vout]', '-map', audio_map,
                 '-t', f'{duration:.3f}',
-                '-c:v', 'libx264',
-                '-preset', 'slow' if pro_mode else 'medium',
-                '-crf', '19' if pro_mode else '23',
+                *_video_encoder_args(quality_mode),
                 '-pix_fmt', 'yuv420p',
                 '-c:a', 'aac',
                 '-b:a', '192k',

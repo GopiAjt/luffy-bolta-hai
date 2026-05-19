@@ -1,5 +1,5 @@
 import { generateScript } from './api/scriptApi.js';
-import { uploadAudio, generateVoiceover, getAudioMetadata } from './api/audioApi.js';
+import { uploadAudio, generateVoiceover, getAudioMetadata, getLatestAudioFile } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
 import { generateVideo, generateSlideshow, getOutputUsage, cleanupOutput } from './api/videoApi.js';
 import { uploadMangaPdf, generateScriptFromPdf, generatePdfSlides, generateMangaVideo } from './api/mangaPdfApi.js';
@@ -32,7 +32,7 @@ export class LuffyBoltHaiApp {
             this.videoPlayer = new VideoPlayer('videoPreview', 'videoOutput');
 
             // State
-            this.currentAudioId = null;
+            this.currentAudioId = window.localStorage.getItem('luffyCurrentAudioId') || null;
             this.currentPdfId = null;
             this.currentSlidesJson = null;
 
@@ -47,6 +47,56 @@ export class LuffyBoltHaiApp {
             console.error('Error initializing LuffyBoltHaiApp:', error);
             throw error;
         }
+    }
+
+    setCurrentAudio(audioId, duration = null, label = null) {
+        this.currentAudioId = audioId || null;
+        if (this.currentAudioId) {
+            window.localStorage.setItem('luffyCurrentAudioId', this.currentAudioId);
+            if (label) {
+                this.audioPlayer.setName(label);
+            }
+            this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
+            if (duration !== null && duration !== undefined) {
+                this.audioPlayer.setDuration(duration);
+            }
+            const audioPreview = document.getElementById('audioPreview');
+            if (audioPreview) {
+                audioPreview.style.display = 'block';
+            }
+        } else {
+            window.localStorage.removeItem('luffyCurrentAudioId');
+        }
+    }
+
+    async ensureCurrentAudioId() {
+        if (this.currentAudioId) {
+            return this.currentAudioId;
+        }
+
+        const storedAudioId = window.localStorage.getItem('luffyCurrentAudioId');
+        if (storedAudioId) {
+            console.log('Restored audio ID from local storage:', storedAudioId);
+            this.setCurrentAudio(storedAudioId, null, `Restored audio (${storedAudioId})`);
+            return storedAudioId;
+        }
+
+        try {
+            const latestAudio = await getLatestAudioFile();
+            if (latestAudio && latestAudio.id) {
+                console.log('Recovered latest audio from server:', latestAudio.id);
+                this.setCurrentAudio(
+                    latestAudio.id,
+                    latestAudio.duration,
+                    `Latest generated audio (${latestAudio.id})`
+                );
+                return latestAudio.id;
+            }
+        } catch (error) {
+            console.warn('Could not recover latest audio file:', error);
+        }
+
+        return null;
     }
 
     initializeEventListeners() {
@@ -188,10 +238,10 @@ export class LuffyBoltHaiApp {
             console.log('Found generate slideshow button');
             if (generateSlideshowButton.getAttribute('data-event-listener-attached') !== 'true') {
                 console.log('Adding click event listener to generate slideshow button');
-                generateSlideshowButton.addEventListener('click', () => {
+                generateSlideshowButton.addEventListener('click', async () => {
                     console.log('=== Generate Slideshow from Latest Image Slides Button Clicked ===');
                     console.log('Current audio ID:', this.currentAudioId);
-                    if (!this.currentAudioId) {
+                    if (!await this.ensureCurrentAudioId()) {
                         console.error('No audio file uploaded');
                         alert('Please upload an audio file first');
                         return;
@@ -399,12 +449,9 @@ export class LuffyBoltHaiApp {
             }
 
             // Update UI with audio metadata
-            this.currentAudioId = uploadResult.id; // Changed from uploadResult.audio_id to uploadResult.id
+            this.setCurrentAudio(uploadResult.id, uploadResult.duration, file.name);
             this.currentSlidesJson = null;
             console.log('Audio uploaded successfully. Current audio ID:', this.currentAudioId);
-
-            this.audioPlayer.setName(file.name);
-            this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
 
             // Show audio player
             const audioPreview = document.getElementById('audioPreview');
@@ -497,11 +544,8 @@ export class LuffyBoltHaiApp {
                 throw new Error('Invalid voiceover response: missing file ID');
             }
 
-            this.currentAudioId = result.id;
+            this.setCurrentAudio(result.id, result.duration, `Generated voiceover (${result.id})`);
             this.currentSlidesJson = null;
-            this.audioPlayer.setName(`Generated voiceover (${result.id})`);
-            this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
-            this.audioPlayer.setDuration(result.duration);
 
             const audioPreview = document.getElementById('audioPreview');
             if (audioPreview) {
@@ -541,7 +585,7 @@ export class LuffyBoltHaiApp {
         console.log('=== Generate Subtitles Started ===');
         console.log('Current audio ID:', this.currentAudioId);
 
-        if (!this.currentAudioId) {
+        if (!await this.ensureCurrentAudioId()) {
             console.error('No audio file uploaded. Current audio ID is null/undefined.');
             throw new Error('Please upload an audio file first');
         }
@@ -601,7 +645,7 @@ export class LuffyBoltHaiApp {
     handleGenerateVideo = withErrorHandling(async () => {
         console.log('=== handleGenerateVideo started ===');
 
-        if (!this.currentAudioId) {
+        if (!await this.ensureCurrentAudioId()) {
             const errorMsg = 'Please upload an audio file first';
             console.error(errorMsg);
             throw new Error(errorMsg);
@@ -761,7 +805,7 @@ export class LuffyBoltHaiApp {
     handleGenerateImageSlides = withErrorHandling(async () => {
         console.log('=== handleGenerateImageSlides started ===');
 
-        if (!this.currentAudioId) {
+        if (!await this.ensureCurrentAudioId()) {
             const errorMsg = 'Please upload an audio file first';
             console.error(errorMsg);
             throw new Error(errorMsg);
@@ -933,7 +977,7 @@ export class LuffyBoltHaiApp {
             const output = result.output;
             const script = output.script || {};
 
-            this.currentAudioId = output.audio.id;
+            this.setCurrentAudio(output.audio.id, output.audio.duration, `Generated manga voiceover (${output.audio.id})`);
             this.currentSlidesJson = output.slides.slides_json;
 
             const scriptOutput = document.getElementById('scriptOutput');
@@ -1057,7 +1101,7 @@ export class LuffyBoltHaiApp {
         if (!this.currentPdfId) {
             throw new Error('Please upload a manga PDF first');
         }
-        if (!this.currentAudioId) {
+        if (!await this.ensureCurrentAudioId()) {
             throw new Error('Please generate or upload audio before creating PDF slides');
         }
         if (button) {

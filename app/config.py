@@ -17,7 +17,8 @@ MANGA_PDF_DIR = BASE_DIR / "output" / "manga_pdf"
 BACKGROUND_MUSIC_DIR = BASE_DIR / "data"
 
 # --- AUDIO ---
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_AUDIO_FILE_SIZE_MB = float(os.getenv("MAX_AUDIO_FILE_SIZE_MB", "100"))
+MAX_FILE_SIZE = int(MAX_AUDIO_FILE_SIZE_MB * 1024 * 1024)
 ALLOWED_EXTENSIONS = {"mp3", "wav"}
 MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
 ENABLE_BACKGROUND_MUSIC = os.getenv("ENABLE_BACKGROUND_MUSIC", "true").lower() not in {"0", "false", "no"}

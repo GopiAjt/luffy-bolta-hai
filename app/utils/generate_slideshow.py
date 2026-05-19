@@ -7,11 +7,165 @@ from PIL import Image
 import io
 import logging
 import subprocess # Added this import
+import threading
 import random
 import math
 from app.config import VIDEO_RESOLUTION
 
 logger = logging.getLogger(__name__)
+
+
+def x264_speed_settings(quality_mode):
+    """Return fast x264 settings appropriate for slideshow/anime imagery."""
+    quality_mode = (quality_mode or 'standard').lower()
+    if quality_mode == 'pro':
+        return os.getenv("SLIDESHOW_X264_PRESET_PRO", "fast"), os.getenv("SLIDESHOW_X264_CRF_PRO", "22")
+    return os.getenv("SLIDESHOW_X264_PRESET", "veryfast"), os.getenv("SLIDESHOW_X264_CRF", "23")
+
+
+def slideshow_threads():
+    """Return FFmpeg encoder thread count; 0 lets x264 auto-select."""
+    return os.getenv("SLIDESHOW_FFMPEG_THREADS", os.getenv("FFMPEG_THREADS", "0"))
+
+
+def slideshow_video_encoder():
+    """Return the configured slideshow video encoder."""
+    return os.getenv("SLIDESHOW_VIDEO_ENCODER", os.getenv("VIDEO_ENCODER", "libx264")).strip()
+
+
+def slideshow_encoder_args(quality_mode):
+    """Build encoder args for CPU x264 or opt-in hardware encoders."""
+    encoder = slideshow_video_encoder()
+    preset, crf = x264_speed_settings(quality_mode)
+    threads = slideshow_threads()
+    if encoder == "libx264":
+        return [
+            "-c:v", encoder,
+            "-preset", preset,
+            "-crf", crf,
+            "-threads", threads,
+        ]
+    if encoder == "h264_qsv":
+        return [
+            "-c:v", encoder,
+            "-preset", os.getenv("SLIDESHOW_QSV_PRESET", os.getenv("QSV_PRESET", "veryfast")),
+            "-global_quality", os.getenv("SLIDESHOW_QSV_GLOBAL_QUALITY", os.getenv("QSV_GLOBAL_QUALITY", "23")),
+        ]
+    return ["-c:v", encoder]
+
+
+class RawVideoFFmpegWriter:
+    """Stream OpenCV BGR frames into FFmpeg without temporary JPG files."""
+
+    def __init__(self, output_path, resolution, fps, quality_mode, total_frames=None):
+        self.output_path = output_path
+        self.resolution = sanitize_size(resolution)
+        self.fps = int(fps)
+        self.total_frames = total_frames
+        self.frames_written = 0
+        self._stderr_tail = []
+        self._progress_thread = None
+        res_w, res_h = self.resolution
+        self.command = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-nostats",
+            "-progress", "pipe:2",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{res_w}x{res_h}",
+            "-r", str(self.fps),
+            "-i", "-",
+            "-an",
+            *slideshow_encoder_args(quality_mode),
+            "-pix_fmt", "yuv420p",
+            "-r", str(self.fps),
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        logger.info(f"Starting FFmpeg raw frame writer: {' '.join(self.command)}")
+        self.process = subprocess.Popen(
+            self.command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        self._progress_thread = threading.Thread(target=self._read_progress, daemon=True)
+        self._progress_thread.start()
+
+    def _read_progress(self):
+        if self.process.stderr is None:
+            return
+        progress = {}
+        for raw_line in self.process.stderr:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            self._stderr_tail.append(line)
+            self._stderr_tail = self._stderr_tail[-80:]
+            if "=" not in line:
+                logger.debug(f"FFmpeg slideshow: {line}")
+                continue
+            key, value = line.split("=", 1)
+            progress[key] = value
+            if key == "progress":
+                frame = int(progress.get("frame", "0") or 0)
+                fps_value = progress.get("fps", "?")
+                speed = progress.get("speed", "?")
+                if self.total_frames:
+                    percent = min(100.0, (frame / max(1, self.total_frames)) * 100.0)
+                    remaining = max(0, self.total_frames - frame)
+                    eta = "?"
+                    try:
+                        current_fps = float(fps_value)
+                        if current_fps > 0:
+                            eta = f"{remaining / current_fps:.0f}s"
+                    except ValueError:
+                        pass
+                    logger.info(
+                        "FFmpeg slideshow progress: frame=%s/%s %.1f%% fps=%s speed=%s eta=%s",
+                        frame,
+                        self.total_frames,
+                        percent,
+                        fps_value,
+                        speed,
+                        eta,
+                    )
+                else:
+                    logger.info("FFmpeg slideshow progress: frame=%s fps=%s speed=%s", frame, fps_value, speed)
+                progress = {}
+
+    def write(self, frame):
+        if self.process.stdin is None:
+            raise RuntimeError("FFmpeg stdin is not available")
+        frame = ensure_frame_for_writer(frame, self.resolution)
+        self.process.stdin.write(frame.tobytes())
+        self.frames_written += 1
+        if self.frames_written % max(1, self.fps * 10) == 0:
+            logger.info(f"Streamed {self.frames_written} frames to FFmpeg")
+
+    def close(self):
+        if self.process.stdin:
+            self.process.stdin.close()
+        return_code = self.process.wait()
+        if self._progress_thread:
+            self._progress_thread.join(timeout=2)
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, self.command, stderr="\n".join(self._stderr_tail))
+        logger.info(f"FFmpeg raw frame writer finished after {self.frames_written} frames")
+
+
+def ensure_frame_for_writer(frame, resolution):
+    """Return a contiguous BGR uint8 frame at the output resolution."""
+    res_w, res_h = sanitize_size(resolution)
+    if frame is None:
+        frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    if frame.shape[0] != res_h or frame.shape[1] != res_w:
+        frame = cv2.resize(frame, (res_w, res_h))
+    if frame.dtype != np.uint8:
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(frame)
 
 def parse_time(t):
     """Converts '0:00:06.28' to seconds."""
@@ -386,6 +540,34 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
             continue
     
     return frame_counter # Return updated frame_counter
+
+
+def emit_panoramic_pan(frame_writer, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=0, start_frame=0, pan_strength=1.0):
+    """Render panned slide frames directly into FFmpeg."""
+    num_frames = int(duration * fps)
+    logger.debug(f"emit_panoramic_pan: {img_path}, frames={num_frames}, start_frame={start_frame}")
+    if num_frames <= 0:
+        logger.warning(f"Skipping slide with non-positive frame count: {img_path}")
+        return frame_counter, None
+
+    scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount=blur_amount)
+    if scaled is None:
+        logger.error(f"Could not prepare slide canvas for {img_path}")
+        return frame_counter, None
+
+    if start_frame >= num_frames:
+        logger.warning(f"start_frame ({start_frame}) is greater than total frames ({num_frames}). Using last frame.")
+        start_frame = max(0, num_frames - 1)
+
+    last_frame = None
+    for i in range(start_frame, num_frames):
+        t = (i / (num_frames - 1)) if num_frames > 1 else 0.0
+        frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
+        frame_writer.write(frame)
+        frame_counter += 1
+        last_frame = frame
+
+    return frame_counter, last_frame
 
 
 def render_panned_frame(img_path, resolution, idx, t, blur_amount=0, pan_strength=1.0):
@@ -1011,9 +1193,6 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     logger.info(f"Total video duration: {total_duration:.2f}s, {total_output_frames} frames")
     logger.info(f"Target total frames: {total_output_frames} for a duration of {total_duration:.2f}s at {fps} fps.")
 
-    temp_frame_dir = os.path.join(os.path.dirname(output_path), "temp_frames")
-    os.makedirs(temp_frame_dir, exist_ok=True)
-
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
 
@@ -1128,6 +1307,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     # Initialize frames_written counter
     frames_written = 0
     last_valid_img_path = None
+    last_output_frame = None
+    frame_writer = RawVideoFFmpegWriter(output_path, resolution, fps, quality_mode, total_frames=total_output_frames)
 
     for idx, slide in enumerate(slides):
         try:
@@ -1226,9 +1407,24 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     img_path = jpg_path
 
             logger.info(f"Processing image: {img_path}")
+            previous_img_path = last_valid_img_path
+            same_as_previous = (
+                previous_img_path is not None
+                and os.path.abspath(previous_img_path) == os.path.abspath(img_path)
+            )
             last_valid_img_path = img_path
             # Use preselected transition for this boundary to keep frame plan consistent
             selected_transition_type = boundary_transition_types[idx]
+            skipped_duplicate_transition_frames = 0
+            if same_as_previous and selected_transition_type and selected_transition_type != 'none' and idx > 0:
+                skipped_duplicate_transition_frames = transition_frames_list[idx]
+                selected_transition_type = 'none'
+                logger.info(
+                    "Skipping transition for duplicate slide image: %s -> %s; preserving %d frames as slide hold",
+                    os.path.basename(previous_img_path),
+                    os.path.basename(img_path),
+                    skipped_duplicate_transition_frames,
+                )
             if selected_transition_type and selected_transition_type != 'none' and idx > 0:
                 logger.info(f"Using preselected transition: {selected_transition_type}")
 
@@ -1267,16 +1463,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 if slides_processed == 0:
                     current_frame = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
                 else:
-                    # Calculate the frame number we should be using for the previous slide's last frame
-                    # This should be the last frame before the transition starts
-                    transition_start_frame = frames_written - 1
-                    current_frame_path = os.path.join(temp_frame_dir, f"frame_{transition_start_frame:05d}.jpg")
-                    logger.debug(f"Loading current frame from: {current_frame_path}")
-                    current_frame = cv2.imread(current_frame_path)
-                    
-                    # If we can't load the previous frame, try to load the first frame of the current slide
+                    current_frame = last_output_frame
                     if current_frame is None:
-                        logger.warning(f"Failed to load current frame: {current_frame_path}. Using first frame of current slide.")
+                        logger.warning("No previous output frame available. Using first frame of current slide.")
                         current_frame = next_frame.copy()
                 
                 # Log frame details
@@ -1416,12 +1605,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                             if frame.shape[0] != resolution[1] or frame.shape[1] != resolution[0]:
                                 frame = cv2.resize(frame, (resolution[0], resolution[1]))
                             
-                            # Write the frame
-                            frame_path = os.path.join(temp_frame_dir, f"frame_{frame_num:05d}.jpg")
-                            success = cv2.imwrite(frame_path, frame)
-                            if not success:
-                                raise Exception(f"Failed to write frame {frame_path}")
-                            
+                            frame_writer.write(frame)
+                            last_output_frame = frame
                             transition_written += 1
                             
                         except Exception as e:
@@ -1447,6 +1632,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             
             # Calculate planned frames for this slide's pan (based on pre-allocation)
             slide_frames = planned_slide_frames[idx]
+            if skipped_duplicate_transition_frames:
+                allocated_content_frames = max(0, slide_frames - 2 * start_skips[idx])
+                slide_frames = allocated_content_frames + skipped_duplicate_transition_frames
             
             # For the first slide, start from frame 0
             # For subsequent slides with transitions, we need to account for the transition frames
@@ -1475,8 +1663,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     logger.info(f"Processing slide {os.path.basename(img_path)} - frames: {slide_frames}, start: {start_frame}, duration: {adjusted_duration:.2f}s")
                     
                     frames_before = frames_written
-                    frames_written = apply_panoramic_pan(
-                        temp_frame_dir=temp_frame_dir,
+                    frames_written, last_pan_frame = emit_panoramic_pan(
+                        frame_writer=frame_writer,
                         frame_counter=frames_written,
                         img_path=img_path,
                         duration=adjusted_duration,
@@ -1487,6 +1675,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         start_frame=start_frame,
                         pan_strength=pan_strength
                     )
+                    if last_pan_frame is not None:
+                        last_output_frame = last_pan_frame
                     
                     frames_written_this_slide = frames_written - frames_before
                     planned_content_frames = slide_frames - 2 * start_frame
@@ -1494,16 +1684,12 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         f"Successfully wrote {frames_written_this_slide} frames for slide {slides_processed + 1} (planned={planned_content_frames}, start_skip={start_frame})"
                     )
                     
-                    # Verify the frames were written correctly
-                    expected_frame = os.path.join(temp_frame_dir, f"frame_{frames_written-1:05d}.jpg")
-                    if not os.path.exists(expected_frame):
-                        logger.warning(f"Expected frame {expected_frame} was not created!")
-                        # Create a black frame to prevent further issues
-                        cv2.imwrite(expected_frame, np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8))
-                        frames_written += 1
                 else:
                     logger.warning(f"Skipping slide {slides_processed + 1} - not enough frames (need {start_frame + 1}, have {slide_frames})")
-                    frames_written += slide_frames
+                    fallback = last_output_frame if last_output_frame is not None else np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+                    for _ in range(max(0, slide_frames)):
+                        frame_writer.write(fallback)
+                        frames_written += 1
                 
                 slides_processed += 1
                 
@@ -1511,7 +1697,10 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 logger.error(f"Error processing slide {slides_processed + 1}: {str(e)}")
                 logger.error(traceback.format_exc())
                 # Skip to next slide to prevent getting stuck
-                frames_written += max(1, slide_frames - start_frame)
+                fallback = last_output_frame if last_output_frame is not None else np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+                for _ in range(max(1, slide_frames - start_frame)):
+                    frame_writer.write(fallback)
+                    frames_written += 1
                 slides_processed += 1
 
         except Exception as e:
@@ -1522,36 +1711,13 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     if frames_written != total_output_frames:
         logger.warning(f"Frame count mismatch: wrote {frames_written}, expected {total_output_frames}. Consider re-checking allocation.")
 
-    # Use ffmpeg to stitch frames into a video
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-framerate", str(fps),
-        "-i", os.path.join(temp_frame_dir, "frame_%05d.jpg"),
-        "-vframes", str(frames_written),
-        "-c:v", "libx264",
-        "-preset", "slow" if quality_mode == 'pro' else "medium",
-        "-crf", "19" if quality_mode == 'pro' else "23",
-        "-pix_fmt", "yuv420p",
-        "-r", str(fps),
-        "-movflags", "+faststart",
-        output_path
-    ]
-
-    logger.info(f"Running FFmpeg command: {' '.join(ffmpeg_command)}")
     try:
-        import subprocess
-        subprocess.run(ffmpeg_command, check=True, capture_output=True, text=True)
+        frame_writer.close()
         logger.info(f"Video successfully generated at {output_path}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg command failed: {e}")
+        logger.error(f"FFmpeg raw frame writer failed: {e}")
         logger.error(f"FFmpeg stderr: {e.stderr}")
         raise
-    finally:
-        import shutil
-        if os.path.exists(temp_frame_dir):
-            shutil.rmtree(temp_frame_dir)
-            logger.info(f"Cleaned up temporary frame directory: {temp_frame_dir}")
 
 
 if __name__ == "__main__":

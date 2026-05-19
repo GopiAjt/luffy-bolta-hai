@@ -45,7 +45,12 @@ export const uploadAudio = async (file, onProgress) => {
                     reject(error);
                 }
             } else {
-                reject(new Error(`Upload failed with status ${xhr.status}`));
+                try {
+                    const data = JSON.parse(xhr.responseText || '{}');
+                    reject(new Error(data.error || data.message || `Upload failed with status ${xhr.status}`));
+                } catch (error) {
+                    reject(new Error(xhr.responseText || `Upload failed with status ${xhr.status}`));
+                }
             }
         };
 
@@ -73,6 +78,12 @@ export const generateVoiceover = async (script, language = 'English', videoProfi
 
 export const getAudioMetadata = async (audioId) => {
     const response = await fetch(`/api/v1/audio/${audioId}/metadata`);
+    await handleApiError(response);
+    return parseJsonResponse(response);
+};
+
+export const getLatestAudioFile = async () => {
+    const response = await fetch('/api/v1/latest-audio-file');
     await handleApiError(response);
     return parseJsonResponse(response);
 };

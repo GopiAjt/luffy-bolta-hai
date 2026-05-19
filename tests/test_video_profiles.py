@@ -30,6 +30,19 @@ class VideoProfileTests(unittest.TestCase):
         self.assertIn("First sentence.", chunks[0])
         self.assertTrue(all(chunk.strip() for chunk in chunks))
 
+    def test_tts_split_uses_paragraphs_as_chunks(self):
+        chunks = _split_text_for_tts(
+            "First paragraph stays together.\n\nSecond paragraph becomes another chunk.",
+            1000,
+        )
+        self.assertEqual(
+            chunks,
+            [
+                "First paragraph stays together.",
+                "Second paragraph becomes another chunk.",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

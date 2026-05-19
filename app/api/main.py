@@ -241,6 +241,35 @@ def serve_audio(filename):
         return jsonify({'error': 'Internal server error'}), 500
 
 
+@app.route('/api/v1/latest-audio-file', methods=['GET'])
+def get_latest_audio_file():
+    """Return the newest audio file in the upload/output directory."""
+    try:
+        uploads_dir = Path(UPLOADS_DIR)
+        audio_files = [
+            path
+            for path in uploads_dir.glob("*")
+            if path.is_file() and path.suffix.lower() in {".wav", ".mp3", ".m4a"}
+        ]
+        if not audio_files:
+            return jsonify({'error': 'No audio file found'}), 404
+
+        latest_file = max(audio_files, key=lambda path: path.stat().st_mtime)
+        try:
+            duration = get_audio_duration(str(latest_file))
+        except Exception:
+            duration = None
+
+        return jsonify({
+            'id': latest_file.name,
+            'path': str(latest_file.absolute()),
+            'duration': duration,
+        })
+    except Exception as e:
+        logger.error(f"Error finding latest audio file: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Failed to find latest audio file'}), 500
+
+
 @app.route('/api/v1/generate-script', methods=['POST'])
 def generate_script_endpoint():
     """

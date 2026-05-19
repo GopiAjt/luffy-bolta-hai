@@ -31,8 +31,16 @@ _tts_model = None
 _tts_model_id = None
 
 
-def _split_text_for_tts(text: str, max_chars: int) -> List[str]:
-    """Split long narration into sentence-aware chunks for Qwen TTS."""
+def _split_paragraphs_for_tts(text: str) -> List[str]:
+    """Split narration into paragraph blocks before TTS chunking."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    return [paragraph.strip() for paragraph in re.split(r"\n\s*\n+", text) if paragraph.strip()]
+
+
+def _split_paragraph_for_tts(text: str, max_chars: int) -> List[str]:
+    """Split one paragraph into sentence-aware chunks for Qwen TTS."""
     text = re.sub(r"\s+", " ", (text or "").strip())
     if not text:
         return []
@@ -72,6 +80,14 @@ def _split_text_for_tts(text: str, max_chars: int) -> List[str]:
 
     if current:
         chunks.append(current.strip())
+    return chunks
+
+
+def _split_text_for_tts(text: str, max_chars: int) -> List[str]:
+    """Split narration into paragraph-first, sentence-aware chunks for Qwen TTS."""
+    chunks: List[str] = []
+    for paragraph in _split_paragraphs_for_tts(text):
+        chunks.extend(_split_paragraph_for_tts(paragraph, max_chars))
     return chunks
 
 

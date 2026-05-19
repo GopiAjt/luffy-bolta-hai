@@ -2,7 +2,7 @@ import { generateScript } from './api/scriptApi.js';
 import { uploadAudio, generateVoiceover, getAudioMetadata } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
 import { generateVideo, generateSlideshow, getOutputUsage, cleanupOutput } from './api/videoApi.js';
-import { uploadMangaPdf, generateScriptFromPdf, generatePdfSlides } from './api/mangaPdfApi.js';
+import { uploadMangaPdf, generateScriptFromPdf, generatePdfSlides, generateMangaVideo } from './api/mangaPdfApi.js';
 import { LoadingIndicator } from './ui/loadingIndicator.js';
 import { AudioPlayer } from './ui/audioPlayer.js';
 import { VideoPlayer } from './ui/videoPlayer.js';
@@ -222,6 +222,15 @@ export class LuffyBoltHaiApp {
             generatePdfScriptButton.addEventListener('click', () => {
                 this.handleGeneratePdfScript().catch(error => {
                     console.error('Error in handleGeneratePdfScript:', error);
+                });
+            });
+        }
+
+        const generateMangaVideoButton = document.getElementById('generateMangaVideoButton');
+        if (generateMangaVideoButton) {
+            generateMangaVideoButton.addEventListener('click', () => {
+                this.handleGenerateMangaVideo().catch(error => {
+                    console.error('Error in handleGenerateMangaVideo:', error);
                 });
             });
         }
@@ -834,6 +843,7 @@ export class LuffyBoltHaiApp {
         const status = document.getElementById('mangaPdfStatus');
         const preview = document.getElementById('mangaPdfPreview');
         const generatePdfScriptButton = document.getElementById('generatePdfScriptButton');
+        const generateMangaVideoButton = document.getElementById('generateMangaVideoButton');
 
         if (!file) {
             return;
@@ -867,8 +877,105 @@ export class LuffyBoltHaiApp {
         if (generatePdfScriptButton) {
             generatePdfScriptButton.disabled = false;
         }
+        if (generateMangaVideoButton) {
+            generateMangaVideoButton.disabled = false;
+        }
 
         return result;
+    }, {
+        errorElement: document.getElementById('mangaPdfStatus')
+    });
+
+    handleGenerateMangaVideo = withErrorHandling(async () => {
+        const status = document.getElementById('mangaPdfStatus');
+        const preview = document.getElementById('mangaPdfPreview');
+        const angleInput = document.getElementById('mangaPdfAngle');
+        const subtitleStyleSelector = document.getElementById('subtitleStyle');
+        const button = document.getElementById('generateMangaVideoButton');
+
+        if (!this.currentPdfId) {
+            throw new Error('Please upload a manga PDF first');
+        }
+
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Generating full video...';
+        }
+        if (status) {
+            status.textContent = 'Running full manga video pipeline. This can take several minutes on CPU...';
+        }
+        this.videoLoading.show();
+
+        try {
+            const result = await generateMangaVideo(
+                this.currentPdfId,
+                angleInput ? angleInput.value : '',
+                {
+                    language: 'English',
+                    subtitleStyle: subtitleStyleSelector && subtitleStyleSelector.value ? subtitleStyleSelector.value : 'pro',
+                    qualityMode: 'pro'
+                }
+            );
+            const output = result.output;
+            const script = output.script || {};
+
+            this.currentAudioId = output.audio.id;
+            this.currentSlidesJson = output.slides.slides_json;
+
+            const scriptOutput = document.getElementById('scriptOutput');
+            const scriptInput = document.getElementById('scriptInput');
+            const titleElement = document.getElementById('titleText');
+            const titleContainer = document.getElementById('scriptTitle');
+
+            if (scriptOutput) {
+                scriptOutput.textContent = script.script || '';
+                scriptOutput.style.display = 'block';
+            }
+            if (scriptInput) {
+                scriptInput.value = script.script || '';
+            }
+            if (script.title && titleElement && titleContainer) {
+                titleElement.textContent = script.title;
+                titleContainer.style.display = 'block';
+            }
+
+            this.audioPlayer.setName(`Generated manga voiceover (${this.currentAudioId})`);
+            this.audioPlayer.setAudioSource(`/api/v1/audio/${this.currentAudioId}`);
+            this.audioPlayer.setDuration(output.audio.duration);
+
+            const audioPreview = document.getElementById('audioPreview');
+            if (audioPreview) {
+                audioPreview.style.display = 'block';
+            }
+
+            const videoUrl = `/api/v1/download/${output.video_file}`;
+            const videoContainer = document.getElementById('videoPreviewContainer');
+            if (videoContainer) {
+                videoContainer.style.display = 'block';
+            }
+            this.videoPlayer.setSource(videoUrl);
+            this.videoPlayer.show();
+            this.videoPlayer.createDownloadLink(videoUrl, output.video_file);
+
+            if (preview) {
+                const sourceText = script.context_sources && script.context_sources.length
+                    ? `\n\nContext: ${script.context_sources.map(source => source.title || source.source).join(', ')}`
+                    : '';
+                preview.textContent = `Session complete.\nAudio: ${this.currentAudioId}\nSlides: ${output.slides.slide_count}\nVideo: ${output.video_file}${sourceText}`;
+                preview.style.display = 'block';
+            }
+            if (status) {
+                status.textContent = `Manga video generated successfully: ${output.video_file}`;
+            }
+
+            return result;
+        } finally {
+            this.videoLoading.hide();
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = '<i class="bi bi-play-circle me-2"></i>Generate Full Manga Video';
+            }
+        }
     }, {
         errorElement: document.getElementById('mangaPdfStatus')
     });

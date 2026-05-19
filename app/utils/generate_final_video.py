@@ -13,6 +13,8 @@ from app.utils.generate_slideshow import main as generate_slideshow_video
 from app.utils.video_generator import VideoGenerator
 from app.utils.audio_processor import get_audio_duration
 from app.config import (
+    BACKGROUND_MUSIC_DIR,
+    ENABLE_BACKGROUND_MUSIC,
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
@@ -22,6 +24,31 @@ from app.config import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+SUPPORTED_MUSIC_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+
+
+def pick_background_music(music_path: str = None) -> str:
+    if music_path:
+        path = Path(music_path)
+        if path.exists():
+            return str(path)
+        raise FileNotFoundError(f"Background music file not found: {music_path}")
+
+    if not ENABLE_BACKGROUND_MUSIC:
+        return None
+
+    if not BACKGROUND_MUSIC_DIR.exists():
+        return None
+
+    music_files = sorted(
+        path for path in BACKGROUND_MUSIC_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_MUSIC_EXTENSIONS
+    )
+    if not music_files:
+        return None
+    return str(music_files[0])
 
 
 def generate_final_video(
@@ -34,6 +61,7 @@ def generate_final_video(
     generate_slides: bool = True,  # New parameter to control slides generation
     blur_amount: int = 5,  # Controls transition blur (0 = no blur, higher values = softer crossfades)
     quality_mode: str = "pro",
+    background_music_path: str = None,
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -54,6 +82,8 @@ def generate_final_video(
         quality_mode = (quality_mode or "standard").lower()
         pro_mode = quality_mode == "pro"
         logger.info("Using video quality mode: %s", quality_mode)
+        selected_music_path = pick_background_music(background_music_path)
+        logger.info("Background music: %s", selected_music_path or "disabled")
 
         # 1. Get audio duration to sync the slideshow
         audio_path = UPLOADS_DIR / f"{audio_id}"
@@ -131,6 +161,7 @@ def generate_final_video(
                 background_video_path=str(slideshow_output_path),
                 expr_img_dir=str(EXPRESSIONS_DIR),
                 quality_mode=quality_mode,
+                background_music_path=selected_music_path,
             )
         else:
             logger.info("No expressions file found, generating video without expressions.")
@@ -140,6 +171,7 @@ def generate_final_video(
                 output_path=str(final_output_path),
                 background_video_path=str(slideshow_output_path),
                 quality_mode=quality_mode,
+                background_music_path=selected_music_path,
             )
 
         logger.info(f"Final video generated successfully at: {final_video_path}")

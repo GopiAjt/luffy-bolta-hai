@@ -13,7 +13,15 @@ from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
 from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
-from app.utils.manga_pdf_processor import create_pdf_slides, fetch_ohara_context, load_manga_pdf_manifest, process_manga_pdf, score_text_quality
+from app.utils.manga_pdf_processor import (
+    create_pdf_slides,
+    fetch_ohara_context,
+    load_manga_pdf_manifest,
+    load_manga_session,
+    process_manga_pdf,
+    score_text_quality,
+    update_manga_session,
+)
 import re
 import json
 import glob
@@ -41,6 +49,119 @@ app = Flask(__name__,
             static_folder='../../app/static',  # Path to static files
             static_url_path='/static')  # URL prefix for static files
 CORS(app)
+
+
+def _build_pdf_script_context(manifest: dict) -> dict:
+    context_text = manifest.get('extracted_text', '')
+    text_quality = manifest.get('text_quality') or {}
+    if not text_quality and context_text.strip():
+        text_quality = score_text_quality(context_text, 70)
+
+    chapter_number = manifest.get('chapter_number')
+    ohara_context = manifest.get('ohara_context') or None
+    context_sources = list(manifest.get('context_sources') or [])
+    warnings = list(manifest.get('warnings') or [])
+
+    if chapter_number and not ohara_context:
+        ohara_context, ohara_warning = fetch_ohara_context(chapter_number)
+        if ohara_context:
+            context_sources.append({
+                'source': ohara_context.get('source'),
+                'title': ohara_context.get('title'),
+                'url': ohara_context.get('url'),
+                'chapter_number': ohara_context.get('chapter_number'),
+                'fetched_at': ohara_context.get('fetched_at'),
+                'quality': ohara_context.get('quality'),
+            })
+        elif ohara_warning:
+            warnings.append(ohara_warning)
+
+    has_usable_pdf_text = bool(context_text.strip()) and bool(text_quality.get('usable'))
+    has_usable_ohara_context = bool(ohara_context and ohara_context.get('text'))
+
+    return {
+        'context_text': context_text if has_usable_pdf_text else '',
+        'chapter_number': chapter_number,
+        'ohara_context': ohara_context,
+        'context_sources': context_sources,
+        'text_quality': text_quality,
+        'warnings': warnings,
+        'has_usable_context': has_usable_pdf_text or has_usable_ohara_context,
+    }
+
+
+def _generate_pdf_script_from_manifest(manifest: dict, topic: Optional[str] = None) -> dict:
+    context = _build_pdf_script_context(manifest)
+    if not context['has_usable_context']:
+        raise ValueError(
+            'Could not find reliable text for this PDF. OCR quality is too low and no matching '
+            'Library of Ohara context was found. Provide a manual topic/summary or try a cleaner PDF.'
+        )
+
+    result = generate_script(
+        topic_override=topic,
+        language='english',
+        context_text=context['context_text'],
+        chapter_number=context['chapter_number'],
+        ohara_context=context['ohara_context'].get('text', '') if context['ohara_context'] else '',
+        context_sources=context['context_sources']
+    )
+    return {
+        'title': result.get('title', ''),
+        'script': result.get('script', ''),
+        'description': result.get('description', ''),
+        'hashtags': result.get('hashtags', ''),
+        'chapter_number': context['chapter_number'],
+        'text_quality': context['text_quality'],
+        'context_sources': context['context_sources'],
+        'warnings': context['warnings'],
+    }
+
+
+def _generate_subtitle_assets(audio_id: str, script: Optional[str], subtitle_style: str = 'pro') -> dict:
+    audio_path = os.path.join(UPLOADS_DIR, audio_id)
+    if not os.path.exists(audio_path):
+        raise FileNotFoundError(f'Audio file not found: {audio_id}')
+
+    subtitle_generator = SubtitleGenerator(audio_path, script, style=subtitle_style)
+    timestamps = subtitle_generator.generate_timestamps()
+    if not timestamps:
+        raise RuntimeError('Failed to generate subtitles: No timestamps generated')
+
+    phrases = subtitle_generator.group_words_into_phrases(timestamps)
+    if not phrases:
+        raise RuntimeError('Failed to generate subtitles: No phrases generated')
+
+    ass_path = os.path.join(UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
+    subtitle_generator.generate_ass_file(phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
+    if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
+        raise RuntimeError('Failed to generate subtitles: ASS file not generated correctly')
+
+    expressions = None
+    expr_json_path = None
+    try:
+        from app.utils.expression_mapper import gemini_expression_mapping_from_ass, parse_ass_file
+        gemini_api_key = os.environ.get('GEMINI_API_KEY')
+        expr_json_path = ass_path.rsplit('.', 1)[0] + '.expressions.json'
+        if gemini_api_key:
+            expressions = gemini_expression_mapping_from_ass(ass_path, gemini_api_key)
+        else:
+            expressions = parse_ass_file(ass_path)
+        with open(expr_json_path, 'w', encoding='utf-8') as f:
+            json.dump(expressions, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Expression mapping failed: {e}")
+        expr_json_path = None
+        expressions = None
+
+    return {
+        'ass_path': ass_path,
+        'ass_file': os.path.basename(ass_path),
+        'expressions_path': expr_json_path,
+        'expressions_file': os.path.basename(expr_json_path) if expr_json_path else None,
+        'expressions': expressions,
+        'phrases': phrases,
+    }
 
 # Serve static files
 
@@ -328,52 +449,28 @@ def generate_script_from_pdf_endpoint():
         except FileNotFoundError as e:
             return jsonify({'error': str(e)}), 404
 
-        context_text = manifest.get('extracted_text', '')
-        text_quality = manifest.get('text_quality') or {}
-        if not text_quality and context_text.strip():
-            text_quality = score_text_quality(context_text, 70)
-        chapter_number = manifest.get('chapter_number')
-        ohara_context = manifest.get('ohara_context') or None
-        context_sources = manifest.get('context_sources') or []
-        warnings = list(manifest.get('warnings') or [])
-
-        if chapter_number and not ohara_context:
-            ohara_context, ohara_warning = fetch_ohara_context(chapter_number)
-            if ohara_context:
-                context_sources.append({
-                    'source': ohara_context.get('source'),
-                    'title': ohara_context.get('title'),
-                    'url': ohara_context.get('url'),
-                    'chapter_number': ohara_context.get('chapter_number'),
-                    'fetched_at': ohara_context.get('fetched_at'),
-                    'quality': ohara_context.get('quality'),
-                })
-            elif ohara_warning:
-                warnings.append(ohara_warning)
-
-        has_usable_pdf_text = bool(context_text.strip()) and bool(text_quality.get('usable'))
-        has_usable_ohara_context = bool(ohara_context and ohara_context.get('text'))
-        if not has_usable_pdf_text and not has_usable_ohara_context:
+        try:
+            result = _generate_pdf_script_from_manifest(manifest, topic)
+        except ValueError as e:
+            context = _build_pdf_script_context(manifest)
             return jsonify({
-                'error': (
-                    'Could not find reliable text for this PDF. OCR quality is too low and no matching '
-                    'Library of Ohara context was found. Provide a manual topic/summary or try a cleaner PDF.'
-                ),
+                'error': str(e),
                 'details': {
-                    'chapter_number': chapter_number,
-                    'text_quality': text_quality,
-                    'warnings': warnings,
+                    'chapter_number': context['chapter_number'],
+                    'text_quality': context['text_quality'],
+                    'warnings': context['warnings'],
                 }
             }), 400
 
-        result = generate_script(
-            topic_override=topic,
-            language='english',
-            context_text=context_text if has_usable_pdf_text else '',
-            chapter_number=chapter_number,
-            ohara_context=ohara_context.get('text', '') if ohara_context else '',
-            context_sources=context_sources
-        )
+        update_manga_session(pdf_id, "script", "completed", {
+            "title": result.get('title', ''),
+            "script": result.get('script', ''),
+            "description": result.get('description', ''),
+            "hashtags": result.get('hashtags', ''),
+            "chapter_number": result.get('chapter_number'),
+            "text_quality": result.get('text_quality'),
+            "context_sources": result.get('context_sources', []),
+        })
         return jsonify({
             'status': 'success',
             'message': 'Script generated from manga PDF successfully',
@@ -383,10 +480,10 @@ def generate_script_from_pdf_endpoint():
                 'description': result.get('description', ''),
                 'hashtags': result.get('hashtags', ''),
                 'pdf_id': pdf_id,
-                'chapter_number': chapter_number,
-                'text_quality': text_quality,
-                'context_sources': context_sources,
-                'warnings': warnings,
+                'chapter_number': result.get('chapter_number'),
+                'text_quality': result.get('text_quality'),
+                'context_sources': result.get('context_sources', []),
+                'warnings': result.get('warnings', []),
             }
         })
     except Exception as e:
@@ -419,6 +516,11 @@ def generate_pdf_slides_endpoint():
 
         duration = get_audio_duration(str(audio_path))
         result = create_pdf_slides(pdf_id, duration)
+        update_manga_session(pdf_id, "slides", "completed", {
+            "audio_id": audio_id,
+            "slides_json": result['slides_json'],
+            "slide_count": result['slide_count'],
+        })
         return jsonify({
             'status': 'success',
             'message': 'PDF slides generated successfully',
@@ -432,6 +534,150 @@ def generate_pdf_slides_endpoint():
     except Exception as e:
         logger.error(f"Error generating PDF slides: {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/generate-manga-video', methods=['POST'])
+def generate_manga_video_endpoint():
+    """
+    One-click Manga PDF pipeline:
+    PDF context script -> Qwen voiceover -> subtitles/expressions -> PDF panel slides -> final video.
+    """
+    pdf_id = None
+    try:
+        data = request.json or {}
+        pdf_id = data.get('pdf_id')
+        topic = data.get('topic') or data.get('angle')
+        language = data.get('language', 'English')
+        subtitle_style = data.get('subtitle_style', 'pro')
+        quality_mode = data.get('quality_mode', 'pro')
+        background_music_path = data.get('background_music_path')
+
+        if not pdf_id:
+            return jsonify({'error': 'pdf_id is required'}), 400
+
+        try:
+            manifest = load_manga_pdf_manifest(pdf_id)
+        except FileNotFoundError as e:
+            return jsonify({'error': str(e)}), 404
+
+        update_manga_session(pdf_id, "pipeline", "running", {
+            "quality_mode": quality_mode,
+            "subtitle_style": subtitle_style,
+            "language": language,
+        })
+
+        update_manga_session(pdf_id, "script", "running")
+        script_result = _generate_pdf_script_from_manifest(manifest, topic)
+        update_manga_session(pdf_id, "script", "completed", {
+            "title": script_result.get('title', ''),
+            "script": script_result.get('script', ''),
+            "description": script_result.get('description', ''),
+            "hashtags": script_result.get('hashtags', ''),
+            "chapter_number": script_result.get('chapter_number'),
+            "text_quality": script_result.get('text_quality'),
+            "context_sources": script_result.get('context_sources', []),
+        })
+
+        update_manga_session(pdf_id, "voiceover", "running")
+        voiceover_result = generate_voiceover(
+            text=script_result['script'],
+            language=language,
+        )
+        audio_id = voiceover_result['id']
+        update_manga_session(pdf_id, "voiceover", "completed", {
+            "audio_id": audio_id,
+            "duration": voiceover_result.get('duration'),
+            "path": voiceover_result.get('path'),
+        })
+
+        update_manga_session(pdf_id, "subtitles", "running")
+        subtitle_assets = _generate_subtitle_assets(audio_id, script_result['script'], subtitle_style)
+        update_manga_session(pdf_id, "subtitles", "completed", {
+            "ass_file": subtitle_assets['ass_file'],
+            "ass_path": subtitle_assets['ass_path'],
+            "expressions_file": subtitle_assets['expressions_file'],
+            "expressions_path": subtitle_assets['expressions_path'],
+            "phrase_count": len(subtitle_assets['phrases']),
+        })
+
+        update_manga_session(pdf_id, "slides", "running")
+        duration = get_audio_duration(str(UPLOADS_DIR / audio_id))
+        slides_result = create_pdf_slides(pdf_id, duration)
+        update_manga_session(pdf_id, "slides", "completed", {
+            "slides_json": slides_result['slides_json'],
+            "slide_count": slides_result['slide_count'],
+        })
+
+        update_manga_session(pdf_id, "final_video", "running")
+        final_video_path = generate_final_video(
+            audio_id=audio_id,
+            slides_json_path=slides_result['slides_json'],
+            subtitle_path=subtitle_assets['ass_path'],
+            expressions_path=subtitle_assets['expressions_path'],
+            generate_slides=False,
+            quality_mode=quality_mode,
+            background_music_path=background_music_path,
+        )
+        video_filename = os.path.basename(final_video_path)
+        video_url = url_for('download_file', filename=video_filename, _external=True)
+        update_manga_session(pdf_id, "final_video", "completed", {
+            "video_file": video_filename,
+            "video_path": final_video_path,
+            "download_url": video_url,
+        })
+        session = update_manga_session(pdf_id, "completed", "completed", {
+            "video_file": video_filename,
+            "audio_id": audio_id,
+            "slides_json": slides_result['slides_json'],
+        })
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Manga video generated successfully',
+            'output': {
+                'pdf_id': pdf_id,
+                'script': script_result,
+                'audio': {
+                    'id': audio_id,
+                    'duration': voiceover_result.get('duration'),
+                },
+                'subtitles': {
+                    'ass_file': subtitle_assets['ass_file'],
+                    'ass_path': subtitle_assets['ass_path'],
+                    'expressions_file': subtitle_assets['expressions_file'],
+                    'expressions_path': subtitle_assets['expressions_path'],
+                },
+                'slides': {
+                    'slides_json': slides_result['slides_json'],
+                    'slide_count': slides_result['slide_count'],
+                },
+                'video_file': video_filename,
+                'download_url': video_url,
+                'session': session,
+            }
+        })
+
+    except ValueError as e:
+        if pdf_id:
+            update_manga_session(pdf_id, "failed", "error", error=str(e))
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error generating one-click manga video: {str(e)}", exc_info=True)
+        if pdf_id:
+            update_manga_session(pdf_id, "failed", "error", error=str(e))
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/manga-session/<pdf_id>', methods=['GET'])
+def get_manga_session_endpoint(pdf_id):
+    try:
+        load_manga_pdf_manifest(pdf_id)
+        return jsonify({
+            'status': 'success',
+            'session': load_manga_session(pdf_id)
+        })
+    except FileNotFoundError as e:
+        return jsonify({'error': str(e)}), 404
 
 
 @app.route('/api/v1/generate-voiceover', methods=['POST'])
@@ -517,82 +763,22 @@ def generate_subtitles():
         else:
             logger.info("No script provided, will transcribe from audio")
 
-        # Generate subtitles with the selected style
-        logger.info(f"Using subtitle style: {subtitle_style}")
         try:
-            subtitle_generator = SubtitleGenerator(audio_path, script, style=subtitle_style)
+            subtitle_assets = _generate_subtitle_assets(audio_id, script, subtitle_style)
         except Exception as e:
-            logger.error(f"Error initializing subtitle generator: {str(e)}")
+            logger.error(f"Error generating subtitle assets: {str(e)}")
             return jsonify({
                 'error': f'Failed to process audio: {str(e)}'
             }), 500
-
-        # Get word-level timestamps
-        logger.info("Generating word-level timestamps...")
-        timestamps = subtitle_generator.generate_timestamps()
-        logger.info(f"Generated {len(timestamps)} word timestamps")
-
-        if not timestamps:
-            logger.error("No timestamps were generated")
-            return jsonify({
-                'error': 'Failed to generate subtitles: No timestamps generated'
-            }), 500
-
-        # Group words into phrases
-        logger.info("Grouping words into phrases...")
-        phrases = subtitle_generator.group_words_into_phrases(timestamps)
-        logger.info(f"Grouped into {len(phrases)} phrases")
-
-        if not phrases:
-            logger.error("No phrases were generated from timestamps")
-            return jsonify({
-                'error': 'Failed to generate subtitles: No phrases generated'
-            }), 500
-
-        # Generate ASS file
-        ass_path = os.path.join(
-            UPLOADS_DIR, f"{os.path.splitext(audio_id)[0]}.ass")
-        logger.info(f"Generating ASS file at {ass_path}...")
-        # Use the same resolution as the video generator
-        subtitle_generator.generate_ass_file(
-            phrases, ass_path, resolution=SUBTITLE_RESOLUTION)
-
-        # Verify ASS file was created
-        if not os.path.exists(ass_path) or os.path.getsize(ass_path) < 100:
-            logger.error(f"ASS file was not generated properly at {ass_path}")
-            return jsonify({
-                'error': 'Failed to generate subtitles: ASS file not generated correctly'
-            }), 500
-
-        # --- Expression Mapping Integration ---
-        try:
-            from app.utils.expression_mapper import gemini_expression_mapping_from_ass, parse_ass_file
-            gemini_api_key = os.environ.get('GEMINI_API_KEY')
-            expr_json_path = ass_path.rsplit('.', 1)[0] + '.expressions.json'
-            if gemini_api_key:
-                logger.info("Running Gemini-based expression mapping...")
-                expressions = gemini_expression_mapping_from_ass(
-                    ass_path, gemini_api_key)
-            else:
-                logger.info(
-                    "No Gemini API key found, using rule-based expression mapping...")
-                expressions = parse_ass_file(ass_path)
-            with open(expr_json_path, 'w', encoding='utf-8') as f:
-                json.dump(expressions, f, indent=2, ensure_ascii=False)
-            logger.info(f"Expression mapping written to {expr_json_path}")
-        except Exception as e:
-            logger.error(f"Expression mapping failed: {e}")
-            expr_json_path = None
-            expressions = None
 
         return jsonify({
             'status': 'success',
             'message': 'Subtitles generated successfully',
             'output': {
-                'ass_file': os.path.basename(ass_path),
-                'phrases': phrases,
-                'expressions_file': os.path.basename(expr_json_path) if expr_json_path else None,
-                'expressions': expressions
+                'ass_file': subtitle_assets['ass_file'],
+                'phrases': subtitle_assets['phrases'],
+                'expressions_file': subtitle_assets['expressions_file'],
+                'expressions': subtitle_assets['expressions']
             }
         })
 
@@ -913,6 +1099,7 @@ def generate_final_video_endpoint():
         expressions_file = data.get('expressions_file')
         force_regenerate = data.get('force_regenerate_slides', False)
         quality_mode = data.get('quality_mode', 'pro')
+        background_music_path = data.get('background_music_path')
         
         logger.info(f"Processing request with audio_id={audio_id}, subtitle_file={subtitle_file}")
 
@@ -994,7 +1181,8 @@ def generate_final_video_endpoint():
                 subtitle_path=subtitle_file,
                 expressions_path=expressions_file,
                 generate_slides=force_regenerate,
-                quality_mode=quality_mode
+                quality_mode=quality_mode,
+                background_music_path=background_music_path,
             )
             logger.info(f"Final video generated at: {final_video_path}")
             

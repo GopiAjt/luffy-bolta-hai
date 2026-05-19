@@ -12,6 +12,7 @@ import hashlib
 import urllib.parse
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image, ImageOps
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -57,6 +58,33 @@ ONE_PIECE_RELEVANCE_TERMS = [
     "wano", "egghead", "void century", "devil fruit", "yami yami",
     "gura gura", "nika", "joy boy", "imu", "world government"
 ]
+
+CANONICAL_ENTITIES = [
+    "Luffy", "Zoro", "Sanji", "Nami", "Usopp", "Chopper", "Robin", "Franky",
+    "Brook", "Jinbe", "Shanks", "Mihawk", "Blackbeard", "Marshall D. Teach",
+    "Whitebeard", "Ace", "Sabo", "Dragon", "Garp", "Koby", "Law", "Kid",
+    "Bonney", "Kuma", "Vegapunk", "Imu", "Five Elders", "Gorosei",
+    "Joy Boy", "Nika", "Mary Geoise", "Wano", "Egghead", "Elbaf",
+    "Marineford", "Dressrosa", "Whole Cake Island", "Thriller Bark",
+    "Enies Lobby", "Ohara", "Void Century", "Poneglyph", "Sunny Ship",
+    "Grand Line", "Red Line", "World Government", "Revolutionary Army",
+]
+
+ENTITY_ALIASES = {
+    "straw hat": "Luffy",
+    "straw hats": "Straw Hat Pirates",
+    "teach": "Marshall D. Teach",
+    "blackbeard": "Marshall D. Teach",
+    "gorosei": "Five Elders",
+    "five elders": "Five Elders",
+    "nika": "Nika",
+    "joyboy": "Joy Boy",
+    "mary geoise": "Mary Geoise",
+    "mariejois": "Mary Geoise",
+    "elbaf": "Elbaf",
+    "egghead": "Egghead",
+    "wano": "Wano",
+}
 
 FANDOM_PAGE_ALIASES = {
     "blackbeard": [
@@ -262,6 +290,57 @@ def fill_gaps_in_slides(slides: List[Dict], total_duration: float) -> List[Dict]
     return filled_slides
 
 
+def _extract_context_entities(text: str, limit: int = 8) -> List[str]:
+    text_lower = (text or "").lower()
+    entities = []
+
+    for alias, canonical in ENTITY_ALIASES.items():
+        if alias in text_lower and canonical not in entities:
+            entities.append(canonical)
+
+    for entity in CANONICAL_ENTITIES:
+        pattern = r"\b" + re.escape(entity.lower()) + r"\b"
+        if re.search(pattern, text_lower) and entity not in entities:
+            entities.append(entity)
+
+    return entities[:limit]
+
+
+def _sanitize_image_query(query: str, summary: str, context_entities: List[str]) -> str:
+    query = re.sub(r"\b(one piece anime|anime screenshot|manga panel|fan art|wallpaper|dramatic|cinematic|close up)\b", "", query or "", flags=re.IGNORECASE)
+    query = re.sub(r"[^A-Za-z0-9 .'-]", " ", query)
+    query = re.sub(r"\s+", " ", query).strip()
+
+    combined = f"{query} {summary}".lower()
+    chosen_entities = [
+        entity for entity in context_entities
+        if entity.lower() in combined or any(alias in combined and canonical == entity for alias, canonical in ENTITY_ALIASES.items())
+    ]
+    if not chosen_entities:
+        chosen_entities = context_entities[:2]
+
+    query_words = [word for word in query.split() if len(word) > 2]
+    query_without_one_piece = " ".join(word for word in query_words if word.lower() not in {"one", "piece"})
+    if chosen_entities:
+        anchored = " ".join(chosen_entities[:2])
+        if query_without_one_piece and query_without_one_piece.lower() not in anchored.lower():
+            return f"{anchored} {query_without_one_piece}".strip()
+        return anchored
+    if query_without_one_piece:
+        return f"One Piece {query_without_one_piece}".strip()
+    return "One Piece Logo"
+
+
+def _script_context_summary(dialogues: List[Dict]) -> Dict:
+    full_text = " ".join(d.get("text", "") for d in dialogues)
+    entities = _extract_context_entities(full_text)
+    return {
+        "text": full_text[:3000],
+        "entities": entities,
+        "fallback_query": " ".join(entities[:2]) if entities else "One Piece Logo",
+    }
+
+
 def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: float, image_dir: str = None) -> str:
     # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
@@ -279,6 +358,8 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
     
     # Prepare the prompt for Gemini with raw subtitles and timestamps
     raw_subtitles = "\n".join(f"{d['start']} - {d['end']}: {d['text']}" for d in timestamped_dialogues)
+    script_context = _script_context_summary(timestamped_dialogues)
+    context_entities = script_context["entities"]
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     prompt = (
@@ -301,6 +382,12 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
         "  * Neutral → 'Character'\n"
         "  * Transition → 'Grand Line Map' or 'One Piece Logo'\n"
         "10. NEVER include the phrase 'One Piece anime' in Fandom queries.\n\n"
+
+        "SCRIPT-WIDE CONTEXT:\n"
+        f"- Detected core entities: {', '.join(context_entities) if context_entities else 'None detected; use One Piece Logo or Grand Line Map for transitions'}.\n"
+        "- Every visual must match the local subtitle AND stay consistent with these core entities.\n"
+        "- Do not introduce unrelated characters or arcs just because they are popular.\n"
+        "- If the subtitle is a generic hook, use the most relevant detected core entity instead of a random famous character.\n\n"
 
         "MERGE RULES (fragments):\n"
         "- If a subtitle contains fewer than 4 words or is a fragment, merge it with adjacent subtitles "
@@ -391,7 +478,12 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
                     'start_time': gemini_slide['start_time'],
                     'end_time': gemini_slide['end_time'],
                     'summary': gemini_slide['summary'],
-                    'image_search_query': gemini_slide['image_search_query']
+                    'image_search_query': _sanitize_image_query(
+                        gemini_slide['image_search_query'],
+                        gemini_slide['summary'],
+                        context_entities,
+                    ),
+                    'context_entities': context_entities,
                 }
                 
                 # Add image path if image_dir is provided
@@ -529,7 +621,7 @@ def _is_duplicate_image(item: Dict, downloaded_hashes: Set[str]) -> Tuple[bool, 
     image_hash = _get_image_hash(image_url)
     return (image_hash in downloaded_hashes, image_hash)
 
-def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
+def download_image(url: str, save_path: str, timeout: int = 10, min_width: int = 360, min_height: int = 260) -> bool:
     """Download an image from a URL to a given path with improved error handling.
     
     Args:
@@ -576,47 +668,50 @@ def download_image(url: str, save_path: str, timeout: int = 10) -> bool:
                 logger.info(f"Skipping GIF file: {url}")
                 return False
                 
-            # Get file extension from content type or URL
-            ext = None
-            if 'jpeg' in content_type or 'jpg' in content_type:
-                ext = '.jpg'
-            elif 'png' in content_type:
-                ext = '.png'
-            elif 'gif' in content_type:
-                logger.info(f"Skipping GIF file (content-type): {url}")
-                return False
-            else:
-                # Try to get extension from URL
-                url_path = url.split('?')[0]  # Remove query params
-                url_ext = os.path.splitext(url_path)[1].lower()
-                if url_ext in ['.jpg', '.jpeg', '.png', '.webp']:
-                    ext = url_ext
-                elif url_ext == '.gif':
-                    logger.info(f"Skipping GIF file (URL extension): {url}")
-                    return False
-                else:
-                    ext = '.jpg'  # Default to jpg if unknown
-            
-            # Update save_path with correct extension if needed
-            if ext and not save_path.lower().endswith(ext):
-                save_path = os.path.splitext(save_path)[0] + ext
-            
+            temp_path = f"{save_path}.download"
+
             # Download in chunks to handle large files
-            with open(save_path, 'wb') as f:
+            with open(temp_path, 'wb') as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:  # Filter out keep-alive chunks
                         f.write(chunk)
-            
-            # Verify the file was saved properly
-            if not os.path.exists(save_path):
-                logger.error(f"Failed to save image to {save_path}")
+
+            if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                logger.error(f"Downloaded file is empty: {url}")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
                 return False
-                
+
+            try:
+                with Image.open(temp_path) as image:
+                    image = ImageOps.exif_transpose(image)
+                    width, height = image.size
+                    if width < min_width or height < min_height:
+                        logger.info(f"Skipping small image {width}x{height}: {url}")
+                        os.remove(temp_path)
+                        return False
+
+                    aspect_ratio = width / max(height, 1)
+                    if aspect_ratio < 0.35 or aspect_ratio > 3.0:
+                        logger.info(f"Skipping awkward aspect ratio {aspect_ratio:.2f}: {url}")
+                        os.remove(temp_path)
+                        return False
+
+                    if image.mode not in ("RGB", "L"):
+                        image = image.convert("RGB")
+                    elif image.mode == "L":
+                        image = image.convert("RGB")
+                    image.save(save_path, "JPEG", quality=92, optimize=True)
+            except Exception as exc:
+                logger.warning(f"Downloaded URL was not a usable still image: {url} ({exc})")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False
+
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
             file_size = os.path.getsize(save_path)
-            if file_size == 0:
-                logger.error(f"Downloaded file is empty: {save_path}")
-                os.remove(save_path)
-                return False
                 
             logger.info(f"Successfully downloaded {os.path.basename(save_path)} ({file_size/1024:.1f} KB)")
             return True
@@ -720,6 +815,50 @@ def _image_relevance_score(img: Dict, query: str) -> int:
     score -= sum(4 for term in noisy_terms if term in haystack)
     score += min(img.get("width", 0), 2000) // 500
     return score
+
+
+def _search_item_relevance_score(item: Dict, query: str, summary: str = "") -> int:
+    haystack = " ".join([
+        item.get("title", ""),
+        item.get("displayLink", ""),
+        item.get("snippet", ""),
+        item.get("htmlSnippet", ""),
+        item.get("image", {}).get("contextLink", "") if isinstance(item.get("image"), dict) else "",
+    ]).lower()
+    query_words = _query_keywords(f"{query} {summary}")
+    score = sum(4 for word in query_words if word in haystack)
+
+    if any(term in haystack for term in ONE_PIECE_RELEVANCE_TERMS):
+        score += 8
+    if "onepiece.fandom.com" in haystack:
+        score += 8
+    elif any(domain in haystack for domain in PRIORITY_DOMAINS):
+        score += 4
+
+    noisy_terms = ["cosplay", "toy", "figure", "tattoo", "shirt", "poster", "fanart", "wallpaper", "logo"]
+    score -= sum(5 for term in noisy_terms if term in haystack)
+
+    image_meta = item.get("image", {}) if isinstance(item.get("image"), dict) else {}
+    width = int(image_meta.get("width", 0) or 0)
+    height = int(image_meta.get("height", 0) or 0)
+    if width >= 640 and height >= 360:
+        score += 4
+    if width and height:
+        aspect_ratio = width / max(height, 1)
+        if 0.55 <= aspect_ratio <= 2.2:
+            score += 2
+        else:
+            score -= 3
+
+    return score
+
+
+def _rank_search_items(items: List[Dict], query: str, summary: str = "") -> List[Dict]:
+    return sorted(
+        items,
+        key=lambda item: _search_item_relevance_score(item, query, summary),
+        reverse=True,
+    )
 
 
 def _query_keywords(query: str) -> Set[str]:
@@ -960,9 +1099,11 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
     # Early credential check to avoid repeated error spam
     _cse_api_key = os.getenv("GOOGLE_CSE_API_KEY") or os.getenv("GOOGLE_API_KEY")
     _cse_id = os.getenv("GOOGLE_SEARCH_ENGINE_ID")
-    if not _cse_api_key or not _cse_id:
-        logger.error("Google Custom Search credentials missing. Set GOOGLE_SEARCH_ENGINE_ID and GOOGLE_CSE_API_KEY (or GOOGLE_API_KEY).")
-        raise RuntimeError("Missing Google CSE credentials: set GOOGLE_SEARCH_ENGINE_ID and GOOGLE_CSE_API_KEY/GOOGLE_API_KEY in your .env")
+    google_cse_available = bool(_cse_api_key and _cse_id)
+    if not google_cse_available:
+        logger.warning(
+            "Google Custom Search credentials missing. Fandom images and reuse fallbacks will still be attempted."
+        )
     
     with open(json_path, "r", encoding="utf-8") as f:
         slides = json.load(f)
@@ -978,6 +1119,12 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
         if not search_query:
             logger.warning(f"[Slide {idx+1}] No image_search_query")
             continue
+        search_query = _sanitize_image_query(
+            search_query,
+            slide.get("summary", ""),
+            slide.get("context_entities", []),
+        )
+        slide["image_search_query"] = search_query
 
         logger.info(f"[Slide {idx+1}] Processing query: {search_query}")
 
@@ -1023,6 +1170,8 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                             downloaded_hashes.add(image_hash)
                             slide["image_path"] = save_path
                             slide["image_source"] = "fandom"
+                            slide["image_title"] = img.get("title", "")
+                            slide["image_score"] = _image_relevance_score(img, fandom_query)
                             last_downloaded_path = save_path
                             previous_images.append({
                                 "path": save_path,
@@ -1044,7 +1193,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                 )
         
         # 2) Fall back to Google CSE with priority domains if Fandom didn't work
-        if not downloaded:
+        if not downloaded and google_cse_available:
             combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS[1:]]) + ")"  # Skip fandom.com as we already tried it
             for q in candidate_queries:
                 if downloaded:
@@ -1060,7 +1209,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
 
                 logger.info(f"[Slide {idx+1}] Found {len(items)} results across priority sites")
 
-                for item in items:
+                for item in _rank_search_items(items, q, slide.get("summary", "")):
                     if downloaded:
                         break
 
@@ -1088,6 +1237,8 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                     if download_image(item_link, save_path):
                         downloaded_hashes.add(image_hash)
                         slide["image_path"] = save_path
+                        slide["image_source"] = "priority_search"
+                        slide["image_score"] = _search_item_relevance_score(item, q, slide.get("summary", ""))
                         last_downloaded_path = save_path
                         previous_images.append({
                             "path": save_path,
@@ -1099,7 +1250,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                         break
 
         # 3) If still not downloaded, fall back to generic searches as a last resort
-        if not downloaded:
+        if not downloaded and google_cse_available:
             for query in candidate_queries:
                 if downloaded:
                     break
@@ -1114,7 +1265,7 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                 logger.info(f"[Slide {idx+1}] Found {len(items)} results for generic query")
 
                 # Process search results
-                for item in items:
+                for item in _rank_search_items(items, query, slide.get("summary", "")):
                     if downloaded:
                         break
 
@@ -1146,6 +1297,8 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                     if download_image(item_link, save_path):
                         downloaded_hashes.add(image_hash)
                         slide["image_path"] = save_path
+                        slide["image_source"] = "generic_search"
+                        slide["image_score"] = _search_item_relevance_score(item, query, slide.get("summary", ""))
                         last_downloaded_path = save_path
                         previous_images.append({
                             "path": save_path,

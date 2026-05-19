@@ -19,6 +19,7 @@ from app.config import MANGA_PDF_DIR, UPLOADS_DIR, VIDEO_RESOLUTION
 logger = logging.getLogger(__name__)
 
 PDF_MANIFEST = "manifest.json"
+SESSION_MANIFEST = "session.json"
 OHARA_BASE_URL = "https://thelibraryofohara.com"
 MIN_USABLE_TEXT_SCORE = 0.45
 _EASYOCR_READER = None
@@ -544,6 +545,14 @@ def process_manga_pdf(file_storage) -> Dict:
     }
     manifest_path = pdf_dir / PDF_MANIFEST
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    update_manga_session(pdf_id, "uploaded", "completed", {
+        "source_pdf": str(source_path),
+        "chapter_number": chapter_number,
+        "page_count": len(page_records),
+        "panel_count": len(panel_records),
+        "text_quality": text_quality,
+        "context_sources": context_sources,
+    })
 
     return {
         "pdf_id": pdf_id,
@@ -567,6 +576,63 @@ def load_manga_pdf_manifest(pdf_id: str) -> Dict:
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manga PDF not found: {pdf_id}")
     return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _manga_pdf_dir(pdf_id: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9-]{36}", pdf_id or ""):
+        raise FileNotFoundError(f"Invalid PDF id: {pdf_id}")
+    return MANGA_PDF_DIR / pdf_id
+
+
+def _session_manifest_path(pdf_id: str) -> Path:
+    return _manga_pdf_dir(pdf_id) / SESSION_MANIFEST
+
+
+def load_manga_session(pdf_id: str) -> Dict:
+    session_path = _session_manifest_path(pdf_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if not session_path.exists():
+        return {
+            "pdf_id": pdf_id,
+            "status": "created",
+            "stage": "uploaded",
+            "created_at": now,
+            "updated_at": now,
+            "steps": {},
+        }
+    return json.loads(session_path.read_text(encoding="utf-8"))
+
+
+def save_manga_session(pdf_id: str, session: Dict) -> Dict:
+    session_path = _session_manifest_path(pdf_id)
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session["pdf_id"] = pdf_id
+    session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    session_path.write_text(json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8")
+    return session
+
+
+def update_manga_session(
+    pdf_id: str,
+    stage: str,
+    status: str = "running",
+    step_data: Optional[Dict] = None,
+    error: Optional[str] = None,
+) -> Dict:
+    session = load_manga_session(pdf_id)
+    session["stage"] = stage
+    session["status"] = status
+    if error:
+        session["error"] = error
+    else:
+        session.pop("error", None)
+    if step_data is not None:
+        session.setdefault("steps", {})[stage] = {
+            **step_data,
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return save_manga_session(pdf_id, session)
 
 
 def create_pdf_slides(pdf_id: str, audio_duration: float, output_path: Optional[Path] = None) -> Dict:

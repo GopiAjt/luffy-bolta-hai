@@ -40,3 +40,26 @@ export const generatePdfSlides = async (pdfId, audioId) => {
     await handleApiError(response);
     return parseJsonResponse(response);
 };
+
+export const generateMangaVideo = async (pdfId, topic = '', options = {}) => {
+    const response = await fetch('/api/v1/generate-manga-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            pdf_id: pdfId,
+            topic,
+            language: options.language || 'English',
+            subtitle_style: options.subtitleStyle || 'pro',
+            quality_mode: options.qualityMode || 'pro'
+        })
+    });
+
+    await handleApiError(response);
+    return parseJsonResponse(response);
+};
+
+export const getMangaSession = async (pdfId) => {
+    const response = await fetch(`/api/v1/manga-session/${pdfId}`);
+    await handleApiError(response);
+    return parseJsonResponse(response);
+};

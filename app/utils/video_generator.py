@@ -7,9 +7,11 @@ from typing import Optional, Dict, Any, List, Tuple, Union
 from pathlib import Path
 import tempfile
 import json
+from collections import deque
 
 
 from app.utils.subtitle_generator import SubtitleGenerator
+from app.config import BACKGROUND_MUSIC_VOLUME
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +37,52 @@ class VideoGenerator:
         """
         self.ffmpeg = ffmpeg_path
         self.ffprobe = ffprobe_path
+
+    def _temp_output_path(self, output_path: str) -> str:
+        path = Path(output_path)
+        return str(path.with_name(f".{path.name}.tmp{path.suffix}"))
+
+    def _run_ffmpeg(self, cmd: List[str]) -> None:
+        """Run FFmpeg while streaming progress into the app logs."""
+        logger.info("Starting FFmpeg process")
+        stderr_tail = deque(maxlen=80)
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stderr is not None
+        for line in process.stderr:
+            clean = line.rstrip()
+            if not clean:
+                continue
+            stderr_tail.append(clean)
+            if "frame=" in clean or "time=" in clean or "speed=" in clean:
+                logger.info("FFmpeg progress: %s", clean)
+            else:
+                logger.debug("FFmpeg: %s", clean)
+
+        return_code = process.wait()
+        if return_code != 0:
+            stderr = "\n".join(stderr_tail)
+            raise subprocess.CalledProcessError(return_code, cmd, stderr=stderr)
+
+    def _validate_media_file(self, output_path: str) -> None:
+        result = subprocess.run(
+            [
+                self.ffprobe,
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Output video is not readable: {result.stderr.strip()}")
 
     def get_audio_duration(self, audio_path: str) -> float:
         """
@@ -75,6 +123,7 @@ class VideoGenerator:
         font: str = 'Roboto',          
         convert_to_mp4: bool = True,
         quality_mode: str = 'standard',
+        background_music_path: Optional[str] = None,
     ) -> str:
         """
         Generate a video with audio and animated subtitles using MoviePy.
@@ -118,24 +167,48 @@ class VideoGenerator:
             duration = self.get_audio_duration(audio_path)
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
+            escaped_subtitle_path = str(subtitle_path).replace("'", r"\\'")
+
             if background_video_path and os.path.exists(background_video_path):
                 base_video_input = ['-i', str(background_video_path)]
-                filter_complex = f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone,subtitles='{subtitle_path}'[vout]"
                 audio_input_idx = 1
+                video_filter = f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone,subtitles='{escaped_subtitle_path}'[vout]"
             else:
                 base_video_input = [
                     '-f', 'lavfi',
                     '-i', f'color=c={color}:s={res_x}x{res_y}:d={duration}:r={fps}'
                 ]
-                filter_complex = f"[0:v]subtitles='{subtitle_path}'[vout]"
                 audio_input_idx = 1
+                video_filter = f"[0:v]subtitles='{escaped_subtitle_path}'[vout]"
+
+            extra_inputs = []
+            audio_map = f'{audio_input_idx}:a'
+            audio_filters = []
+            if background_music_path and os.path.exists(background_music_path):
+                music_input_idx = audio_input_idx + 1
+                extra_inputs = ['-stream_loop', '-1', '-i', str(background_music_path)]
+                music_volume = max(0.0, min(float(BACKGROUND_MUSIC_VOLUME), 1.0))
+                audio_filters = [
+                    f"[{music_input_idx}:a]atrim=0:{duration:.3f},asetpts=N/SR/TB,volume={music_volume:.3f}[bgm]",
+                    f"[bgm][{audio_input_idx}:a]sidechaincompress=threshold=0.035:ratio=10:attack=25:release=650[ducked]",
+                    f"[{audio_input_idx}:a][ducked]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
+                ]
+                audio_map = '[aout]'
+
+            filter_complex = ';'.join([video_filter, *audio_filters])
+
+            tmp_output_path = self._temp_output_path(output_path)
+            if os.path.exists(tmp_output_path):
+                os.remove(tmp_output_path)
 
             cmd = [
                 self.ffmpeg, '-y',
                 *base_video_input,
                 '-i', audio_path,
+                *extra_inputs,
                 '-filter_complex', filter_complex,
-                '-map', '[vout]', '-map', f'{audio_input_idx}:a',
+                '-map', '[vout]', '-map', audio_map,
+                '-t', f'{duration:.3f}',
                 '-c:v', 'libx264',
                 '-preset', 'slow' if pro_mode else 'medium',
                 '-crf', '19' if pro_mode else '23',
@@ -144,12 +217,14 @@ class VideoGenerator:
                 '-b:a', '192k',
                 '-movflags', '+faststart',
                 '-shortest',
-                str(output_path)
+                str(tmp_output_path)
             ]
             logger.info("Running FFmpeg video generation without expressions")
-            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-                raise RuntimeError(f"Output video file was not created: {output_path}")
+            self._run_ffmpeg(cmd)
+            if not os.path.exists(tmp_output_path) or os.path.getsize(tmp_output_path) == 0:
+                raise RuntimeError(f"Output video file was not created: {tmp_output_path}")
+            self._validate_media_file(tmp_output_path)
+            os.replace(tmp_output_path, output_path)
             logger.info(f"Successfully generated video at {output_path}")
             return output_path
 
@@ -397,6 +472,7 @@ class VideoGenerator:
         expr_img_dir: str = None,
         convert_to_mp4: bool = True,
         quality_mode: str = 'standard',
+        background_music_path: Optional[str] = None,
     ) -> str:
         """
         Generate a video with audio, burned-in subtitles, and facial expression overlays.
@@ -551,14 +627,34 @@ class VideoGenerator:
             # If color background is used, it's input 0 (lavfi color), then overlay images, then audio
             # input_idx is already incremented to the next available input index
             audio_input_idx = input_idx
+            extra_audio_inputs = []
+            audio_map = f'{audio_input_idx}:a'
+            if background_music_path and os.path.exists(background_music_path):
+                music_input_idx = audio_input_idx + 1
+                extra_audio_inputs = ['-stream_loop', '-1', '-i', str(background_music_path)]
+                music_volume = max(0.0, min(float(BACKGROUND_MUSIC_VOLUME), 1.0))
+                filter_steps.extend([
+                    f"[{music_input_idx}:a]atrim=0:{duration:.3f},asetpts=N/SR/TB,volume={music_volume:.3f}[bgm]",
+                    f"[bgm][{audio_input_idx}:a]sidechaincompress=threshold=0.035:ratio=10:attack=25:release=650[ducked]",
+                    f"[{audio_input_idx}:a][ducked]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
+                ])
+                filter_complex = ';'.join(filter_steps)
+                filter_complex_clean = filter_complex.replace('\n', '')
+                audio_map = '[aout]'
+
+            tmp_output_path = self._temp_output_path(output_path)
+            if os.path.exists(tmp_output_path):
+                os.remove(tmp_output_path)
 
             cmd = [
                 self.ffmpeg, '-y',
                 *base_video_input,  # Use the determined base video input
                 *overlay_inputs,
                 '-i', audio_path,
+                *extra_audio_inputs,
                 '-filter_complex', filter_complex_clean,  # Pass cleaned filtergraph as string
-                '-map', '[vout]', '-map', f'{audio_input_idx}:a',
+                '-map', '[vout]', '-map', audio_map,
+                '-t', f'{duration:.3f}',
                 '-c:v', 'libx264',
                 '-preset', 'slow' if pro_mode else 'medium',
                 '-crf', '19' if pro_mode else '23',
@@ -566,7 +662,7 @@ class VideoGenerator:
                 '-c:a', 'aac',
                 '-b:a', '192k',
                 '-movflags', '+faststart',
-                '-shortest', str(output_path)
+                '-shortest', str(tmp_output_path)
             ]
             
             # Log the full command and filter graph for debugging
@@ -579,13 +675,7 @@ class VideoGenerator:
                 logger.info(f"  Step {i}: {step}")
                 
             logger.info(f"Final filter complex string: {filter_complex_clean}")
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            self._run_ffmpeg(cmd)
             # Clean up temp filter script
             try:
                 os.remove(fscript_path)
@@ -596,14 +686,16 @@ class VideoGenerator:
                 logger.info(f"Temporary filter script kept at: {fscript_path}")
 
             # Verify the output file was created
-            if not os.path.exists(output_path):
-                logger.error(f"Output video file was not created: {output_path}")
-                raise FileNotFoundError(f"Output video file was not created: {output_path}")
+            if not os.path.exists(tmp_output_path):
+                logger.error(f"Output video file was not created: {tmp_output_path}")
+                raise FileNotFoundError(f"Output video file was not created: {tmp_output_path}")
             
-            output_size = os.path.getsize(output_path)
+            output_size = os.path.getsize(tmp_output_path)
             if output_size == 0:
-                logger.error(f"Output video file is empty: {output_path}")
-                raise RuntimeError(f"Output video file is empty: {output_path}")
+                logger.error(f"Output video file is empty: {tmp_output_path}")
+                raise RuntimeError(f"Output video file is empty: {tmp_output_path}")
+            self._validate_media_file(tmp_output_path)
+            os.replace(tmp_output_path, output_path)
                 
             # Convert to MP4 if needed
             if convert_to_mp4 and output_path.lower().endswith('.mkv'):

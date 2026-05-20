@@ -11,7 +11,7 @@ from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.image_slides import generate_image_slides
 from app.utils.generate_final_video import generate_final_video
-from app.utils.tts_generator import DEFAULT_VOICE_INSTRUCT, generate_voiceover
+from app.utils.tts_generator import generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
 from app.utils.manga_pdf_processor import (
     create_pdf_slides,
@@ -769,13 +769,12 @@ def get_manga_session_endpoint(pdf_id):
 @app.route('/api/v1/generate-voiceover', methods=['POST'])
 def generate_voiceover_endpoint():
     """
-    Generate a voiceover audio file from script text using Qwen3-TTS VoiceDesign.
+    Generate a voiceover audio file from script text using Qwen3-TTS voice cloning.
 
     Request:
     {
         "script": "Text to speak",
-        "language": "English",
-        "voice_instruct": "Natural language voice description"
+        "language": "English"
     }
 
     Returns:
@@ -785,7 +784,6 @@ def generate_voiceover_endpoint():
         data = request.json or {}
         script = data.get('script') or data.get('text')
         language = data.get('language', 'English')
-        voice_instruct = data.get('voice_instruct') or DEFAULT_VOICE_INSTRUCT
         video_profile = normalize_video_profile(data.get('video_profile'))
 
         if not script or not script.strip():
@@ -794,7 +792,6 @@ def generate_voiceover_endpoint():
         result = generate_voiceover(
             text=script,
             language=language,
-            instruct=voice_instruct,
             video_profile=video_profile,
         )
 

@@ -320,6 +320,7 @@ export class LuffyBoltHaiApp {
         console.log('handleGenerateScript called');
         const scriptOutput = document.getElementById('scriptOutput');
         const generateButton = document.getElementById('generateButton');
+        const scriptTopicInput = document.getElementById('scriptTopicInput');
 
         if (!scriptOutput) {
             throw new Error('scriptOutput element not found');
@@ -336,7 +337,8 @@ export class LuffyBoltHaiApp {
 
         try {
             console.log('Calling generateScript API');
-            const data = await generateScript(null, this.getVideoProfile());
+            const topic = scriptTopicInput ? scriptTopicInput.value.trim() : '';
+            const data = await generateScript(topic, this.getVideoProfile());
             console.log('Received response from generateScript:', data);
 
             if (!data || !data.output || !data.output.script) {
@@ -520,7 +522,7 @@ export class LuffyBoltHaiApp {
 
         const loadingMessages = [
             'Loading Qwen3-TTS on CPU...',
-            'Designing the voice...',
+            'Cloning from your voice sample...',
             'Generating speech audio...',
             'Still working. CPU generation can take a while...',
             'Almost there. Saving the voiceover soon...'

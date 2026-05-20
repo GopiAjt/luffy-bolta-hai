@@ -15,17 +15,32 @@ from app.utils.audio_processor import get_audio_duration
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-DEFAULT_VOICE_INSTRUCT = (
-    "Young energetic male anime narrator, Gen-Z fan energy. "
-    "Fast-paced, expressive, slightly dramatic. "
-    "Start immediately with a strong exciting hook, no intro pause. "
-    "Quick natural delivery, emotional highs and lows. "
-    "Very short pauses after shocking reveals only. "
-    "Brief slowdowns for major twists, then speed back up. "
-    "Strong debate-style ending. "
-    "Natural human imperfections, not robotic."
+DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+DEFAULT_VOICE_SAMPLE_PATH = Path(__file__).resolve().parents[1] / "data" / "Voice_Sample.wav"
+DEFAULT_VOICE_SAMPLE_TRANSCRIPT = (
+    "So chapter 1182 dropped and we gotta talk about Ragnar. "
+    "Imu's all like traitor about Nidhogg, "
+    "right? But then Ragnar appears, literally the hammer Ratatoskr"
 )
+DEFAULT_VOICE_INSTRUCT = """
+Young male anime-style narrator with consistent identity and stable pitch range.
+
+Maintain controlled energetic delivery with forward momentum.
+Avoid monotone speech and avoid exaggerated emotional swings.
+
+Emotional shaping depends on section mode:
+- HOOK: high urgency, fast, attention-grabbing
+- BUILDUP: steady, informative, curious
+- CLIMAX: powerful emphasis, controlled intensity, impactful pauses
+- RESOLVE: calm, stable conclusion
+
+Emphasis rules:
+- Limit emphasis to key words only
+- Use pitch variation, not volume spikes
+- Never flatten entire sentences
+
+Always maintain clarity and natural rhythm.
+"""
 
 _tts_model = None
 _tts_model_id = None
@@ -243,6 +258,18 @@ def _load_qwen_tts_model(model_id: str = DEFAULT_TTS_MODEL):
     return _tts_model
 
 
+def _voice_sample_path() -> Optional[Path]:
+    configured_path = os.getenv("QWEN_TTS_VOICE_SAMPLE_PATH")
+    sample_path = Path(configured_path).expanduser() if configured_path else DEFAULT_VOICE_SAMPLE_PATH
+    if not sample_path.exists():
+        return None
+    return sample_path
+
+
+def _voice_sample_transcript() -> str:
+    return os.getenv("QWEN_TTS_VOICE_SAMPLE_TRANSCRIPT", DEFAULT_VOICE_SAMPLE_TRANSCRIPT).strip()
+
+
 def generate_voiceover(
     text: str,
     output_dir: Path = UPLOADS_DIR,
@@ -252,7 +279,7 @@ def generate_voiceover(
     video_profile: str = "short_vertical",
 ) -> dict:
     """
-    Generate a voiceover WAV with Qwen3-TTS VoiceDesign.
+    Generate a voiceover WAV with Qwen3-TTS voice cloning.
 
     Returns a dict shaped like the upload endpoint response:
     {"id": filename, "duration": seconds, "path": full_path}
@@ -264,7 +291,13 @@ def generate_voiceover(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{uuid.uuid4()}.wav"
     raw_output_path = output_path.with_suffix(".raw.wav")
-    voice_instruct = (instruct or DEFAULT_VOICE_INSTRUCT).strip()
+    voice_sample_path = _voice_sample_path()
+    if voice_sample_path is None:
+        raise RuntimeError(
+            f"Voice sample not found. Add it at {DEFAULT_VOICE_SAMPLE_PATH} "
+            "or set QWEN_TTS_VOICE_SAMPLE_PATH."
+        )
+    voice_sample_transcript = _voice_sample_transcript()
     language = (language or "English").strip()
     video_profile = normalize_video_profile(video_profile)
 
@@ -290,7 +323,7 @@ def generate_voiceover(
         language,
         video_profile,
     )
-    logger.info("Voice design prompt: %s", voice_instruct)
+    logger.info("Using voice clone sample: %s", voice_sample_path)
 
     chunk_paths = []
     sample_rate = None
@@ -299,10 +332,12 @@ def generate_voiceover(
             chunk_path = output_path.with_suffix(f".part{idx}.raw.wav")
             logger.info("Generating TTS chunk %d/%d (%d chars)", idx, len(chunks), len(chunk))
             with _progress_logger(f"Qwen voiceover generation chunk {idx}/{len(chunks)}"):
-                wavs, sample_rate = model.generate_voice_design(
+                wavs, sample_rate = model.generate_voice_clone(
                     text=chunk,
                     language=language,
-                    instruct=voice_instruct,
+                    ref_audio=str(voice_sample_path),
+                    ref_text=voice_sample_transcript,
+                    x_vector_only_mode=False,
                 )
 
             if not wavs:

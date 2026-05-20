@@ -191,7 +191,16 @@
         <div class="section">
             <div class="text-center">
                 <h2><i class="bi bi-file-earmark-text me-2"></i>Generate Script</h2>
-                <p class="mb-4 text-white">Click the button to generate a new script about One Piece!</p>
+                <p class="mb-4 text-white">Add a topic or description, then generate a new script about One Piece.</p>
+                <div class="mb-3 text-start">
+                    <label for="scriptTopicInput" class="form-label text-white">Topic or description</label>
+                    <textarea
+                        class="form-control bg-dark text-white border-secondary"
+                        id="scriptTopicInput"
+                        rows="3"
+                        placeholder="Example: Why Shanks may know the truth about the One Piece"
+                    ></textarea>
+                </div>
                 <button id="generateButton" class="btn btn-success btn-lg">
                     <i class="bi bi-magic me-2"></i>Generate Script
                 </button>

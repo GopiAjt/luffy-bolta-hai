@@ -16,34 +16,45 @@ from app.utils.audio_processor import get_audio_duration
 logger = logging.getLogger(__name__)
 
 DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-DEFAULT_VOICE_SAMPLE_PATH = Path(__file__).resolve().parents[1] / "data" / "Voice_Sample.wav"
+DEFAULT_VOICE_SAMPLE_PATH = Path(__file__).resolve().parents[1] / "static" / "Sample_voice.wav"
 DEFAULT_VOICE_SAMPLE_TRANSCRIPT = (
     "So chapter 1182 dropped and we gotta talk about Ragnar. "
-    "Imu's all like traitor about Nidhogg, "
-    "right? But then Ragnar appears, literally the hammer Ratatoskr"
+    "Imu's all like traitor about Nidhogg, right? But then Ragnar appears, "
+    "literally the hammer Ratatoskr, but the kanji says ice squirrel. "
+    "What's up with that? This is where it gets wild. "
+    "The context says this is similar to how the Phoenix fruit has two readings. "
+    "I think the fruit's identity itself is split, "
+    "a hidden truth Oda's been setting up." 
+    "Is this a whole new level of power or a cosmic glitch?"
 )
-DEFAULT_VOICE_INSTRUCT = """
-Young male anime-style narrator with consistent identity and stable pitch range.
-
-Maintain controlled energetic delivery with forward momentum.
-Avoid monotone speech and avoid exaggerated emotional swings.
-
-Emotional shaping depends on section mode:
-- HOOK: high urgency, fast, attention-grabbing
-- BUILDUP: steady, informative, curious
-- CLIMAX: powerful emphasis, controlled intensity, impactful pauses
-- RESOLVE: calm, stable conclusion
-
-Emphasis rules:
-- Limit emphasis to key words only
-- Use pitch variation, not volume spikes
-- Never flatten entire sentences
-
-Always maintain clarity and natural rhythm.
-"""
-
 _tts_model = None
 _tts_model_id = None
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _qwen_generation_kwargs() -> dict:
+    """Expose conservative sampling knobs for more expressive Qwen delivery."""
+    kwargs = {
+        "do_sample": _env_bool("QWEN_TTS_DO_SAMPLE", True),
+        "top_k": int(os.getenv("QWEN_TTS_TOP_K", "50")),
+        "top_p": float(os.getenv("QWEN_TTS_TOP_P", "0.95")),
+        "temperature": float(os.getenv("QWEN_TTS_TEMPERATURE", "0.92")),
+        "repetition_penalty": float(os.getenv("QWEN_TTS_REPETITION_PENALTY", "1.05")),
+        "subtalker_dosample": _env_bool("QWEN_TTS_SUBTALKER_DO_SAMPLE", True),
+        "subtalker_top_k": int(os.getenv("QWEN_TTS_SUBTALKER_TOP_K", "50")),
+        "subtalker_top_p": float(os.getenv("QWEN_TTS_SUBTALKER_TOP_P", "0.95")),
+        "subtalker_temperature": float(os.getenv("QWEN_TTS_SUBTALKER_TEMPERATURE", "0.92")),
+    }
+    max_new_tokens = os.getenv("QWEN_TTS_MAX_NEW_TOKENS")
+    if max_new_tokens:
+        kwargs["max_new_tokens"] = int(max_new_tokens)
+    return kwargs
 
 
 def _split_paragraphs_for_tts(text: str) -> List[str]:
@@ -324,6 +335,9 @@ def generate_voiceover(
         video_profile,
     )
     logger.info("Using voice clone sample: %s", voice_sample_path)
+    if instruct:
+        logger.info("Ignoring text delivery instructions for Qwen voice-clone base model")
+    generation_kwargs = _qwen_generation_kwargs()
 
     chunk_paths = []
     sample_rate = None
@@ -338,6 +352,7 @@ def generate_voiceover(
                     ref_audio=str(voice_sample_path),
                     ref_text=voice_sample_transcript,
                     x_vector_only_mode=False,
+                    **generation_kwargs,
                 )
 
             if not wavs:

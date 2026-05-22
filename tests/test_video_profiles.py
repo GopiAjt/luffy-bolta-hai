@@ -1,7 +1,10 @@
 import unittest
 
 from app.config import get_video_profile_config, normalize_video_profile
-from app.utils.tts_generator import _split_text_for_tts
+from app.utils.tts_generator import (
+    _qwen_generation_kwargs,
+    _split_text_for_tts,
+)
 
 
 class VideoProfileTests(unittest.TestCase):
@@ -42,6 +45,13 @@ class VideoProfileTests(unittest.TestCase):
                 "Second paragraph becomes another chunk.",
             ],
         )
+
+    def test_tts_generation_kwargs_have_expressive_defaults(self):
+        kwargs = _qwen_generation_kwargs()
+        self.assertTrue(kwargs["do_sample"])
+        self.assertEqual(kwargs["top_k"], 50)
+        self.assertEqual(kwargs["top_p"], 0.95)
+        self.assertEqual(kwargs["temperature"], 0.92)
 
 
 if __name__ == "__main__":

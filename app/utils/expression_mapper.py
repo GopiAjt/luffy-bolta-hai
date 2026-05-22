@@ -48,7 +48,8 @@ def build_gemini_prompt(sub_lines):
     - "start": timestamp of when the line begins (in seconds or H:MM:SS format)\n
     - "end": timestamp of when the line ends\n
     - "text": the spoken line\n
-    - "expression": the facial expression label best suited for this line\n\n
+    - "expression": the facial expression label best suited for this line\n
+    - "character": the speaking or focal character when obvious (e.g. "luffy", "zoro", "sanji"); otherwise "luffy" for narrator-style videos\n\n
     Use only these labels: "neutral", "happy", "angry", "surprised", "sad", "smirking", "confident", "serious", "worried", "intense", "excited", "embarrassed" etc.\n\n
     Use tone, punctuation, emphasis, and keywords to infer emotion. Humor, sarcasm, or rhetorical questions should also influence the expression choice. You may also infer if the narrator is hyped or calm, authoritative or playful.\n\n
     Example Input:\n[\n  { "start": "0:00:01.00", "end": "0:00:04.00", "text": "Okay, here we go!" },\n  

@@ -4,7 +4,6 @@ import requests
 from typing import List, Dict, Optional, Set, Tuple
 import os
 from dotenv import load_dotenv
-import google.generativeai as genai
 import logging
 import time
 import shutil
@@ -13,6 +12,10 @@ import urllib.parse
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image, ImageOps
+
+from app.utils.oparchive_images import fetch_oparchive_images
+from app.utils.image_slides_llm import call_image_slides_llm
+from app.utils.broll_rules import classify_broll_intent, broll_source_order
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -25,12 +28,6 @@ logger.setLevel(logging.INFO)
 
 # Load environment variables from .env
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file")
-
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 # Fandom API settings
 FANDOM_API_URL = "https://onepiece.fandom.com/api.php"
@@ -306,29 +303,233 @@ def _extract_context_entities(text: str, limit: int = 8) -> List[str]:
     return entities[:limit]
 
 
+def _dedupe_query_words(query: str) -> str:
+    words = query.split()
+    seen = set()
+    unique = []
+    for word in words:
+        key = word.lower()
+        if key not in seen:
+            unique.append(word)
+            seen.add(key)
+    return " ".join(unique)
+
+
+def _meaningful_query_text(query: str) -> str:
+    """Keep middle initials (Monkey D. Luffy) when building search phrases."""
+    words = query.split()
+    merged: List[str] = []
+    for word in words:
+        if re.fullmatch(r"[A-Za-z]\.?", word) and merged:
+            merged[-1] = f"{merged[-1]} {word}"
+        else:
+            merged.append(word)
+    return " ".join(merged)
+
+
+def _query_without_one_piece(query: str) -> str:
+    words = _meaningful_query_text(query).split()
+    return " ".join(word for word in words if word.lower() not in {"one", "piece"})
+
+
 def _sanitize_image_query(query: str, summary: str, context_entities: List[str]) -> str:
-    query = re.sub(r"\b(one piece anime|anime screenshot|manga panel|fan art|wallpaper|dramatic|cinematic|close up)\b", "", query or "", flags=re.IGNORECASE)
+    """Normalize Gemini queries without re-prefixing on every pipeline pass."""
+    raw = (query or "").strip()
+    combined_lower = f"{raw} {summary}".lower()
+
+    # Preserve canonical transition / branding queries.
+    for term in ("one piece logo", "grand line map", "sunny ship", "one piece outro"):
+        if term in combined_lower or term in raw.lower():
+            return "One Piece Logo" if "logo" in term or "outro" in term else raw or "One Piece Logo"
+
+    query = re.sub(
+        r"\b(one piece anime|anime screenshot|manga panel|fan art|wallpaper|dramatic|cinematic|close up)\b",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
     query = re.sub(r"[^A-Za-z0-9 .'-]", " ", query)
     query = re.sub(r"\s+", " ", query).strip()
 
+    # Idempotent: do not stack script-wide anchors if they are already present.
+    if context_entities:
+        anchor = " ".join(context_entities[:2])
+        if anchor and query.lower().startswith(anchor.lower()):
+            return _dedupe_query_words(query)
+
     combined = f"{query} {summary}".lower()
     chosen_entities = [
-        entity for entity in context_entities
-        if entity.lower() in combined or any(alias in combined and canonical == entity for alias, canonical in ENTITY_ALIASES.items())
+        entity
+        for entity in context_entities
+        if re.search(r"\b" + re.escape(entity.lower()) + r"\b", combined)
+        or any(
+            re.search(r"\b" + re.escape(alias) + r"\b", combined) and canonical == entity
+            for alias, canonical in ENTITY_ALIASES.items()
+        )
     ]
-    if not chosen_entities:
-        chosen_entities = context_entities[:2]
 
-    query_words = [word for word in query.split() if len(word) > 2]
-    query_without_one_piece = " ".join(word for word in query_words if word.lower() not in {"one", "piece"})
+    query_without_one_piece = _query_without_one_piece(query)
+
     if chosen_entities:
         anchored = " ".join(chosen_entities[:2])
-        if query_without_one_piece and query_without_one_piece.lower() not in anchored.lower():
-            return f"{anchored} {query_without_one_piece}".strip()
+        if query_without_one_piece:
+            query_lower = query_without_one_piece.lower()
+            anchored_lower = anchored.lower()
+            if query_lower == anchored_lower or query_lower.startswith(anchored_lower + " "):
+                return _dedupe_query_words(query_without_one_piece)
+            missing = [
+                entity
+                for entity in chosen_entities[:2]
+                if entity.lower() not in query_lower
+            ]
+            if missing:
+                return _dedupe_query_words(f"{' '.join(missing)} {query_without_one_piece}".strip())
+            return _dedupe_query_words(query_without_one_piece)
         return anchored
+
     if query_without_one_piece:
-        return f"One Piece {query_without_one_piece}".strip()
+        # Keep multi-word proper nouns intact (Eiichiro Oda, Gol D. Roger) for Fandom/OPArchive.
+        if len(query_without_one_piece.split()) >= 2:
+            return _dedupe_query_words(query_without_one_piece)
+        return _dedupe_query_words(f"One Piece {query_without_one_piece}".strip())
     return "One Piece Logo"
+
+
+def _slide_context_entities(slide: Dict) -> List[str]:
+    """Per-slide entities for image matching (avoid script-wide anchor bleed)."""
+    blob = " ".join(
+        filter(
+            None,
+            [
+                slide.get("summary", ""),
+                slide.get("image_search_query", ""),
+            ],
+        )
+    )
+    return _extract_context_entities(blob, limit=6)
+
+
+_SLIDE_REQUIRED_KEYS = ("start_time", "end_time", "summary", "image_search_query")
+
+
+def _is_slide_dict(value: object) -> bool:
+    return isinstance(value, dict) and all(key in value for key in _SLIDE_REQUIRED_KEYS)
+
+
+def _normalize_parsed_slides(parsed: object) -> List[Dict]:
+    """Coerce LLM JSON into a list of slide dicts."""
+    if isinstance(parsed, list):
+        slides = [item for item in parsed if _is_slide_dict(item)]
+        if slides:
+            return slides
+        raise ValueError("LLM JSON array contained no valid slide objects")
+
+    if _is_slide_dict(parsed):
+        return [parsed]
+
+    if isinstance(parsed, dict):
+        for key in ("slides", "segments", "items", "data"):
+            nested = parsed.get(key)
+            if isinstance(nested, list):
+                return _normalize_parsed_slides(nested)
+
+    raise ValueError(
+        "LLM must return a JSON array of slides, not a single object or other shape"
+    )
+
+
+def _extract_json_array_candidates(text: str) -> List[str]:
+    """Find JSON array substrings when the model wraps or truncates output."""
+    candidates = []
+    stripped = text.strip()
+    if stripped:
+        candidates.append(stripped)
+
+    start = stripped.find("[")
+    while start != -1:
+        depth = 0
+        for idx in range(start, len(stripped)):
+            char = stripped[idx]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(stripped[start : idx + 1])
+                    break
+        start = stripped.find("[", start + 1)
+    return candidates
+
+
+def parse_image_slides_llm_response(response_text: str) -> List[Dict]:
+    """Parse and normalize slide JSON from any supported LLM backend."""
+    json_str = (response_text or "").strip()
+    if json_str.startswith("```json"):
+        json_str = json_str[7:]
+    elif json_str.startswith("```"):
+        json_str = json_str[3:]
+    if json_str.endswith("```"):
+        json_str = json_str[:-3]
+    json_str = json_str.strip()
+
+    errors = []
+    for candidate in _extract_json_array_candidates(json_str):
+        try:
+            parsed = json.loads(candidate)
+            return _normalize_parsed_slides(parsed)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            errors.append(str(exc))
+
+    # Last resort: single object without array wrapper
+    try:
+        parsed = json.loads(json_str)
+        return _normalize_parsed_slides(parsed)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        errors.append(str(exc))
+
+    detail = "; ".join(errors[:3])
+    raise ValueError(f"Could not parse image slides JSON from LLM response: {detail}")
+
+
+def _image_slides_rules_block(context_entities: List[str]) -> str:
+    entities_line = (
+        ", ".join(context_entities)
+        if context_entities
+        else "None detected; use One Piece Logo or Grand Line Map for transitions"
+    )
+    return (
+        "CRITICAL RULES:\n"
+        "1. Every query MUST reference at least one canonical One Piece entity.\n"
+        "2. Use OPArchive-friendly names: exact character (Monkey D. Luffy, Gol D. Roger) or island (Egghead, Marineford, Laugh Tale) — not 'Egghead Arc'.\n"
+        "3. Fandom works for Oda interviews, chapter panels, and scene screenshots (Eiichiro Oda, Luffy Chapter 1).\n"
+        "4. No adjectives like 'dramatic' or 'cinematic'.\n"
+        "5. Transitions → 'One Piece Logo' or 'Grand Line Map'.\n\n"
+        f"SCRIPT-WIDE ENTITIES: {entities_line}\n"
+        "Match each subtitle; do not invent unrelated characters.\n\n"
+        "MERGE short fragments (<4 words) with neighbors. MAX segment 3.5s; split longer ones.\n"
+        "Timestamps must be continuous within this batch.\n\n"
+        "OUTPUT: ONLY a JSON array. Each item: start_time, end_time, summary, image_search_query "
+        "(2–5 words, canonical entity names).\n"
+    )
+
+
+def _build_image_slides_full_prompt(
+    timestamped_dialogues: List[Dict],
+    context_entities: List[str],
+) -> str:
+    raw_subtitles = "\n".join(
+        f"{d['start']} - {d['end']}: {d['text']}" for d in timestamped_dialogues
+    )
+    return (
+        "You are an expert video content designer specializing in One Piece. "
+        "Map timestamped subtitles to image search queries as a JSON array.\n\n"
+        f"{_image_slides_rules_block(context_entities)}\n"
+        "EXAMPLE:\n"
+        '[{"start_time":"0:00:03.10","end_time":"0:00:06.60","summary":"Shanks at Mary Geoise",'
+        '"image_search_query":"Shanks Mary Geoise"}]\n\n'
+        "Subtitles:\n"
+        f"{raw_subtitles}\n"
+    )
 
 
 def _script_context_summary(dialogues: List[Dict]) -> Dict:
@@ -362,157 +563,62 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
     context_entities = script_context["entities"]
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
-    prompt = (
-        "You are an expert video content designer specializing in One Piece. "
-        "Your job is to map timestamped subtitle lines to visually engaging image search queries, "
-        "structured in JSON format.\n\n"
-
-        "CRITICAL RULES:\n"
-        "1. Every query MUST reference at least one canonical One Piece entity (character, arc, island, or crew).\n"
-        "2. You are optimizing for the One Piece Fandom Wiki (MediaWiki API) — not a general image search engine.\n"
-        "3. Use **short, canonical names** that directly match Fandom pages: characters (Luffy, Zoro, Shanks), arcs (Marineford, Dressrosa), or places (Mary Geoise, Wano Country).\n"
-        "4. Do NOT use adjectives like 'dramatic', 'close up', or cinematic words — they reduce Fandom search accuracy.\n"
-        "5. The `image_search_query` should ideally look like: 'Shanks Mary Geoise', 'Zoro Thriller Bark', 'Luffy Marineford', etc.\n"
-        "6. When possible, combine character + location or character + event for higher precision.\n"
-        "7. If multiple entities fit, choose the most specific combination (e.g., 'Shanks Reverie', not just 'Shanks').\n"
-        "8. Detect if the subtitle talks about power, event, or location.\n"
-        "9. Use appropriate query forms:\n"
-        "  * Power-related → 'Character + Power term'\n"
-        "  * Event-related → 'Character + Arc'\n"
-        "  * Neutral → 'Character'\n"
-        "  * Transition → 'Grand Line Map' or 'One Piece Logo'\n"
-        "10. NEVER include the phrase 'One Piece anime' in Fandom queries.\n\n"
-
-        "SCRIPT-WIDE CONTEXT:\n"
-        f"- Detected core entities: {', '.join(context_entities) if context_entities else 'None detected; use One Piece Logo or Grand Line Map for transitions'}.\n"
-        "- Every visual must match the local subtitle AND stay consistent with these core entities.\n"
-        "- Do not introduce unrelated characters or arcs just because they are popular.\n"
-        "- If the subtitle is a generic hook, use the most relevant detected core entity instead of a random famous character.\n\n"
-
-        "MERGE RULES (fragments):\n"
-        "- If a subtitle contains fewer than 4 words or is a fragment, merge it with adjacent subtitles "
-        "to form a meaningful sentence.\n"
-        "- Use the start_time of the first and end_time of the last merged fragment.\n\n"
-
-        "TIMESTAMP RULES:\n"
-        "- Maintain continuous timestamps (no gaps, no overlaps).\n"
-        "- If two subtitles overlap, merge them.\n"
-        "- If there's a gap, adjust previous end_time to match the next start_time.\n\n"
-
-        "SPLITTING RULES:\n"
-        "- MAX_DURATION = 3.5 seconds per segment.\n"
-        "- If a merged segment exceeds MAX_DURATION, split evenly into subsegments (<=3.5s each).\n"
-        "- Append '(part X/N)' in summary if split.\n\n"
-
-        "SEGMENT GUIDELINES:\n"
-        "- Normally map each subtitle line to one segment (after merging short fragments).\n"
-        "- Duration should be 1–4 seconds (never exceed 5s).\n"
-        "- Avoid merging more than 3 subtitles unless it's one continuous sentence.\n\n"
-
-        "VISUAL VARIETY:\n"
-        "- Rotate between characters, arcs, and settings (avoid using the same entity 3+ times in a row).\n"
-        "- If a scene is ambiguous, default to the primary speaker or most relevant location.\n\n"
-
-        "SILENCE HANDLING:\n"
-        "- If there’s silence before/after subtitles, fill with neutral transition slides using canonical entities "
-        "like 'One Piece Logo', 'Grand Line Map', or 'Sunny Ship'.\n\n"
-
-        "OUTPUT FORMAT (STRICT):\n"
-        "- Return ONLY a JSON array (no code fences or text).\n"
-        "- Each element must have exactly these keys:\n"
-        "  * start_time (string)\n"
-        "  * end_time (string)\n"
-        "  * summary (short paraphrase)\n"
-        "  * image_search_query (short Fandom-optimized query — canonical names only)\n"
-        "- Timestamps must be continuous: slides[i].end_time == slides[i+1].start_time.\n\n"
-
-        "EXAMPLES:\n"
-        "[\n"
-        "  {\n"
-        "    \"start_time\": \"0:00:03.10\",\n"
-        "    \"end_time\": \"0:00:06.60\",\n"
-        "    \"summary\": \"Shanks walks into Mary Geoise\",\n"
-        "    \"image_search_query\": \"Shanks Mary Geoise\"\n"
-        "  },\n"
-        "  {\n"
-        "    \"start_time\": \"0:00:06.60\",\n"
-        "    \"end_time\": \"0:00:09.80\",\n"
-        "    \"summary\": \"Zoro absorbs Luffy's pain (part 1/2)\",\n"
-        "    \"image_search_query\": \"Zoro Luffy Thriller Bark\"\n"
-        "  }\n"
-        "]\n\n"
-
-        "Now analyze the following timestamped subtitles, apply the fragment-merge and split logic, "
-        "ensure timestamps are continuous, and return ONLY a JSON array following the above rules:\n\n"
-        f"{raw_subtitles}"
-    )
-
-
     try:
-        response = model.generate_content(prompt)
-        if not response.text:
-            raise ValueError("Empty response from Gemini")
-        
-        # Log the raw response for debugging
-        logger.info(f"Raw Gemini response:\n{response.text}")
-            
-        # Parse the JSON response
-        try:
-            # Clean up the response to ensure valid JSON
-            json_str = response.text.strip()
-            if json_str.startswith('```json'):
-                json_str = json_str[7:]
-            if json_str.endswith('```'):
-                json_str = json_str[:-3]
-                
-            gemini_slides = json.loads(json_str)
-            logger.info(f"Successfully parsed {len(gemini_slides)} slides from Gemini response")
-            
-            # Create final slides using Gemini's grouping
-            final_slides = []
-            
-            # For each Gemini slide (which may cover multiple original subtitles)
-            for gemini_slide in gemini_slides:
-                # Create one slide per Gemini group with its own timing
-                slide = {
-                    'start_time': gemini_slide['start_time'],
-                    'end_time': gemini_slide['end_time'],
-                    'summary': gemini_slide['summary'],
-                    'image_search_query': _sanitize_image_query(
-                        gemini_slide['image_search_query'],
-                        gemini_slide['summary'],
-                        context_entities,
-                    ),
-                    'context_entities': context_entities,
-                }
-                
-                # Add image path if image_dir is provided
-                if image_dir:
-                    os.makedirs(image_dir, exist_ok=True)
-                    slide_hash = hashlib.md5(slide['image_search_query'].encode()).hexdigest()[:8]
-                    slide['image_path'] = os.path.join(image_dir, f"slide_{len(final_slides)+1:03d}_{slide_hash}.jpg")
-                
-                final_slides.append(slide)
-            
-            # Save the slides to a JSON file
-            with open(out_path, 'w', encoding='utf-8') as f:
-                json.dump(final_slides, f, indent=2, ensure_ascii=False)
-                
-            logger.info(f"Successfully generated {len(final_slides)} slides at {out_path}")
-            
-            # Download images if image_dir is provided
+        prompt = _build_image_slides_full_prompt(timestamped_dialogues, context_entities)
+        response_text = call_image_slides_llm(prompt)
+        if not response_text:
+            raise ValueError("Empty LLM response for image slides")
+
+        logger.info(f"Raw Gemini response:\n{response_text}")
+        gemini_slides = parse_image_slides_llm_response(response_text)
+        if len(gemini_slides) < 2 and len(timestamped_dialogues) > 3:
+            raise ValueError(
+                f"Gemini returned only {len(gemini_slides)} slide(s) for "
+                f"{len(timestamped_dialogues)} subtitle lines — response likely truncated."
+            )
+        logger.info(f"Successfully parsed {len(gemini_slides)} slides from Gemini response")
+
+        final_slides = []
+
+        for gemini_slide in gemini_slides:
+            slide_entities = _extract_context_entities(
+                f"{gemini_slide.get('summary', '')} {gemini_slide.get('image_search_query', '')}",
+                limit=6,
+            )
+            slide = {
+                'start_time': gemini_slide['start_time'],
+                'end_time': gemini_slide['end_time'],
+                'summary': gemini_slide['summary'],
+                'image_search_query': _sanitize_image_query(
+                    gemini_slide['image_search_query'],
+                    gemini_slide['summary'],
+                    slide_entities or context_entities,
+                ),
+                'context_entities': slide_entities or context_entities,
+            }
             if image_dir:
-                download_images_for_slides(out_path, image_dir)
-                
-            return out_path
-            
-        except (json.JSONDecodeError, _json.JSONDecodeError) as e:
-            logger.error(f"Failed to parse Gemini response as JSON: {e}")
-            logger.error(f"Response text: {response.text}")
-            raise
-            
+                os.makedirs(image_dir, exist_ok=True)
+                slide_hash = hashlib.md5(slide['image_search_query'].encode()).hexdigest()[:8]
+                slide['image_path'] = os.path.join(
+                    image_dir, f"slide_{len(final_slides)+1:03d}_{slide_hash}.jpg"
+                )
+            final_slides.append(slide)
+
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(final_slides, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Successfully generated {len(final_slides)} slides at {out_path}")
+
+        if image_dir:
+            download_images_for_slides(out_path, image_dir)
+
+        return out_path
+
+    except (TimeoutError, ConnectionError, RuntimeError, ValueError) as e:
+        logger.error(f"Error in generate_gemini_image_slides: {e}")
+        raise
     except Exception as e:
-        logger.error(f"Error in generate_gemini_image_slides: {str(e)}")
+        logger.error(f"Unexpected error in generate_gemini_image_slides: {e}")
         raise
 
 
@@ -620,6 +726,43 @@ def _is_duplicate_image(item: Dict, downloaded_hashes: Set[str]) -> Tuple[bool, 
         
     image_hash = _get_image_hash(image_url)
     return (image_hash in downloaded_hashes, image_hash)
+
+def download_catalog_image(
+    url: str,
+    save_path: str,
+    timeout: int = 10,
+    min_width: int = 200,
+    min_height: int = 150,
+    upscale_to: Tuple[int, int] = (1080, 1920),
+) -> bool:
+    """
+    Download OPArchive / catalog art (often small WebP cards) and upscale for vertical video.
+    """
+    temp_path = f"{save_path}.catalog"
+    if not download_image(url, temp_path, timeout=timeout, min_width=min_width, min_height=min_height):
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return False
+    try:
+        target_w, target_h = upscale_to
+        from app.utils.image_composition import compose_vertical_subject
+
+        with Image.open(temp_path) as image:
+            image = ImageOps.exif_transpose(image.convert("RGB"))
+            composed = compose_vertical_subject(image, (target_w, target_h))
+            composed.save(save_path, "JPEG", quality=92, optimize=True)
+        os.remove(temp_path)
+        return True
+    except Exception as exc:
+        logger.warning("Catalog upscale failed for %s: %s", url, exc)
+        if os.path.exists(temp_path):
+            try:
+                os.rename(temp_path, save_path)
+                return True
+            except OSError:
+                os.remove(temp_path)
+        return False
+
 
 def download_image(url: str, save_path: str, timeout: int = 10, min_width: int = 360, min_height: int = 260) -> bool:
     """Download an image from a URL to a given path with improved error handling.
@@ -1119,12 +1262,8 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
         if not search_query:
             logger.warning(f"[Slide {idx+1}] No image_search_query")
             continue
-        search_query = _sanitize_image_query(
-            search_query,
-            slide.get("summary", ""),
-            slide.get("context_entities", []),
-        )
-        slide["image_search_query"] = search_query
+        # Queries are sanitized when slides are generated; avoid double-prefixing here.
+        search_query = _dedupe_query_words(search_query.strip())
 
         logger.info(f"[Slide {idx+1}] Processing query: {search_query}")
 
@@ -1139,7 +1278,63 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
             if q.lower() != "one piece" or search_query.lower() == "one piece" or "logo" in search_query.lower()
         ]
 
-        # 1) First try One Piece Fandom API for high-quality, relevant images
+        slide_entities = _slide_context_entities(slide)
+        broll_intent = classify_broll_intent(
+            search_query,
+            slide.get("summary", ""),
+            slide_entities,
+        )
+        slide["broll_intent"] = broll_intent
+        logger.info(
+            f"[Slide {idx+1}] Auto B-roll intent={broll_intent} "
+            f"(order: {' -> '.join(broll_source_order(broll_intent))})"
+        )
+
+        # OPArchive first when intent prefers catalog art (characters / islands)
+        if not downloaded and broll_intent == "oparchive_first":
+            logger.info(f"[Slide {idx+1}] Trying OPArchive for: {search_query}")
+            oparchive_images = fetch_oparchive_images(
+                search_query,
+                slide_entities,
+                max_results=8,
+                used_url_hashes=downloaded_hashes,
+            )
+            for img in oparchive_images:
+                if downloaded:
+                    break
+                try:
+                    image_hash = _get_image_hash(img["url"])
+                    if image_hash in downloaded_hashes:
+                        logger.info(
+                            f"[Slide {idx+1}] Skipping already-used OPArchive image: {img.get('title')}"
+                        )
+                        continue
+                    filename = f"slide_{idx+1:03d}_oparchive_{image_hash[:8]}.jpg"
+                    save_path = os.path.join(out_dir, filename)
+                    if download_catalog_image(img["url"], save_path):
+                        downloaded_hashes.add(image_hash)
+                        slide["image_path"] = save_path
+                        slide["image_source"] = img.get("source", "oparchive")
+                        slide["image_title"] = img.get("title", "")
+                        slide["image_score"] = img.get("score", _image_relevance_score(img, search_query))
+                        last_downloaded_path = save_path
+                        previous_images.append({
+                            "path": save_path,
+                            "keywords": _query_keywords(search_query),
+                            "index": idx,
+                        })
+                        downloaded = True
+                        logger.info(
+                            f"[Slide {idx+1}] Downloaded from OPArchive: {os.path.basename(save_path)}"
+                        )
+                        break
+                except Exception as e:
+                    logger.warning(f"[Slide {idx+1}] OPArchive image error: {e}")
+                    continue
+            if not downloaded and not oparchive_images:
+                logger.info(f"[Slide {idx+1}] No OPArchive matches for: {search_query}")
+
+        # Fandom — panels, Oda, interviews, arc screenshots (often first for scene/meta)
         if not downloaded:
             duplicate_fandom_count = 0
             for fandom_query in fandom_queries:
@@ -1191,8 +1386,47 @@ def download_images_for_slides(json_path: str, out_dir: str) -> None:
                     f"[Slide {idx+1}] Fandom only returned duplicate images "
                     f"({duplicate_fandom_count} skipped); trying other sources."
                 )
-        
-        # 2) Fall back to Google CSE with priority domains if Fandom didn't work
+
+        # OPArchive after Fandom when intent is scene/meta/branding
+        if not downloaded and broll_intent != "oparchive_first":
+            logger.info(f"[Slide {idx+1}] Trying OPArchive (after Fandom) for: {search_query}")
+            oparchive_images = fetch_oparchive_images(
+                search_query,
+                slide_entities,
+                max_results=8,
+                used_url_hashes=downloaded_hashes,
+            )
+            for img in oparchive_images:
+                if downloaded:
+                    break
+                try:
+                    image_hash = _get_image_hash(img["url"])
+                    if image_hash in downloaded_hashes:
+                        continue
+                    filename = f"slide_{idx+1:03d}_oparchive_{image_hash[:8]}.jpg"
+                    save_path = os.path.join(out_dir, filename)
+                    if download_catalog_image(img["url"], save_path):
+                        downloaded_hashes.add(image_hash)
+                        slide["image_path"] = save_path
+                        slide["image_source"] = img.get("source", "oparchive")
+                        slide["image_title"] = img.get("title", "")
+                        slide["image_score"] = img.get("score", _image_relevance_score(img, search_query))
+                        last_downloaded_path = save_path
+                        previous_images.append({
+                            "path": save_path,
+                            "keywords": _query_keywords(search_query),
+                            "index": idx,
+                        })
+                        downloaded = True
+                        logger.info(
+                            f"[Slide {idx+1}] Downloaded from OPArchive: {os.path.basename(save_path)}"
+                        )
+                        break
+                except Exception as e:
+                    logger.warning(f"[Slide {idx+1}] OPArchive image error: {e}")
+                    continue
+
+        # Google CSE — priority domains, then generic
         if not downloaded and google_cse_available:
             combined_site_filter = "(" + " OR ".join([f"site:{d}" for d in PRIORITY_DOMAINS[1:]]) + ")"  # Skip fandom.com as we already tried it
             for q in candidate_queries:

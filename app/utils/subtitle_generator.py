@@ -15,6 +15,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DEVANAGARI_RE = re.compile(r'[\u0900-\u097F]')
+KEYWORD_SUBTITLE_STYLES = frozenset(
+    {"clean_pro", "manga_panel", "manga_hype", "emotional", "dark_lore", "void_century", "action", "yonko_hype"}
+)
+KEYWORD_BOOST_RE = re.compile(
+    r"^(\d{4}|\d{3,}|\d{1,3}(?:,\d{3})+|chapter\s*\d+|arc|final|saga|revealed?|truth|laugh tale|one piece)$",
+    re.IGNORECASE,
+)
 
 class SubtitleGenerator:
     # One Piece specific terms for enhanced styling
@@ -482,6 +489,58 @@ class SubtitleGenerator:
                 "noun": {"color": "00CED1", "outline": "000000", "bold": False, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 100},
                 "other": {"color": "FFFFFF", "outline": "000000", "bold": False, "font": "'Comic Sans MS', 'Comic Neue', 'Marker Felt', 'Chalkboard SE', sans-serif", "size": 95}
             },
+            "clean_pro": {
+                'name': 'Clean Pro Shorts',
+                'default': {'size': 78, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFFFFF', 'outline': '000000'},
+                'character': {'size': 96, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '00D4FF', 'outline': '000000'},
+                'power': {'size': 92, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFD700', 'outline': '000000'},
+                'location': {'size': 90, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '90EE90', 'outline': '000000'},
+                'title': {'size': 94, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFCC00', 'outline': '000000'},
+                'emotion': {'size': 88, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFB6C1', 'outline': '000000'},
+                'proper_noun': {'size': 90, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFFFFF', 'outline': '000000'},
+                'verb': {'size': 80, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'EEEEEE', 'outline': '000000'},
+                'noun': {'size': 82, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'FFFFFF', 'outline': '000000'},
+                'other': {'size': 78, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'DDDDDD', 'outline': '000000'},
+            },
+            "manga_panel": {
+                'name': 'Manga Panel',
+                'default': {'size': 88, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 3},
+                'character': {'size': 118, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 4},
+                'power': {'size': 108, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': '00008B', 'outline': 'FFFFFF', 'outline_width': 3},
+                'location': {'size': 102, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': '8B4513', 'outline': 'FFFFFF', 'outline_width': 3},
+                'title': {'size': 112, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': 'B8860B', 'outline': 'FFFFFF', 'outline_width': 4},
+                'emotion': {'size': 100, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': '8B0000', 'outline': 'FFFFFF', 'outline_width': 3},
+                'proper_noun': {'size': 110, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 3},
+                'verb': {'size': 92, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 2},
+                'noun': {'size': 96, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 2},
+                'other': {'size': 88, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '000000', 'outline': 'FFFFFF', 'outline_width': 2},
+            },
+            "void_century": {
+                'name': 'Void Century',
+                'default': {'size': 80, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'C0C0C0', 'outline': '000000'},
+                'character': {'size': 100, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '87CEEB', 'outline': '1a1a2e'},
+                'power': {'size': 96, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': '9370DB', 'outline': '1a1a2e'},
+                'location': {'size': 92, 'bold': True, 'italic': True, 'font': 'DejaVu Sans', 'color': '708090', 'outline': '000000'},
+                'title': {'size': 98, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'E6E6FA', 'outline': '000000'},
+                'emotion': {'size': 90, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'DDA0DD', 'outline': '000000'},
+                'proper_noun': {'size': 94, 'bold': True, 'italic': False, 'font': 'DejaVu Sans', 'color': 'F0F8FF', 'outline': '000000'},
+                'verb': {'size': 82, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'D3D3D3', 'outline': '000000'},
+                'noun': {'size': 84, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'C0C0C0', 'outline': '000000'},
+                'other': {'size': 80, 'bold': False, 'italic': False, 'font': 'DejaVu Sans', 'color': 'A9A9A9', 'outline': '000000'},
+            },
+            "yonko_hype": {
+                'name': 'Yonko Hype',
+                'default': {'size': 86, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF', 'outline': '000000'},
+                'character': {'size': 120, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FF4500', 'outline': '000000'},
+                'power': {'size': 110, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFD700', 'outline': '000000'},
+                'location': {'size': 100, 'bold': True, 'italic': False, 'font': 'Impact', 'color': '00FF7F', 'outline': '000000'},
+                'title': {'size': 115, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FF1493', 'outline': '000000'},
+                'emotion': {'size': 105, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FF6347', 'outline': '000000'},
+                'proper_noun': {'size': 108, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFF00', 'outline': '000000'},
+                'verb': {'size': 92, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF', 'outline': '000000'},
+                'noun': {'size': 94, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'FFFFFF', 'outline': '000000'},
+                'other': {'size': 86, 'bold': True, 'italic': False, 'font': 'Impact', 'color': 'F5F5F5', 'outline': '000000'},
+            },
             "horror": {
                 'name': 'Horror Theme',
                 "character": {"color": "FF0000", "outline": "000000", "bold": True, "font": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif", "size": 100},
@@ -495,8 +554,15 @@ class SubtitleGenerator:
             }
         }
         
-        # Return the requested style or default to 'epic' if not found
-        return styles.get(style_name.lower(), styles['epic'])
+        aliases = {
+            "manga_hype": "manga_panel",
+            "dark_lore": "void_century",
+            "action": "yonko_hype",
+        }
+        key = aliases.get(style_name.lower(), style_name.lower())
+        if key == "emotional":
+            return styles.get("dramatic", styles["epic"])
+        return styles.get(key, styles["epic"])
 
     def _get_word_style_type(self, word: str, tag: str, style: dict) -> str:
         """Determine the most appropriate style type for a word based on its content and POS tag."""
@@ -624,6 +690,37 @@ class SubtitleGenerator:
         wrapped = self._wrap_subtitle_text(phrase)
         return f"{{\\fad(80,80)}}{wrapped}"
 
+    def _is_keyword_boost(self, word: str) -> bool:
+        clean = re.sub(r"[^\w\s'-]", "", word).strip()
+        if not clean:
+            return False
+        if KEYWORD_BOOST_RE.match(clean):
+            return True
+        if clean.isupper() and len(clean) > 2:
+            return True
+        if clean[0].isupper() and len(clean) > 3 and clean.lower() not in {"the", "and", "for", "with"}:
+            return self._is_one_piece_term(clean.lower(), self._CHARACTERS | self._LOCATIONS | self._TITLES | self._POWERS)
+        return False
+
+    def _style_phrase_keyword(self, phrase: str) -> str:
+        """Keyword-highlighted captions for faceless anime Shorts."""
+        self._ensure_nltk()
+        tokens = nltk.word_tokenize(phrase)
+        tags = nltk.pos_tag(tokens)
+        style = self._get_style_config(self.style)
+        styled = []
+        for word, tag in tags:
+            if not word.strip():
+                continue
+            style_type = self._get_word_style_type(word, tag, style)
+            word_style = dict(style.get(style_type, style["default"]))
+            if self._is_keyword_boost(word):
+                word_style["size"] = int(word_style.get("size", 85) * 1.14)
+                word_style["bold"] = True
+            styled.append(self._apply_style(word, word_style))
+        wrapped = self._wrap_subtitle_text(" ".join(styled), max_chars=24, max_lines=2)
+        return f"{{\\fad(70,70)}}{wrapped}"
+
     def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920') -> None:
         """
         Generate a visually rich, dynamically styled ASS subtitle file using NLTK.
@@ -639,14 +736,28 @@ class SubtitleGenerator:
                 f"Invalid resolution '{resolution}', defaulting to 1080x1920")
             res_x, res_y = 1080, 1920
 
-        pro_mode = self.style == 'pro'
+        keyword_mode = self.style in KEYWORD_SUBTITLE_STYLES
+        pro_mode = self.style == 'pro' and not keyword_mode
         has_devanagari = any(DEVANAGARI_RE.search(str(phrase.get('text', ''))) for phrase in phrases)
         default_font = (self._get_devanagari_font() if has_devanagari else None) or "DejaVu Sans"
-        default_font_size = 82 if pro_mode else 72
-        outline = 5 if pro_mode else 3
-        shadow = 2 if pro_mode else 1
-        alignment = 2 if pro_mode else 5
-        margin_v = int(res_y * 0.17) if pro_mode else 0
+        if keyword_mode:
+            default_font_size = 76
+            outline = 4
+            shadow = 2
+            alignment = 2
+            margin_v = int(res_y * 0.16)
+        elif pro_mode:
+            default_font_size = 82
+            outline = 5
+            shadow = 2
+            alignment = 2
+            margin_v = int(res_y * 0.17)
+        else:
+            default_font_size = 72
+            outline = 3
+            shadow = 1
+            alignment = 5
+            margin_v = 0
 
         header = textwrap.dedent(f"""
             [Script Info]
@@ -693,7 +804,12 @@ class SubtitleGenerator:
                 else:
                     logger.debug(f"Allowing minor overlap ({overlap:.2f}s) for: {phrase_text}")
             
-            ass_text = self._style_phrase_pro(phrase_text) if pro_mode else self._style_phrase(phrase_text)
+            if pro_mode:
+                ass_text = self._style_phrase_pro(phrase_text)
+            elif keyword_mode:
+                ass_text = self._style_phrase_keyword(phrase_text)
+            else:
+                ass_text = self._style_phrase(phrase_text)
             content.append(
                 f"Dialogue: 0,{start},{end},Default,,0,0,0,,{ass_text}\n")
             last_end = max(last_end, phrase['end'])  # Update to the latest end time

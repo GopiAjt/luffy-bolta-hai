@@ -5,21 +5,20 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-import google.generativeai as genai
-from google.generativeai.types import GenerationConfig
 from dotenv import load_dotenv
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - exercised only when dependency is missing at runtime.
+    OpenAI = None
 
 from app.config import normalize_video_profile
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-if not api_key:
-    raise ValueError("Set GOOGLE_API_KEY or GEMINI_API_KEY in your .env file")
-
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel("gemini-2.5-flash")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+NVIDIA_MODEL = os.getenv("NVIDIA_SCRIPT_MODEL", "deepseek-ai/deepseek-v4-pro")
 
 REQUIRED_SECTIONS = ("title", "script", "description", "hashtags")
 BANNED_HOOK_RE = re.compile(
@@ -36,6 +35,33 @@ CANON_ANCHOR_RE = re.compile(
     r"marineford|enies lobby|wano|egghead|mary geoise|mariejois|elbaf|ohara|"
     r"dressrosa|alabasta|skypiea|whole cake|fishman island|sabaody|god valley|"
     r"onigashima|water 7|thriller bark|impel down|zou)\b",
+    re.IGNORECASE,
+)
+ONE_PIECE_ENTITIES_RE = re.compile(
+    r"\b("
+    r"luffy|zoro|nami|usopp|sanji|chopper|robin|franky|brook|jinbe|"
+    r"shanks|blackbeard|kaido|big mom|whitebeard|roger|rayleigh|garp|"
+    r"dragon|ace|sabo|law|hancock|crocodile|doflamingo|katakuri|"
+    r"vegapunk|kuma|bonney|imu|gorosei|five elders|cp9|cp0|"
+    r"merry|going merry|sunny|thousand sunny|moby dick|oro jackson|"
+    r"chapter\s+\d+|episode\s+\d+|sbs(?:\s+vol(?:ume)?\.?\s*\d+)?|volume\s+\d+|"
+    r"marineford|enies lobby|wano|egghead|mary geoise|mariejois|ohara|sabaody|"
+    r"water 7|thriller bark|impel down|alabasta|skypiea|whole cake|"
+    r"fishman island|dressrosa|zou|elbaf|god valley|onigashima|"
+    r"devil fruit|haki|conqueror|armament|observation|"
+    r"void century|poneglyph|ancient weapon|pluton|poseidon|uranus|"
+    r"klabautermann|will of d|joy boy|joyboy|nika|sun god"
+    r")\b",
+    re.IGNORECASE,
+)
+HOLLOW_CONTENT_RE = re.compile(
+    r"\b("
+    r"one\s+\w+,\s+one\s+\w+,\s+and\s+one\s+\w+|"
+    r"the scene looks simple(?: at first)?(?:,)? but oda hides|"
+    r"behind the curtain|"
+    r"not random(?:\s+\w+)?(?:,)? it was setup|"
+    r"my payoff is simple"
+    r")\b",
     re.IGNORECASE,
 )
 STOPWORDS = {
@@ -63,8 +89,8 @@ SUBJECT_SYNONYMS = {
     "hats": "straw hat",
 }
 GENERATION_SETTINGS = {
-    "short_vertical": {"temperature": 0.7, "top_p": 0.9, "max_output_tokens": 1200},
-    "long_youtube": {"temperature": 0.7, "top_p": 0.9, "max_output_tokens": 5000},
+    "short_vertical": {"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
+    "long_youtube": {"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
 }
 REQUIRED_OUTPUT_TEMPLATE = (
     "TITLE: <one title under 80 characters>\n\n"
@@ -87,6 +113,59 @@ class ValidationResult:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+
+@dataclass
+class ModelResponse:
+    text: str
+
+
+class NvidiaScriptModel:
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: str = NVIDIA_BASE_URL,
+        model_name: str = NVIDIA_MODEL,
+    ):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model_name = model_name
+        self._client = None
+
+    def _get_client(self):
+        if self._client is not None:
+            return self._client
+        if OpenAI is None:
+            raise ValueError("Install the openai package to use NVIDIA script generation")
+        if not self.api_key:
+            raise ValueError("Set NVIDIA_API_KEY in your .env file")
+        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        return self._client
+
+    def generate_content(self, prompt: str, generation_config: Optional[dict] = None) -> ModelResponse:
+        config = generation_config or {}
+        completion = self._get_client().chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=config.get("temperature", 0.7),
+            top_p=config.get("top_p", 0.9),
+            max_tokens=config.get("max_tokens", config.get("max_output_tokens", 1200)),
+            extra_body={"chat_template_kwargs": {"thinking": False}},
+            stream=True,
+        )
+
+        parts = []
+        for chunk in completion:
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            if content is not None:
+                parts.append(content)
+        return ModelResponse("".join(parts))
+
+
+model = NvidiaScriptModel(api_key=NVIDIA_API_KEY)
 
 
 def is_generic_topic(topic: str) -> bool:
@@ -281,7 +360,7 @@ def _profile_blocks(video_profile: str, language_label: str, power_words_rule: s
     blueprint = (
         "SHORT-FORM QUALITY BLUEPRINT:\n"
         "- HOOK, first 10 words: state an impossible-sounding fact or concrete claim. No questions.\n"
-        "- EVIDENCE, next 40 words: name one canon anchor and one specific visual, behavior, quote, or scene detail.\n"
+        "- EVIDENCE, next 40 words: name one canon anchor (chapter number or arc) and one detail with a character name, exact quote, panel description, or named location. WRONG: 'one pause tells us the truth' has no character, chapter, or quote. RIGHT: 'In Chapter 430, Merry says I was so happy, echoing the klabautermann mystery from Water 7.'\n"
         "- PAYOFF, next 25 words: state the theory as a declarative claim that answers the title.\n"
         "- CTA, final 10-15 words: ask for debate only after the payoff, then add a follow CTA.\n"
         "- The chain must stay simple: anchor -> clue -> connection -> claim.\n"
@@ -331,6 +410,11 @@ def _build_prompt(
         "- Do NOT invent connections between characters, fruits, powers, bloodlines, or events not shown in canon/context.\n"
         "- If the topic has no confirmed catastrophic role, reframe around what is confirmed instead of exaggerating.\n"
         "- Before writing, ask: is this claim sourced from manga/context? If no, remove it.\n\n"
+        "CONTENT SPECIFICITY RULES:\n"
+        "- Every evidence sentence must name at least one of: character name, chapter number, arc name, island, quoted dialogue, or specific manga visual detail.\n"
+        "- BANNED hollow sentence patterns: 'one reaction, one pause, and one choice', 'the scene looks simple but Oda hides', 'secret motive behind the curtain', 'not random, it was setup', and generic payoff-label phrases.\n"
+        "- If you cannot name a specific chapter, character, scene, quote, location, or canon term for a claim, remove the claim.\n"
+        "- The evidence section must contain at least 2 named One Piece entities: characters, chapters, locations, ships, powers, or canon terms.\n\n"
         "HOOK RULES - MANDATORY:\n"
         "- NEVER open with Remember, Think about, What if, Imagine, Did you, Do you, or any question.\n"
         "- Open with a declarative statement of fact or an impossible-sounding claim.\n"
@@ -368,6 +452,8 @@ def _build_prompt(
         "- Did punctuation create breath, weight, suspense, and impact without stage directions? If no, rewrite.\n"
         "- Does sentence length move from punchy hook to evidence rhythm to confident payoff? If no, rewrite.\n"
         "- Are reveal words easy to say aloud, with clear consonants and no awkward clusters? If no, rewrite.\n"
+        "- Does the evidence section name at least 2 specific characters, chapters, locations, ships, powers, or canon terms? If no, rewrite with real named details.\n"
+        "- Does any sentence describe the shape of evidence without naming the evidence, like 'one pause', 'one choice', or 'a hidden clue'? If yes, replace it with the actual detail.\n"
         "- Did the script end with a question instead of a payoff? If yes, add the payoff first.\n"
         "- Is there one clear canon anchor in the first two sentences? If no, rewrite.\n"
         "- Did any phrase come from a third language like Indonesian/Malay? If yes, remove it.\n"
@@ -377,12 +463,10 @@ def _build_prompt(
         "- Randomly use one tone: shocking question, urgent warning, hidden truth, impossible claim.\n"
         f"{language_config['title_rule']}\n"
         f"{script_requirements}"
-        "REFERENCE STYLE EXAMPLE (do not copy, match quality only):\n"
-        "SCRIPT: Chapter 907 puts Shanks inside Mary Geoise. "
-        "That single room changes how his warning reads. "
-        "The Five Elders do not treat him like a normal pirate, and that is the clue. "
-        "My payoff is simple: Shanks knows a government secret most pirates never reach. "
-        "Is that protection or manipulation? Follow for the next hidden One Piece truth.\n\n"
+        "SPECIFICITY STANDARD - the difference between failing and passing:\n"
+        "WEAK (fails): One reaction and one pause tell us the truth is bigger than the obvious answer.\n"
+        "STRONG (passes): In Chapter 430, Merry says I was so happy, and Water 7 already framed that voice through the klabautermann mystery.\n"
+        "The STRONG version names a chapter, quotes dialogue, names a canon term, and connects specific moments. Every evidence sentence must meet this standard.\n\n"
         "DESCRIPTION REQUIREMENTS:\n"
         "- Must be 5-6 bullet points.\n"
         "- Each bullet should be punchy and personal.\n"
@@ -450,6 +534,14 @@ def _normalize_keywords(text: str) -> set:
     return normalized
 
 
+def _count_named_entities(text: str) -> int:
+    return len({match.group(0).lower() for match in ONE_PIECE_ENTITIES_RE.finditer(text or "")})
+
+
+def _extract_chapter_numbers(text: str) -> List[int]:
+    return [int(number) for number in re.findall(r"\bchapter\s+(\d+)\b", text or "", re.IGNORECASE)]
+
+
 def _is_question_hook(hook: str) -> bool:
     return bool(QUESTION_START_RE.search(hook)) and hook.strip().endswith("?")
 
@@ -477,6 +569,7 @@ def validate_generated_script(
     result: Dict[str, str],
     video_profile: str = "short_vertical",
     chapter_number: Optional[int] = None,
+    topic: str = "",
 ) -> ValidationResult:
     """Validate obvious structural quality failures without judging deep canon truth."""
     video_profile = normalize_video_profile(video_profile)
@@ -518,6 +611,27 @@ def validate_generated_script(
 
     if chapter_number and not re.search(rf"\bchapter\s+{re.escape(str(chapter_number))}\b", opening, re.IGNORECASE):
         errors.append(f"Chapter-locked script must open with Chapter {chapter_number}")
+
+    entity_count = _count_named_entities(script)
+    if entity_count < 2:
+        errors.append(
+            f"Script contains only {entity_count} named One Piece entity/entities. "
+            "Include at least 2 specific names, chapter numbers, locations, ships, powers, or canon terms."
+        )
+    elif entity_count < 4:
+        warnings.append(
+            f"Script has only {entity_count} named entities; add more specific canon details for stronger credibility"
+        )
+
+    topic_chapters = _extract_chapter_numbers(topic)
+    script_chapters = _extract_chapter_numbers(script)
+    if topic_chapters and script_chapters and not any(chapter in topic_chapters for chapter in script_chapters):
+        warnings.append(
+            f"Topic references chapter(s) {topic_chapters} but script cites chapter(s) {script_chapters}; verify the chapter anchor is correct"
+        )
+
+    if HOLLOW_CONTENT_RE.search(script):
+        errors.append("Script contains hollow template phrasing instead of specific named evidence")
 
     title_terms = _normalize_keywords(title)
     script_terms = _normalize_keywords(script)
@@ -567,6 +681,8 @@ def _retry_prompt(
         "- Use punctuation as pacing: commas for breath, full stops for impact, dashes for weight, ellipses only for suspense.\n"
         "- Vary sentence length for emotional rhythm: short hook, medium evidence, longer payoff, crisp CTA.\n"
         "- Choose reveal words that sound clean aloud; avoid awkward tongue-twisting clusters.\n"
+        "- Include at least 2 named One Piece entities: characters, chapters, locations, ships, powers, or canon terms.\n"
+        "- Replace hollow phrases like 'one pause', 'one choice', 'behind the curtain', or 'not random setup' with actual named evidence.\n"
         "- State the payoff as a concrete claim before asking a debate question.\n"
         "- No markdown: no **bold**, no *italic*, no underscores, no asterisks.\n"
         f"- TOTAL WORD COUNT: {target_words}.\n\n"
@@ -597,6 +713,10 @@ def _strict_repair_prompt(
         f"SCRIPT WORD COUNT: {target_words}\n"
         f"OPENING ANCHOR: {canon_anchor}\n\n"
         f"VALIDATION FAILURES:\n{failures}\n\n"
+        "STRICT CONTENT REQUIREMENTS:\n"
+        "- Include at least 2 named One Piece entities in SCRIPT.\n"
+        "- Each evidence sentence must name a character, chapter, arc, location, ship, power, quote, or canon term.\n"
+        "- Do not use hollow phrases like 'one reaction', 'one pause', 'behind the curtain', or 'not random setup'.\n\n"
         "EXACT OUTPUT TEMPLATE:\n"
         f"{REQUIRED_OUTPUT_TEMPLATE}\n\n"
         "Use the previous attempt only as a rough idea, but write a complete valid version:\n"
@@ -611,107 +731,25 @@ def _generate_once(prompt: str, video_profile: str = "short_vertical") -> Dict[s
     video_profile = normalize_video_profile(video_profile)
     response = model.generate_content(
         prompt,
-        generation_config=GenerationConfig(**GENERATION_SETTINGS[video_profile]),
+        generation_config=GENERATION_SETTINGS[video_profile],
     )
     if not response.text:
-        raise ValueError("No content generated by Gemini API")
+        raise ValueError("No content generated by NVIDIA API")
     return _parse_response(response.text)
 
 
-def _fallback_title(topic: str, bad_output: Dict[str, str]) -> str:
-    title = (bad_output.get("title") or "").strip()
-    if title:
-        return title[:80]
-
-    cleaned_topic = re.sub(r"\s+", " ", (topic or "One Piece hidden clue").strip())
-    return cleaned_topic[:80]
-
-
-def _fallback_anchor(topic: str, chapter_number: Optional[int]) -> str:
-    if chapter_number:
-        return f"Chapter {chapter_number}"
-
-    topic_text = topic or ""
-    chapter_match = re.search(r"\bchapter\s+\d+\b", topic_text, re.IGNORECASE)
-    if chapter_match:
-        return chapter_match.group(0).title()
-
-    for anchor in (
-        "Mary Geoise", "Marineford", "Enies Lobby", "Wano", "Egghead",
-        "Ohara", "Sabaody", "God Valley", "Skypiea", "Thriller Bark",
-        "Impel Down", "Whole Cake", "Fishman Island", "Alabasta",
-    ):
-        if re.search(rf"\b{re.escape(anchor)}\b", topic_text, re.IGNORECASE):
-            return anchor
-
-    return "Chapter 1"
-
-
-def _fallback_script(topic: str, bad_output: Dict[str, str], chapter_number: Optional[int]) -> str:
-    title = _fallback_title(topic, bad_output)
-    anchor = _fallback_anchor(topic, chapter_number)
-    subject = re.sub(r"[^A-Za-z0-9' -]", "", title).strip() or "this One Piece clue"
-    return (
-        f"{anchor} makes {subject} feel impossible to ignore. "
-        "The scene looks simple at first, but Oda hides the pressure in the quiet details. "
-        "One reaction, one pause, and one choice tell us the truth is bigger than the obvious answer. "
-        "That is why this clue matters: it points to a secret motive driving the story from behind the curtain. "
-        "My payoff is simple: this was not random foreshadowing, it was setup. "
-        "Tell me if this changes your read, and follow for more One Piece truths."
-    )
-
-
-def _fallback_description(topic: str, title: str) -> str:
-    subject = title or topic or "this One Piece clue"
-    return (
-        f"- {subject} hits harder when the canon anchor is clear.\n"
-        "- The small scene detail changes the whole theory.\n"
-        "- Most fans miss how quiet Oda makes the clue.\n"
-        "- Debate this read if you think there is a cleaner answer.\n"
-        "- Follow for more hidden One Piece truths."
-    )
-
-
-def _fallback_hashtags(topic: str, title: str) -> str:
-    text = f"{topic} {title}".lower()
-    tags = ["#onepiece", "#anime", "#theory"]
-    for word, tag in (
-        ("shanks", "#shanks"),
-        ("luffy", "#luffy"),
-        ("zoro", "#zoro"),
-        ("nika", "#nika"),
-        ("joy", "#joyboy"),
-        ("wano", "#wano"),
-        ("egghead", "#egghead"),
-        ("marineford", "#marineford"),
-        ("geoise", "#marygeoise"),
-        ("mariejois", "#marygeoise"),
-    ):
-        if word in text and tag not in tags:
-            tags.append(tag)
-    tags.extend(tag for tag in ("#mindblown", "#plottwist", "#manga") if tag not in tags)
-    return " ".join(tags[:12])
-
-
-def _deterministic_fallback_result(
+def _raise_generation_failure(
     topic: str,
     bad_output: Dict[str, str],
     chapter_number: Optional[int],
     failure_errors: List[str],
 ) -> Tuple[Dict[str, str], ValidationResult]:
-    title = _fallback_title(topic, bad_output)
-    script = _fallback_script(topic, bad_output, chapter_number)
-    result = {
-        "title": title,
-        "script": script,
-        "description": _fallback_description(topic, title),
-        "hashtags": _fallback_hashtags(topic, title),
-    }
-    validation = validate_generated_script(result, chapter_number=chapter_number)
-    warnings = validation.warnings + ["FALLBACK_USED: Gemini returned incomplete output after repair"]
-    warnings.extend(f"VALIDATION_FAILED: {error}" for error in failure_errors)
-    warnings.extend(f"FALLBACK_VALIDATION: {error}" for error in validation.errors)
-    return result, ValidationResult(errors=[], warnings=warnings)
+    failures = "; ".join(failure_errors)
+    raise ValueError(
+        "Script generation failed after all repair attempts. "
+        f"Errors: {failures}. "
+        "Please retry with a more specific topic or check your NVIDIA API quota."
+    )
 
 
 def generate_script(
@@ -723,7 +761,7 @@ def generate_script(
     context_sources: list = None,
     video_profile: str = "short_vertical",
 ) -> dict:
-    """Generate a One Piece narration script via Gemini."""
+    """Generate a One Piece narration script via NVIDIA's OpenAI-compatible API."""
     try:
         video_profile = normalize_video_profile(video_profile)
         context_text = (context_text or "").strip()
@@ -741,7 +779,7 @@ def generate_script(
 
         retry_attempted = False
         result = _generate_once(prompt, video_profile)
-        validation = validate_generated_script(result, video_profile, chapter_number)
+        validation = validate_generated_script(result, video_profile, chapter_number, topic)
 
         if not validation.ok:
             logger.warning("Generated script failed validation; retrying once: %s", validation.errors)
@@ -750,7 +788,7 @@ def generate_script(
                 _retry_prompt(result, validation, video_profile, topic, language, chapter_number),
                 video_profile,
             )
-            retry_validation = validate_generated_script(retry_result, video_profile, chapter_number)
+            retry_validation = validate_generated_script(retry_result, video_profile, chapter_number, topic)
             if retry_validation.ok:
                 result = retry_result
                 validation = retry_validation
@@ -770,16 +808,16 @@ def generate_script(
                     ),
                     video_profile,
                 )
-                repair_validation = validate_generated_script(repair_result, video_profile, chapter_number)
+                repair_validation = validate_generated_script(repair_result, video_profile, chapter_number, topic)
                 if repair_validation.ok:
                     result = repair_result
                     validation = repair_validation
                 else:
                     logger.error(
-                        "Generated script failed validation after strict repair; using deterministic fallback: %s",
+                        "Generated script failed validation after strict repair; failing loudly: %s",
                         repair_validation.errors,
                     )
-                    result, validation = _deterministic_fallback_result(
+                    result, validation = _raise_generation_failure(
                         topic,
                         repair_result,
                         chapter_number,

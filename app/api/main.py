@@ -36,6 +36,7 @@ from app.config import (
     DEBUG,
     get_video_profile_config,
     normalize_video_profile,
+    normalize_visual_style,
 )
 
 
@@ -131,7 +132,12 @@ def _generate_subtitle_assets(
     script: Optional[str],
     subtitle_style: str = 'pro',
     video_profile: str = 'short_vertical',
+    visual_style: Optional[str] = None,
 ) -> dict:
+    from app.utils.visual_effects import subtitle_style_for_visual_style
+
+    if visual_style:
+        subtitle_style = subtitle_style_for_visual_style(visual_style, subtitle_style)
     audio_path = os.path.join(UPLOADS_DIR, audio_id)
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f'Audio file not found: {audio_id}')
@@ -623,6 +629,7 @@ def generate_manga_video_endpoint():
         topic = data.get('topic') or data.get('angle')
         language = data.get('language', 'English')
         subtitle_style = data.get('subtitle_style', 'pro')
+        visual_style = normalize_visual_style(data.get('visual_style'))
         quality_mode = data.get('quality_mode', 'pro')
         background_music_path = data.get('background_music_path')
         video_profile = normalize_video_profile(data.get('video_profile'))
@@ -681,6 +688,7 @@ def generate_manga_video_endpoint():
             script_result['script'],
             subtitle_style,
             video_profile=video_profile,
+            visual_style=visual_style,
         )
         update_manga_session(pdf_id, "subtitles", "completed", {
             "ass_file": subtitle_assets['ass_file'],
@@ -710,6 +718,7 @@ def generate_manga_video_endpoint():
             quality_mode=quality_mode,
             background_music_path=background_music_path,
             video_profile=video_profile,
+            visual_style=visual_style,
         )
         video_filename = os.path.basename(final_video_path)
         video_url = url_for('download_file', filename=video_filename, _external=True)
@@ -840,6 +849,7 @@ def generate_subtitles():
         audio_id = data.get('audio_id')
         script = data.get('script')  # This is now optional
         subtitle_style = data.get('subtitle_style', 'pro')
+        visual_style = normalize_visual_style(data.get('visual_style'))
         video_profile = normalize_video_profile(data.get('video_profile'))
 
         if not audio_id:
@@ -866,6 +876,7 @@ def generate_subtitles():
                 script,
                 subtitle_style,
                 video_profile=video_profile,
+                visual_style=visual_style,
             )
         except Exception as e:
             logger.error(f"Error generating subtitle assets: {str(e)}")
@@ -975,6 +986,20 @@ def generate_image_slides_endpoint():
             'video_profile': video_profile,
         })
         
+    except TimeoutError as e:
+        logger.error(f"LLM timeout in generate_image_slides_endpoint: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'error_type': 'llm_timeout',
+        }), 504
+    except ConnectionError as e:
+        logger.error(f"LLM connectivity error in generate_image_slides_endpoint: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'error_type': 'llm_unreachable',
+        }), 503
     except Exception as e:
         logger.error(f"Error in generate_image_slides_endpoint: {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -1206,6 +1231,7 @@ def generate_final_video_endpoint():
         quality_mode = data.get('quality_mode', 'pro')
         background_music_path = data.get('background_music_path')
         video_profile = normalize_video_profile(data.get('video_profile'))
+        visual_style = normalize_visual_style(data.get('visual_style'))
         
         logger.info(f"Processing request with audio_id={audio_id}, subtitle_file={subtitle_file}")
 
@@ -1294,6 +1320,7 @@ def generate_final_video_endpoint():
                 quality_mode=quality_mode,
                 background_music_path=background_music_path,
                 video_profile=video_profile,
+                visual_style=visual_style,
             )
             logger.info(f"Final video generated at: {final_video_path}")
             

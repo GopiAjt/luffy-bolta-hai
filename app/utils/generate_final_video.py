@@ -21,7 +21,9 @@ from app.config import (
     COMPILED_VIDEO_DIR,
     get_video_profile_config,
     normalize_video_profile,
+    normalize_visual_style,
 )
+from app.utils.transition_sfx import load_transition_events, mix_transition_sfx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -64,6 +66,7 @@ def generate_final_video(
     quality_mode: str = "pro",
     background_music_path: str = None,
     video_profile: str = "short_vertical",
+    visual_style: str = "clean_pro",
 ):
     """
     Generates the final video by first creating a slideshow and then adding audio, subtitles, and expressions.
@@ -84,10 +87,12 @@ def generate_final_video(
         quality_mode = (quality_mode or "standard").lower()
         pro_mode = quality_mode == "pro"
         video_profile = normalize_video_profile(video_profile)
+        visual_style = normalize_visual_style(visual_style)
         profile_config = get_video_profile_config(video_profile)
         video_resolution = profile_config["video_resolution"]
         logger.info("Using video quality mode: %s", quality_mode)
         logger.info("Using video profile: %s (%sx%s)", video_profile, video_resolution[0], video_resolution[1])
+        logger.info("Using visual style: %s", visual_style)
         selected_music_path = pick_background_music(background_music_path)
         logger.info("Background music: %s", selected_music_path or "disabled")
 
@@ -97,6 +102,19 @@ def generate_final_video(
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
         total_audio_duration = get_audio_duration(str(audio_path))
         logger.info(f"Total audio duration: {total_audio_duration:.2f}s")
+
+        narration_path = str(audio_path)
+        transition_events = load_transition_events(slides_json_path)
+        if transition_events:
+            mixed_path = COMPILED_VIDEO_DIR / f"narration_sfx_{Path(audio_id).stem}.wav"
+            narration_path = mix_transition_sfx(
+                narration_path,
+                transition_events,
+                str(mixed_path),
+                duration=total_audio_duration,
+            )
+            if narration_path != str(audio_path):
+                audio_path = Path(narration_path)
 
         # 2. Generate the slideshow video (as a temporary file)
         slideshow_output_path = COMPILED_VIDEO_DIR / f"slideshow_temp_{Path(audio_id).stem}_{video_profile}.mp4"
@@ -114,6 +132,7 @@ def generate_final_video(
                 transition_type='pro' if pro_mode else 'auto',
                 transition_duration=0.38 if pro_mode else 0.5,
                 quality_mode=quality_mode,
+                visual_style=visual_style,
             )
             logger.info("Slideshow video generated successfully.")
         else:
@@ -169,6 +188,7 @@ def generate_final_video(
                 quality_mode=quality_mode,
                 background_music_path=selected_music_path,
                 resolution=f"{video_resolution[0]}x{video_resolution[1]}",
+                visual_style=visual_style,
             )
         else:
             logger.info("No expressions file found, generating video without expressions.")
@@ -180,6 +200,7 @@ def generate_final_video(
                 quality_mode=quality_mode,
                 background_music_path=selected_music_path,
                 resolution=f"{video_resolution[0]}x{video_resolution[1]}",
+                visual_style=visual_style,
             )
 
         logger.info(f"Final video generated successfully at: {final_video_path}")

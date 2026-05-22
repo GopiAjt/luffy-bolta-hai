@@ -12,9 +12,15 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOADS_DIR = BASE_DIR / "output" / "data"
 IMAGE_SLIDES_DIR = BASE_DIR / "output" / "image_slides"
 EXPRESSIONS_DIR = BASE_DIR / "static" / "expressions"
+# Local copy of Vivre Card renders (sync from Google Drive); see scripts/index_vivre_cards.py
+VIVRE_CARD_ASSETS_DIR = Path(os.getenv("VIVRE_CARD_ASSETS_DIR", BASE_DIR / "data" / "vivre_cards"))
+NARRATOR_CHARACTER = os.getenv("NARRATOR_CHARACTER", "luffy").strip().lower()
+OPARCHIVE_ENABLED = os.getenv("OPARCHIVE_ENABLED", "true").lower() not in {"0", "false", "no"}
 COMPILED_VIDEO_DIR = BASE_DIR / "output" / "compiled_video"
 MANGA_PDF_DIR = BASE_DIR / "output" / "manga_pdf"
 BACKGROUND_MUSIC_DIR = BASE_DIR / "data"
+TRANSITION_SFX_DIR = BASE_DIR / "data" / "sfx"
+ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not in {"0", "false", "no"}
 
 # --- AUDIO ---
 MAX_AUDIO_FILE_SIZE_MB = float(os.getenv("MAX_AUDIO_FILE_SIZE_MB", "100"))
@@ -26,6 +32,8 @@ BACKGROUND_MUSIC_VOLUME = float(os.getenv("BACKGROUND_MUSIC_VOLUME", "0.16"))
 
 # --- VIDEO PROFILES ---
 DEFAULT_VIDEO_PROFILE = "short_vertical"
+DEFAULT_VISUAL_STYLE = "clean_pro"
+VISUAL_STYLES = {"clean_pro", "manga_hype", "emotional", "dark_lore", "action"}
 VIDEO_PROFILES = {
     "short_vertical": {
         "label": "Short vertical",
@@ -47,6 +55,11 @@ def normalize_video_profile(video_profile: str = None) -> str:
 
 def get_video_profile_config(video_profile: str = None) -> dict:
     return VIDEO_PROFILES[normalize_video_profile(video_profile)]
+
+
+def normalize_visual_style(visual_style: str = None) -> str:
+    style = (visual_style or DEFAULT_VISUAL_STYLE).strip().lower()
+    return style if style in VISUAL_STYLES else DEFAULT_VISUAL_STYLE
 
 
 # Backwards-compatible defaults for callers that have not been profile-aware yet.
@@ -75,3 +88,4 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 COMPILED_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 MANGA_PDF_DIR.mkdir(parents=True, exist_ok=True)
+TRANSITION_SFX_DIR.mkdir(parents=True, exist_ok=True)

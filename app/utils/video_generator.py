@@ -12,6 +12,14 @@ from collections import deque
 
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.config import BACKGROUND_MUSIC_VOLUME
+from app.utils.visual_effects import build_global_ffmpeg_filter
+from app.utils.expression_assets import resolve_expression_image
+from app.utils.expression_effects import (
+    format_expression_filter_step,
+    format_expression_overlay,
+    resolve_expression_effect,
+)
+from app.config import NARRATOR_CHARACTER
 
 # Configure logging
 logging.basicConfig(
@@ -162,6 +170,7 @@ class VideoGenerator:
         convert_to_mp4: bool = True,
         quality_mode: str = 'standard',
         background_music_path: Optional[str] = None,
+        visual_style: Optional[str] = None,
     ) -> str:
         """
         Generate a video with audio and animated subtitles using MoviePy.
@@ -207,17 +216,27 @@ class VideoGenerator:
 
             escaped_subtitle_path = str(subtitle_path).replace("'", r"\\'")
 
+            global_fx = build_global_ffmpeg_filter(visual_style)
+            if global_fx:
+                logger.info("Applying visual style filters: %s", global_fx)
+
             if background_video_path and os.path.exists(background_video_path):
                 base_video_input = ['-i', str(background_video_path)]
                 audio_input_idx = 1
-                video_filter = f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone,subtitles='{escaped_subtitle_path}'[vout]"
+                video_filter = "[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone"
+                if global_fx:
+                    video_filter += f",{global_fx}"
+                video_filter += f",subtitles='{escaped_subtitle_path}'[vout]"
             else:
                 base_video_input = [
                     '-f', 'lavfi',
                     '-i', f'color=c={color}:s={res_x}x{res_y}:d={duration}:r={fps}'
                 ]
                 audio_input_idx = 1
-                video_filter = f"[0:v]subtitles='{escaped_subtitle_path}'[vout]"
+                video_filter = "[0:v]"
+                if global_fx:
+                    video_filter += f",{global_fx}"
+                video_filter += f",subtitles='{escaped_subtitle_path}'[vout]"
 
             extra_inputs = []
             audio_map = f'{audio_input_idx}:a'
@@ -512,6 +531,7 @@ class VideoGenerator:
         convert_to_mp4: bool = True,
         quality_mode: str = 'standard',
         background_music_path: Optional[str] = None,
+        visual_style: Optional[str] = None,
     ) -> str:
         """
         Generate a video with audio, burned-in subtitles, and facial expression overlays.
@@ -550,21 +570,29 @@ class VideoGenerator:
             logger.info(f"Loaded {len(expressions)} expressions from {expressions_path}")
             logger.debug(f"Expressions data: {json.dumps(expressions, indent=2, ensure_ascii=False)}")
             
-            # Group intervals by label
-            label_intervals = {}
+            # Group intervals by character + expression (supports multi-character scripts)
+            overlay_groups: Dict[str, Dict] = {}
             for expr in expressions:
                 label = expr['expression'].lower()
-                if label not in label_intervals:
-                    label_intervals[label] = []
+                character = (expr.get('character') or NARRATOR_CHARACTER).lower()
+                group_key = f"{character}::{label}"
+                if group_key not in overlay_groups:
+                    overlay_groups[group_key] = {
+                        "character": character,
+                        "label": label,
+                        "intervals": [],
+                    }
                 start_time = self._parse_time(expr['start'])
                 end_time = self._parse_time(expr['end'])
-                label_intervals[label].append((start_time, end_time))
-                
-            logger.info(f"Processed expression labels: {list(label_intervals.keys())}")
-            # Merge intervals for each label
-            for label in label_intervals:
-                label_intervals[label] = self._merge_intervals(
-                    label_intervals[label])
+                overlay_groups[group_key]["intervals"].append((start_time, end_time))
+
+            for group in overlay_groups.values():
+                group["intervals"] = self._merge_intervals(group["intervals"])
+
+            logger.info(
+                "Processed expression overlays: %s",
+                [f"{g['character']}/{g['label']}" for g in overlay_groups.values()],
+            )
 
             # Prepare ffmpeg inputs and overlay filters (plain overlays, no fade)
             overlay_inputs = []
@@ -593,29 +621,37 @@ class VideoGenerator:
             available_images = os.listdir(expr_img_dir)
             logger.info(f"Available expression images: {available_images}")
             
-            for label, intervals in label_intervals.items():
-                img_filename = f"{label}.png"
-                img_path = os.path.join(expr_img_dir, img_filename)
-                
-                if not os.path.exists(img_path):
-                    logger.warning(f"Image for expression '{label}' not found: {img_path}")
-                    logger.warning(f"Looking for: {img_filename}, available images: {available_images}")
-                    # Try to find a case-insensitive match
-                    matching_files = [f for f in available_images if f.lower() == img_filename.lower()]
-                    if matching_files:
-                        img_path = os.path.join(expr_img_dir, matching_files[0])
-                        logger.info(f"Found case-insensitive match: {img_path}")
-                    else:
-                        logger.error(f"No matching image found for expression: {label}")
-                        continue
+            for group in overlay_groups.values():
+                character = group["character"]
+                label = group["label"]
+                intervals = group["intervals"]
+                img_path = resolve_expression_image(
+                    character,
+                    label,
+                    fallback_dir=Path(expr_img_dir) if expr_img_dir else None,
+                )
+                if not img_path:
+                    img_filename = f"{label}.png"
+                    img_path = os.path.join(expr_img_dir, img_filename)
+                    if not os.path.exists(img_path):
+                        logger.warning(f"Image for expression '{label}' not found: {img_path}")
+                        matching_files = [f for f in available_images if f.lower() == img_filename.lower()]
+                        if matching_files:
+                            img_path = os.path.join(expr_img_dir, matching_files[0])
+                            logger.info(f"Found case-insensitive match: {img_path}")
+                        else:
+                            logger.error(f"No matching image found for expression: {label}")
+                            continue
+                else:
+                    logger.info(f"Using expression asset for {character}/{label}: {img_path}")
                 for fade_idx, (start, end) in enumerate(intervals):
                     if end <= start:
                         logger.warning(
                             f"Skipping invalid interval for label '{label}': start={start}, end={end}")
                         continue
                     interval_duration = end - start
-                    fade_duration = max(0.05, min(0.18, interval_duration / 3))
-                    fade_out_start = max(0.0, interval_duration - fade_duration)
+                    fade_duration = max(0.05, min(0.28, interval_duration / 3))
+                    effect_name = resolve_expression_effect(label, visual_style)
                     overlay_inputs.extend([
                         '-loop', '1',
                         '-t', f'{interval_duration:.3f}',
@@ -623,26 +659,46 @@ class VideoGenerator:
                     ])
                     img_label = f"[{input_idx}:v]"
                     expr_label = f"[expr{overlay_step}]"
-                    scale_expr = (
-                        f"scale=w='iw*(0.96+0.04*min(1\\,t/{fade_duration:.3f}))':"
-                        f"h='ih*(0.96+0.04*min(1\\,t/{fade_duration:.3f}))':eval=frame"
-                    )
                     filter_steps.append(
-                        f"{img_label}format=rgba,{scale_expr},"
-                        f"fade=t=in:st=0:d={fade_duration:.3f}:alpha=1,"
-                        f"fade=t=out:st={fade_out_start:.3f}:d={fade_duration:.3f}:alpha=1,"
-                        f"setpts=PTS+{start:.3f}/TB{expr_label}"
+                        format_expression_filter_step(
+                            img_label,
+                            expr_label,
+                            label,
+                            fade_duration,
+                            interval_duration,
+                            start,
+                            visual_style=visual_style,
+                        )
                     )
-                    enable_expr = f"between(t,{start},{end})"
-                    overlay_filters.append(
-                        f"{last_label}{expr_label} overlay=x=(W-w)/2:y=H-h-200:enable='{enable_expr}':eval=frame[bg{overlay_step}]"
+                    overlay_filter, last_label = format_expression_overlay(
+                        last_label,
+                        expr_label,
+                        label,
+                        fade_duration,
+                        interval_duration,
+                        start,
+                        end,
+                        overlay_step,
+                        visual_style=visual_style,
                     )
-                    last_label = f"[bg{overlay_step}]"
+                    overlay_filters.append(overlay_filter)
+                    logger.info(
+                        "Expression overlay %s/%s effect=%s",
+                        character,
+                        label,
+                        effect_name,
+                    )
                     overlay_step += 1
                     input_idx += 1
 
             # Compose filter_complex without empty filter chains
             filter_steps += [f for f in overlay_filters if f]
+            global_fx = build_global_ffmpeg_filter(visual_style)
+            if global_fx:
+                logger.info("Applying visual style filters: %s", global_fx)
+                styled_label = "[vstyled]"
+                filter_steps.append(f"{last_label}{global_fx}{styled_label}")
+                last_label = styled_label
             filter_steps.append(
                 f"{last_label}subtitles='{subtitle_path}'[vout]")
             filter_complex = ';'.join(filter_steps)

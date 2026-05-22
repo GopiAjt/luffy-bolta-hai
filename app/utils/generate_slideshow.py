@@ -1,6 +1,7 @@
 import os
 import json
 import traceback
+from typing import Dict, List
 import numpy as np
 import cv2
 from PIL import Image
@@ -11,6 +12,14 @@ import threading
 import random
 import math
 from app.config import VIDEO_RESOLUTION
+from app.utils.visual_effects import (
+    classify_beat,
+    choose_motion_preset,
+    choose_visual_transition,
+    get_visual_preset,
+    normalize_visual_style,
+)
+from app.utils.transition_sfx import save_transition_events
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +298,99 @@ def crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=1.0):
     return frame
 
 
+KEN_BURNS_ZOOM = {
+    "slow_push": (1.0, 1.14),
+    "impact_zoom": (1.06, 1.22),
+    "hold_still": (1.0, 1.04),
+    "pull_out": (1.16, 1.0),
+    "stable_pan": (1.0, 1.10),
+    "diagonal_pan": (1.0, 1.12),
+}
+
+
+def ken_burns_enabled() -> bool:
+    return os.getenv("ENABLE_KEN_BURNS", "true").lower() not in {"0", "false", "no"}
+
+
+def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: float = 1.22):
+    """Cover-scale image with zoom headroom for Ken Burns (vertical Shorts)."""
+    res_w, res_h = resolution
+    img = cv2.imread(img_path)
+    if img is None:
+        logger.error(f"Failed to load image for Ken Burns: {img_path}")
+        return None, res_w, res_h
+
+    img_h, img_w = img.shape[:2]
+    cover_scale = max(res_w / max(img_w, 1), res_h / max(img_h, 1)) * headroom
+    scaled_w = max(res_w, int(round(img_w * cover_scale)))
+    scaled_h = max(res_h, int(round(img_h * cover_scale)))
+    scaled = cv2.resize(img, (scaled_w, scaled_h), interpolation=cv2.INTER_CUBIC)
+
+    blur_amount = normalize_blur_amount(blur_amount, max_kernel=9)
+    if blur_amount > 0:
+        scaled = apply_blur(scaled, blur_amount)
+
+    return scaled, scaled_w, scaled_h
+
+
+def crop_ken_burns_frame(
+    scaled,
+    scaled_w,
+    scaled_h,
+    resolution,
+    idx: int,
+    t: float,
+    motion: str = "slow_push",
+    pan_strength: float = 1.0,
+):
+    """Ken Burns: slow zoom with optional pan (faceless anime slideshow)."""
+    res_w, res_h = resolution
+    t = ease_progress(t, PAN_EASING)
+    motion = motion or "slow_push"
+    z0, z1 = KEN_BURNS_ZOOM.get(motion, (1.0, 1.10))
+    zoom = z0 + (z1 - z0) * t
+
+    view_w = res_w / max(zoom, 0.01)
+    view_h = res_h / max(zoom, 0.01)
+    max_x = max(0.0, float(scaled_w - view_w))
+    max_y = max(0.0, float(scaled_h - view_h))
+    pan_strength = max(0.0, min(1.0, float(pan_strength)))
+
+    travel_x = max_x * pan_strength
+    travel_y = max_y * pan_strength * (0.45 if motion == "diagonal_pan" else 0.15)
+
+    if motion == "pull_out":
+        travel_x = max_x * pan_strength * (1.0 - t)
+        travel_y = max_y * pan_strength * 0.2 * (1.0 - t)
+        start_x = travel_x / 2.0
+        start_y = travel_y / 2.0
+        x = start_x * (1.0 - t)
+        y = start_y * (1.0 - t)
+    elif max_x > 0 or max_y > 0:
+        start_x = (max_x - travel_x) / 2.0
+        start_y = (max_y - travel_y) / 2.0
+        if motion == "diagonal_pan":
+            x = start_x + t * travel_x
+            y = start_y + (1.0 - t) * travel_y
+        elif motion == "stable_pan" and max_x > 0:
+            x = start_x + (t * travel_x if idx % 2 == 0 else (1.0 - t) * travel_x)
+            y = start_y
+        else:
+            x = start_x
+            y = start_y
+    else:
+        x = max(0.0, (scaled_w - view_w) / 2.0)
+        y = max(0.0, (scaled_h - view_h) / 2.0)
+
+    center = (float(x + view_w / 2.0), float(y + view_h / 2.0))
+    frame = cv2.getRectSubPix(scaled, (int(round(view_w)), int(round(view_h))), center)
+    if frame is None or frame.size == 0:
+        return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    if frame.shape[0] != res_h or frame.shape[1] != res_w:
+        frame = cv2.resize(frame, (res_w, res_h), interpolation=cv2.INTER_CUBIC)
+    return frame
+
+
 def fade_effect(current_frame, next_frame, progress):
     """
     Simple fade effect that blends between two frames based on progress
@@ -542,15 +644,41 @@ def apply_panoramic_pan(temp_frame_dir, frame_counter, img_path, duration, resol
     return frame_counter # Return updated frame_counter
 
 
-def emit_panoramic_pan(frame_writer, frame_counter, img_path, duration, resolution, idx, fps=30, blur_amount=0, start_frame=0, pan_strength=1.0):
-    """Render panned slide frames directly into FFmpeg."""
+def emit_panoramic_pan(
+    frame_writer,
+    frame_counter,
+    img_path,
+    duration,
+    resolution,
+    idx,
+    fps=30,
+    blur_amount=0,
+    start_frame=0,
+    pan_strength=1.0,
+    motion: str = "slow_push",
+):
+    """Render slide frames with Ken Burns (default) or legacy horizontal pan."""
     num_frames = int(duration * fps)
-    logger.debug(f"emit_panoramic_pan: {img_path}, frames={num_frames}, start_frame={start_frame}")
+    logger.debug(
+        "emit_panoramic_pan: %s, frames=%s, motion=%s, ken_burns=%s",
+        img_path,
+        num_frames,
+        motion,
+        ken_burns_enabled(),
+    )
     if num_frames <= 0:
         logger.warning(f"Skipping slide with non-positive frame count: {img_path}")
         return frame_counter, None
 
-    scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount=blur_amount)
+    use_kb = ken_burns_enabled()
+    if use_kb:
+        scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
+            img_path, resolution, blur_amount=blur_amount
+        )
+    else:
+        scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount=blur_amount)
+        scaled_h = resolution[1]
+
     if scaled is None:
         logger.error(f"Could not prepare slide canvas for {img_path}")
         return frame_counter, None
@@ -562,7 +690,19 @@ def emit_panoramic_pan(frame_writer, frame_counter, img_path, duration, resoluti
     last_frame = None
     for i in range(start_frame, num_frames):
         t = (i / (num_frames - 1)) if num_frames > 1 else 0.0
-        frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
+        if use_kb:
+            frame = crop_ken_burns_frame(
+                scaled,
+                scaled_w,
+                scaled_h,
+                resolution,
+                idx,
+                t,
+                motion=motion,
+                pan_strength=pan_strength,
+            )
+        else:
+            frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
         frame_writer.write(frame)
         frame_counter += 1
         last_frame = frame
@@ -570,11 +710,26 @@ def emit_panoramic_pan(frame_writer, frame_counter, img_path, duration, resoluti
     return frame_counter, last_frame
 
 
-def render_panned_frame(img_path, resolution, idx, t, blur_amount=0, pan_strength=1.0):
-    """Render a single frame of a slide at a given pan progress t in [0,1].
-    Mirrors the preprocessing in apply_panoramic_pan to ensure visual continuity.
-    """
+def render_panned_frame(
+    img_path,
+    resolution,
+    idx,
+    t,
+    blur_amount=0,
+    pan_strength=1.0,
+    motion: str = "slow_push",
+):
+    """Render a single frame at pan progress t (matches emit_panoramic_pan)."""
     res_w, res_h = resolution
+    if ken_burns_enabled():
+        scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(img_path, resolution, blur_amount)
+        if scaled is None:
+            logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
+            return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+        return crop_ken_burns_frame(
+            scaled, scaled_w, scaled_h, resolution, idx, t, motion=motion, pan_strength=pan_strength
+        )
+
     scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount)
     if scaled is None:
         logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
@@ -1148,7 +1303,7 @@ def create_placeholder_slide(image_dir, resolution, label="One Piece"):
     return output_path
 
 
-def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0, quality_mode='standard', pan_strength=1.0):
+def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0, quality_mode='standard', pan_strength=1.0, visual_style=None):
     """
     Generates the final slideshow video using OpenCV.
     
@@ -1166,6 +1321,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     """
     resolution = sanitize_size(resolution)
     res_w, res_h = resolution
+    if visual_style:
+        visual_style = normalize_visual_style(visual_style)
+        logger.info("Using visual style for slideshow: %s", visual_style)
     
     quality_mode = (quality_mode or 'standard').lower()
     if quality_mode == 'pro':
@@ -1202,6 +1360,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     
     logger.info(f"Starting to process {len(slides)} slides...")
 
+    transition_events: List[Dict] = []
+
     # -------- Prepass: select transitions and allocate frames to avoid tail padding --------
     last_selected_transition = None
     flip_remaining = 1 if flip_horizontal_once else 0
@@ -1222,12 +1382,30 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             if isinstance(transition_type, str):
                 tt = transition_type.lower()
                 if tt == 'pro':
-                    transitions_pool = ['crossfade', 'zoom_dissolve', 'fade_eased']
-                    selected_transition_type = random.choices(
-                        transitions_pool,
-                        weights=[0.55, 0.30, 0.15],
-                        k=1
-                    )[0]
+                    if visual_style:
+                        slide_text = slide.get("summary") or slide.get("text") or ""
+                        beat = classify_beat(slide_text, idx, len(slides))
+                        preset = get_visual_preset(visual_style)
+                        transitions_pool = list(preset["transitions"])
+                        weights = preset.get("transition_weights")
+                        if weights and len(weights) == len(transitions_pool):
+                            pool = [t for t in transitions_pool if t != last_selected_transition] or transitions_pool
+                            pool_weights = [
+                                weights[transitions_pool.index(t)]
+                                for t in pool
+                            ]
+                            selected_transition_type = random.choices(pool, weights=pool_weights, k=1)[0]
+                        else:
+                            selected_transition_type = choose_visual_transition(
+                                visual_style, beat, last_selected_transition, idx
+                            )
+                    else:
+                        transitions_pool = ['crossfade', 'zoom_dissolve', 'fade_eased']
+                        selected_transition_type = random.choices(
+                            transitions_pool,
+                            weights=[0.55, 0.30, 0.15],
+                            k=1
+                        )[0]
                 elif tt == 'random':
                     transitions_pool = [
                         'fade', 'crossfade', 'fade_eased', 'zoom_dissolve', 'radial_wipe',
@@ -1406,7 +1584,13 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     logger.info(f"Using converted JPG: {jpg_path}")
                     img_path = jpg_path
 
-            logger.info(f"Processing image: {img_path}")
+            slide_motion = "slow_push"
+            if visual_style:
+                beat = classify_beat(slide.get("summary", ""), idx, len(slides))
+                slide_motion = choose_motion_preset(visual_style, beat, idx)
+            slide["_motion"] = slide_motion
+
+            logger.info(f"Processing image: {img_path} (motion={slide_motion})")
             previous_img_path = last_valid_img_path
             same_as_previous = (
                 previous_img_path is not None
@@ -1415,6 +1599,15 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             last_valid_img_path = img_path
             # Use preselected transition for this boundary to keep frame plan consistent
             selected_transition_type = boundary_transition_types[idx]
+            if idx > 0 and selected_transition_type and selected_transition_type != "none":
+                transition_events.append(
+                    {
+                        "time": parse_time(slide["start_time"]),
+                        "transition": selected_transition_type,
+                        "slide_index": idx + 1,
+                    }
+                )
+                slide["transition_in"] = selected_transition_type
             skipped_duplicate_transition_frames = 0
             if same_as_previous and selected_transition_type and selected_transition_type != 'none' and idx > 0:
                 skipped_duplicate_transition_frames = transition_frames_list[idx]
@@ -1454,7 +1647,16 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 # We will skip the first content frame after transition (start_frame=1),
                 # so align the transition's last frame to that first used progress
                 start_t = (1 / (next_num_frames - 1)) if next_num_frames > 1 else 0.0
-                next_frame = render_panned_frame(img_path, resolution, idx=slides_processed, t=start_t, blur_amount=slide_blur_amount, pan_strength=pan_strength)
+                slide_motion = slide.get("_motion", "slow_push")
+                next_frame = render_panned_frame(
+                    img_path,
+                    resolution,
+                    idx=slides_processed,
+                    t=start_t,
+                    blur_amount=slide_blur_amount,
+                    pan_strength=pan_strength,
+                    motion=slide_motion,
+                )
                 logger.debug(
                     f"Next frame prepared via render_panned_frame | t={start_t:.4f}, frames={next_num_frames}, idx={slides_processed}"
                 )
@@ -1673,7 +1875,8 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         fps=fps,
                         blur_amount=slide_blur_amount,
                         start_frame=start_frame,
-                        pan_strength=pan_strength
+                        pan_strength=pan_strength,
+                        motion=slide_motion,
                     )
                     if last_pan_frame is not None:
                         last_output_frame = last_pan_frame
@@ -1718,6 +1921,18 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         logger.error(f"FFmpeg raw frame writer failed: {e}")
         logger.error(f"FFmpeg stderr: {e.stderr}")
         raise
+
+    try:
+        transitions_path = save_transition_events(json_path, transition_events)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(slides, f, indent=2, ensure_ascii=False)
+        logger.info(
+            "Saved %s transition events to %s",
+            len(transition_events),
+            transitions_path,
+        )
+    except Exception as exc:
+        logger.warning("Could not save transition metadata: %s", exc)
 
 
 if __name__ == "__main__":

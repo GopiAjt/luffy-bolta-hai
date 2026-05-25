@@ -41,6 +41,15 @@ def _clamp_fade(fade_duration: float, interval_duration: float) -> Tuple[float, 
     return fade_in, fade_out_start, float(interval_duration)
 
 
+def _static_scale(max_w: int) -> str:
+    return f"scale='min({max_w}\\,iw)':-1"
+
+
+def _animated_scale(max_w: int, factor: str) -> str:
+    """Scale with time-based factor; eval=frame is required when using t."""
+    return f"scale='min({max_w}\\,iw*{factor})':-1:eval=frame"
+
+
 def build_expression_overlay_chain(
     expression: str,
     fade_duration: float,
@@ -49,55 +58,46 @@ def build_expression_overlay_chain(
 ) -> Dict[str, str]:
     """
     Build reliable FFmpeg filters (scale to fixed width, rgba, fade).
-    Avoids rotate / dynamic overlay-y expressions that often fail in filter_complex.
+    Animated scales use eval=frame so expressions with t are valid.
     """
     effect = resolve_expression_effect(expression, visual_style)
     fade_in, fade_out_start, _duration = _clamp_fade(fade_duration, interval_duration)
     fd = fade_in
     fos = fade_out_start
     max_w = EXPR_MAX_WIDTH
+    t_ratio = f"min(1\\,t/{fd:.3f})"
 
-    # Base: scale to max width, keep alpha
-    base_scale = f"scale='min({max_w}\\,iw)':-1"
-
+    # One scale filter per clip (double scale + trim breaks eval=frame on some FFmpeg builds)
     if effect == "pop_in":
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.72+0.28*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.72+0.28*{t_ratio})")
         overlay_y = "H-h-240"
     elif effect == "bounce_in":
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.78+0.22*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.78+0.22*{t_ratio})")
         overlay_y = "H-h-230"
     elif effect == "shake_in":
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.88+0.12*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.88+0.12*{t_ratio})")
         overlay_y = "H-h-220"
     elif effect == "snap_in":
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.65+0.35*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.65+0.35*{t_ratio})")
         overlay_y = "H-h-250"
     elif effect == "fade_rise":
-        scale = f"{base_scale},scale='min({max_w}\\,iw)':-1"
+        scale = _static_scale(max_w)
         overlay_y = "H-h-170"
     elif effect == "slide_in":
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.9+0.1*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.9+0.1*{t_ratio})")
         overlay_y = "H-h-210"
     elif effect == "fade_soft":
-        scale = f"{base_scale},scale='min({max_w}\\,iw)':-1"
+        scale = _static_scale(max_w)
         overlay_y = "H-h-190"
     else:  # fade_scale
-        scale = (
-            f"{base_scale},scale='min({max_w}\\,iw*(0.94+0.06*min(1\\,t/{fd:.3f})))':-1"
-        )
+        scale = _animated_scale(max_w, f"(0.94+0.06*{t_ratio})")
         overlay_y = "H-h-220"
 
-    fade = f"fade=t=in:st=0:d={fd:.3f}:alpha=1,fade=t=out:st={fos:.3f}:d={fd:.3f}:alpha=1"
+    # Alpha fade only on static-scale clips; animated scale + fade breaks after trim on FFmpeg 6.x
+    if effect in {"fade_rise", "fade_soft"}:
+        fade = f"fade=t=in:st=0:d={fd:.3f}:alpha=1,fade=t=out:st={fos:.3f}:d={fd:.3f}:alpha=1"
+    else:
+        fade = ""
 
     return {
         "effect": effect,
@@ -119,10 +119,15 @@ def format_expression_filter_step(
     chain = build_expression_overlay_chain(
         expression, fade_duration, interval_duration, visual_style=visual_style
     )
-    return (
-        f"{img_label}{chain['scale_expr']},format=rgba,"
-        f"{chain['fade_expr']},setpts=PTS+{start:.3f}/TB{expr_label}"
-    )
+    parts = [
+        f"{img_label}trim=duration={interval_duration:.3f},setpts=PTS-STARTPTS",
+        chain["scale_expr"],
+        "format=rgba",
+    ]
+    if chain["fade_expr"]:
+        parts.append(chain["fade_expr"])
+    parts.append(f"setpts=PTS+{start:.3f}/TB{expr_label}")
+    return ",".join(parts)
 
 
 def format_expression_overlay(

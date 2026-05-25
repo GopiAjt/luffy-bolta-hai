@@ -19,6 +19,7 @@ from app.utils.expression_effects import (
     format_expression_overlay,
     resolve_expression_effect,
 )
+from app.utils.expression_overlay_cv import render_expression_overlays_opencv
 from app.config import NARRATOR_CHARACTER
 
 # Configure logging
@@ -32,6 +33,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+# Max overlays per FFmpeg pass (avoids huge filter_complex graphs)
+EXPRESSION_OVERLAY_CHUNK_SIZE = max(
+    4, int(os.getenv("EXPRESSION_OVERLAY_CHUNK_SIZE", "12"))
+)
+# opencv = single-pass (fast); ffmpeg = chunked filter_complex (legacy)
+EXPRESSION_RENDERER = os.getenv("EXPRESSION_RENDERER", "opencv").strip().lower()
 
 
 def _x264_speed_settings(quality_mode: str) -> Tuple[str, str]:
@@ -50,6 +58,14 @@ def _video_threads() -> str:
 def _video_encoder() -> str:
     """Return configured final-video encoder."""
     return os.getenv("VIDEO_ENCODER", "libx264").strip()
+
+
+def _escape_ffmpeg_subtitles_path(path: str) -> str:
+    """Escape a path for use inside the FFmpeg subtitles filter."""
+    resolved = str(Path(path).resolve())
+    for char in ("\\", ":", "'", "[", "]", ",", ";"):
+        resolved = resolved.replace(char, f"\\{char}")
+    return resolved
 
 
 def _video_encoder_args(quality_mode: str) -> List[str]:
@@ -129,6 +145,57 @@ class VideoGenerator:
         )
         if result.returncode != 0:
             raise RuntimeError(f"Output video is not readable: {result.stderr.strip()}")
+
+    def _mix_narration_with_background_music(
+        self,
+        narration_path: str,
+        background_music_path: str,
+        duration: float,
+        output_path: str,
+    ) -> str:
+        """
+        Duck background music under narration in a small audio-only FFmpeg graph.
+        Kept separate from the video filter_complex to avoid failures when many
+        expression overlay inputs are present.
+        """
+        music_volume = max(0.0, min(float(BACKGROUND_MUSIC_VOLUME), 1.0))
+        bgm_fade_start = max(0.0, duration - 0.6)
+        # Duck BGM under voice; keep voice at full weight (normalize=0). Short release
+        # avoids music swelling between words and at the end of the video.
+        # asplit narration: sidechaincompress consumes its inputs; [nar] stays for amix
+        filter_audio = (
+            f"[0:a]aresample=44100,asplit=2[nar][narsc];"
+            f"[1:a]atrim=duration={duration:.3f},asetpts=N/SR/TB,aresample=44100,"
+            f"volume={music_volume:.3f},"
+            f"afade=t=out:st={bgm_fade_start:.3f}:d=0.55[bgm];"
+            f"[bgm][narsc]sidechaincompress=threshold=0.02:ratio=5:attack=12:release=90:mix=1[ducked];"
+            f"[nar][ducked]amix=inputs=2:duration=first:dropout_transition=0:"
+            f"normalize=0:weights=1 0.32,alimiter=limit=0.95[aout]"
+        )
+        cmd = [
+            self.ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(narration_path),
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(background_music_path),
+            "-filter_complex",
+            filter_audio,
+            "-map",
+            "[aout]",
+            "-t",
+            f"{duration:.3f}",
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ]
+        self._run_ffmpeg(cmd)
+        return output_path
 
     def get_audio_duration(self, audio_path: str) -> float:
         """
@@ -214,7 +281,7 @@ class VideoGenerator:
             duration = self.get_audio_duration(audio_path)
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-            escaped_subtitle_path = str(subtitle_path).replace("'", r"\\'")
+            escaped_subtitle_path = _escape_ffmpeg_subtitles_path(subtitle_path)
 
             global_fx = build_global_ffmpeg_filter(visual_style)
             if global_fx:
@@ -226,7 +293,7 @@ class VideoGenerator:
                 video_filter = "[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone"
                 if global_fx:
                     video_filter += f",{global_fx}"
-                video_filter += f",subtitles='{escaped_subtitle_path}'[vout]"
+                video_filter += f",subtitles=filename='{escaped_subtitle_path}'[vout]"
             else:
                 base_video_input = [
                     '-f', 'lavfi',
@@ -236,23 +303,23 @@ class VideoGenerator:
                 video_filter = "[0:v]"
                 if global_fx:
                     video_filter += f",{global_fx}"
-                video_filter += f",subtitles='{escaped_subtitle_path}'[vout]"
+                video_filter += f",subtitles=filename='{escaped_subtitle_path}'[vout]"
 
-            extra_inputs = []
-            audio_map = f'{audio_input_idx}:a'
-            audio_filters = []
+            narration_for_video = audio_path
+            temp_mixed_audio = None
             if background_music_path and os.path.exists(background_music_path):
-                music_input_idx = audio_input_idx + 1
-                extra_inputs = ['-stream_loop', '-1', '-i', str(background_music_path)]
-                music_volume = max(0.0, min(float(BACKGROUND_MUSIC_VOLUME), 1.0))
-                audio_filters = [
-                    f"[{music_input_idx}:a]atrim=0:{duration:.3f},asetpts=N/SR/TB,volume={music_volume:.3f}[bgm]",
-                    f"[bgm][{audio_input_idx}:a]sidechaincompress=threshold=0.035:ratio=10:attack=25:release=650[ducked]",
-                    f"[{audio_input_idx}:a][ducked]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
-                ]
-                audio_map = '[aout]'
+                temp_mixed_audio = self._temp_output_path(
+                    str(Path(audio_path).with_suffix(".bgm_mixed.wav"))
+                )
+                narration_for_video = self._mix_narration_with_background_music(
+                    audio_path,
+                    background_music_path,
+                    duration,
+                    temp_mixed_audio,
+                )
+                logger.info("Pre-mixed narration with background music: %s", narration_for_video)
 
-            filter_complex = ';'.join([video_filter, *audio_filters])
+            filter_complex = video_filter
 
             tmp_output_path = self._temp_output_path(output_path)
             if os.path.exists(tmp_output_path):
@@ -264,10 +331,9 @@ class VideoGenerator:
                 '-nostats',
                 '-progress', 'pipe:2',
                 *base_video_input,
-                '-i', audio_path,
-                *extra_inputs,
+                '-i', narration_for_video,
                 '-filter_complex', filter_complex,
-                '-map', '[vout]', '-map', audio_map,
+                '-map', '[vout]', '-map', f'{audio_input_idx}:a',
                 '-t', f'{duration:.3f}',
                 *_video_encoder_args(quality_mode),
                 '-pix_fmt', 'yuv420p',
@@ -283,6 +349,11 @@ class VideoGenerator:
                 raise RuntimeError(f"Output video file was not created: {tmp_output_path}")
             self._validate_media_file(tmp_output_path)
             os.replace(tmp_output_path, output_path)
+            if temp_mixed_audio and os.path.exists(temp_mixed_audio):
+                try:
+                    os.remove(temp_mixed_audio)
+                except OSError:
+                    pass
             logger.info(f"Successfully generated video at {output_path}")
             return output_path
 
@@ -473,6 +544,123 @@ class VideoGenerator:
             logger.error(f"Error during MP4 conversion: {str(e)}")
             return False
 
+    def _render_expression_overlay_pass(
+        self,
+        base_video_path: str,
+        overlay_specs: List[Dict[str, Any]],
+        duration: float,
+        quality_mode: str,
+        output_path: str,
+        visual_style: Optional[str] = None,
+    ) -> str:
+        """Apply a batch of expression overlays; reuses one -i per unique PNG."""
+        if not overlay_specs:
+            return base_video_path
+
+        image_input_index: Dict[str, int] = {}
+        overlay_inputs: List[str] = []
+        filter_steps = ["[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone[bg_video]"]
+        overlay_filters: List[str] = []
+        last_label = "[bg_video]"
+        input_idx = 1
+
+        for overlay_step, spec in enumerate(overlay_specs, 1):
+            abs_path = spec["img_path"]
+            if abs_path not in image_input_index:
+                image_input_index[abs_path] = input_idx
+                overlay_inputs.extend(["-loop", "1", "-i", abs_path])
+                input_idx += 1
+            img_label = f"[{image_input_index[abs_path]}:v]"
+            expr_label = f"[expr{overlay_step}]"
+            label = spec["label"]
+            start = spec["start"]
+            end = spec["end"]
+            fade_duration = spec["fade_duration"]
+            interval_duration = spec["interval_duration"]
+
+            filter_steps.append(
+                format_expression_filter_step(
+                    img_label,
+                    expr_label,
+                    label,
+                    fade_duration,
+                    interval_duration,
+                    start,
+                    visual_style=visual_style,
+                )
+            )
+            overlay_filter, last_label = format_expression_overlay(
+                last_label,
+                expr_label,
+                label,
+                fade_duration,
+                interval_duration,
+                start,
+                end,
+                overlay_step,
+                visual_style=visual_style,
+            )
+            overlay_filters.append(overlay_filter)
+
+        filter_steps += [f for f in overlay_filters if f]
+        filter_steps.append(f"{last_label}format=yuv420p[vout]")
+        filter_complex_clean = ";".join(filter_steps).replace("\n", "")
+
+        use_filter_script = len(filter_complex_clean) > 48000 or len(filter_steps) > 35
+        fscript_path = None
+        if use_filter_script:
+            with tempfile.NamedTemporaryFile(
+                "w+", suffix=".ffmpeg", delete=False
+            ) as fscript:
+                fscript.write(filter_complex_clean)
+                fscript_path = fscript.name
+            filter_complex_arg = ["-filter_complex_script", fscript_path]
+            logger.info(
+                "Expression chunk filter script (%s steps, %s unique images)",
+                len(filter_steps),
+                len(image_input_index),
+            )
+        else:
+            filter_complex_arg = ["-filter_complex", filter_complex_clean]
+            logger.info(
+                "Expression chunk filter (%s steps, %s unique images)",
+                len(filter_steps),
+                len(image_input_index),
+            )
+
+        tmp_output_path = self._temp_output_path(output_path)
+        if os.path.exists(tmp_output_path):
+            os.remove(tmp_output_path)
+
+        cmd = [
+            self.ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(base_video_path),
+            *overlay_inputs,
+            *filter_complex_arg,
+            "-map",
+            "[vout]",
+            "-t",
+            f"{duration:.3f}",
+            *_video_encoder_args(quality_mode),
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            str(tmp_output_path),
+        ]
+        self._run_ffmpeg(cmd)
+        if fscript_path:
+            try:
+                os.remove(fscript_path)
+            except OSError:
+                pass
+        os.replace(tmp_output_path, output_path)
+        return output_path
+
     def _merge_consecutive_expressions(self, expressions):
         """
         Merge consecutive or overlapping expressions with the same label.
@@ -594,33 +782,11 @@ class VideoGenerator:
                 [f"{g['character']}/{g['label']}" for g in overlay_groups.values()],
             )
 
-            # Prepare ffmpeg inputs and overlay filters (plain overlays, no fade)
-            overlay_inputs = []
-            overlay_filters = []
-            overlay_step = 1
-
-            # Determine the base video input and initial filter chain
-            if background_video_path:
-                # Input 0 is the background video
-                base_video_input = ['-i', str(background_video_path)]
-                # Initial filter to set PTS for the background video and pad to infinite
-                filter_steps = [f"[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone[bg_video]"]
-                last_label = '[bg_video]'
-                input_idx = 1  # First overlay image will be input 1
-            else:
-                # Input 0 is the color background generated by lavfi
-                base_video_input = [
-                    '-f', 'lavfi', '-i', f'color=c={color}:s={resolution}:d={duration}:r={fps}']
-                filter_steps = [
-                    f"color=c={color}:s={resolution}:d={duration}:r={fps}[bg]"]
-                last_label = '[bg]'
-                input_idx = 1  # First overlay image will be input 1
-
-            # For each label and interval, add a separate image input and overlay (no fade/transition)
+            overlay_specs: List[Dict[str, Any]] = []
             logger.info(f"Expression images directory: {expr_img_dir}")
             available_images = os.listdir(expr_img_dir)
             logger.info(f"Available expression images: {available_images}")
-            
+
             for group in overlay_groups.values():
                 character = group["character"]
                 label = group["label"]
@@ -635,7 +801,9 @@ class VideoGenerator:
                     img_path = os.path.join(expr_img_dir, img_filename)
                     if not os.path.exists(img_path):
                         logger.warning(f"Image for expression '{label}' not found: {img_path}")
-                        matching_files = [f for f in available_images if f.lower() == img_filename.lower()]
+                        matching_files = [
+                            f for f in available_images if f.lower() == img_filename.lower()
+                        ]
                         if matching_files:
                             img_path = os.path.join(expr_img_dir, matching_files[0])
                             logger.info(f"Found case-insensitive match: {img_path}")
@@ -644,142 +812,178 @@ class VideoGenerator:
                             continue
                 else:
                     logger.info(f"Using expression asset for {character}/{label}: {img_path}")
-                for fade_idx, (start, end) in enumerate(intervals):
+
+                abs_img_path = os.path.abspath(img_path)
+                for start, end in intervals:
                     if end <= start:
                         logger.warning(
-                            f"Skipping invalid interval for label '{label}': start={start}, end={end}")
+                            f"Skipping invalid interval for label '{label}': start={start}, end={end}"
+                        )
                         continue
                     interval_duration = end - start
                     fade_duration = max(0.05, min(0.28, interval_duration / 3))
-                    effect_name = resolve_expression_effect(label, visual_style)
-                    overlay_inputs.extend([
-                        '-loop', '1',
-                        '-t', f'{interval_duration:.3f}',
-                        '-i', img_path
-                    ])
-                    img_label = f"[{input_idx}:v]"
-                    expr_label = f"[expr{overlay_step}]"
-                    filter_steps.append(
-                        format_expression_filter_step(
-                            img_label,
-                            expr_label,
-                            label,
-                            fade_duration,
-                            interval_duration,
-                            start,
-                            visual_style=visual_style,
-                        )
+                    overlay_specs.append(
+                        {
+                            "img_path": abs_img_path,
+                            "label": label,
+                            "character": character,
+                            "start": start,
+                            "end": end,
+                            "fade_duration": fade_duration,
+                            "interval_duration": interval_duration,
+                            "effect": resolve_expression_effect(label, visual_style),
+                        }
                     )
-                    overlay_filter, last_label = format_expression_overlay(
-                        last_label,
-                        expr_label,
-                        label,
-                        fade_duration,
-                        interval_duration,
-                        start,
-                        end,
-                        overlay_step,
-                        visual_style=visual_style,
-                    )
-                    overlay_filters.append(overlay_filter)
                     logger.info(
-                        "Expression overlay %s/%s effect=%s",
+                        "Expression cue %s/%s effect=%s %.2f-%.2fs",
                         character,
                         label,
-                        effect_name,
+                        overlay_specs[-1]["effect"],
+                        start,
+                        end,
                     )
-                    overlay_step += 1
-                    input_idx += 1
 
-            # Compose filter_complex without empty filter chains
-            filter_steps += [f for f in overlay_filters if f]
+            working_video = str(background_video_path) if background_video_path else None
+            chunk_temp_paths: List[str] = []
+            if overlay_specs and working_video:
+                if EXPRESSION_RENDERER == "opencv":
+                    expr_out = self._temp_output_path(
+                        str(Path(output_path).with_suffix(".expr_opencv.mp4"))
+                    )
+                    chunk_temp_paths.append(expr_out)
+                    logger.info(
+                        "Rendering %s expression overlays in one OpenCV pass",
+                        len(overlay_specs),
+                    )
+                    working_video = render_expression_overlays_opencv(
+                        working_video,
+                        overlay_specs,
+                        expr_out,
+                        duration,
+                        fps=fps,
+                        visual_style=visual_style,
+                    )
+                else:
+                    chunks = [
+                        overlay_specs[i : i + EXPRESSION_OVERLAY_CHUNK_SIZE]
+                        for i in range(0, len(overlay_specs), EXPRESSION_OVERLAY_CHUNK_SIZE)
+                    ]
+                    logger.info(
+                        "Rendering %s expression overlays in %s FFmpeg chunk(s) (max %s per pass)",
+                        len(overlay_specs),
+                        len(chunks),
+                        EXPRESSION_OVERLAY_CHUNK_SIZE,
+                    )
+                    for chunk_idx, chunk in enumerate(chunks):
+                        chunk_out = self._temp_output_path(
+                            str(
+                                Path(output_path).with_suffix(
+                                    f".expr_chunk{chunk_idx}.mp4"
+                                )
+                            )
+                        )
+                        chunk_temp_paths.append(chunk_out)
+                        working_video = self._render_expression_overlay_pass(
+                            working_video,
+                            chunk,
+                            duration,
+                            quality_mode,
+                            chunk_out,
+                            visual_style=visual_style,
+                        )
+                        if chunk_idx > 0 and chunk_temp_paths[chunk_idx - 1] != working_video:
+                            try:
+                                os.remove(chunk_temp_paths[chunk_idx - 1])
+                            except OSError:
+                                pass
+            elif overlay_specs and not working_video:
+                logger.warning("Expression overlays requested but no background video path")
+
+            narration_for_video = audio_path
+            temp_mixed_audio = None
+            if background_music_path and os.path.exists(background_music_path):
+                temp_mixed_audio = self._temp_output_path(
+                    str(Path(audio_path).with_suffix(".bgm_mixed.wav"))
+                )
+                narration_for_video = self._mix_narration_with_background_music(
+                    audio_path,
+                    background_music_path,
+                    duration,
+                    temp_mixed_audio,
+                )
+                logger.info("Pre-mixed narration with background music: %s", narration_for_video)
+
+            escaped_subtitle_path = _escape_ffmpeg_subtitles_path(subtitle_path)
             global_fx = build_global_ffmpeg_filter(visual_style)
+            video_filter = "[0:v]setpts=PTS-STARTPTS,tpad=stop=-1:stop_mode=clone"
             if global_fx:
                 logger.info("Applying visual style filters: %s", global_fx)
-                styled_label = "[vstyled]"
-                filter_steps.append(f"{last_label}{global_fx}{styled_label}")
-                last_label = styled_label
-            filter_steps.append(
-                f"{last_label}subtitles='{subtitle_path}'[vout]")
-            filter_complex = ';'.join(filter_steps)
-            # Clean filtergraph: remove newlines only (do not escape double quotes)
-            filter_complex_clean = filter_complex.replace('\n', '')
-
-            # Log the filter graph for debugging
-            logger.info("FFmpeg filter graph:")
-            for i, step in enumerate(filter_steps, 1):
-                logger.info(f"  Step {i}: {step}")
-                
-            # Write filter_complex to a temporary file as-is (preserve newlines and formatting)
-            with tempfile.NamedTemporaryFile('w+', suffix='.ffmpeg', delete=False) as fscript:
-                fscript.write(filter_complex)
-                fscript_path = fscript.name
-                logger.info(f"Wrote filter graph to temporary file: {fscript_path}")
-
-            # Build ffmpeg command using -filter_complex <string> (pass as string, not file)
-            # audio_input_idx will be the index of the audio input stream
-            # If background_video_path is used, it's input 0, then overlay images, then audio
-            # If color background is used, it's input 0 (lavfi color), then overlay images, then audio
-            # input_idx is already incremented to the next available input index
-            audio_input_idx = input_idx
-            extra_audio_inputs = []
-            audio_map = f'{audio_input_idx}:a'
-            if background_music_path and os.path.exists(background_music_path):
-                music_input_idx = audio_input_idx + 1
-                extra_audio_inputs = ['-stream_loop', '-1', '-i', str(background_music_path)]
-                music_volume = max(0.0, min(float(BACKGROUND_MUSIC_VOLUME), 1.0))
-                filter_steps.extend([
-                    f"[{music_input_idx}:a]atrim=0:{duration:.3f},asetpts=N/SR/TB,volume={music_volume:.3f}[bgm]",
-                    f"[bgm][{audio_input_idx}:a]sidechaincompress=threshold=0.035:ratio=10:attack=25:release=650[ducked]",
-                    f"[{audio_input_idx}:a][ducked]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
-                ])
-                filter_complex = ';'.join(filter_steps)
-                filter_complex_clean = filter_complex.replace('\n', '')
-                audio_map = '[aout]'
+                video_filter += f",{global_fx}"
+            video_filter += f",subtitles=filename='{escaped_subtitle_path}'[vout]"
 
             tmp_output_path = self._temp_output_path(output_path)
             if os.path.exists(tmp_output_path):
                 os.remove(tmp_output_path)
 
+            if working_video and os.path.exists(working_video):
+                base_video_input = ["-i", str(working_video)]
+            else:
+                res_x, res_y = map(int, resolution.lower().split("x"))
+                base_video_input = [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"color=c={color}:s={res_x}x{res_y}:d={duration}:r={fps}",
+                ]
+                video_filter = f"[0:v]"
+                if global_fx:
+                    video_filter += f",{global_fx}"
+                video_filter += f",subtitles=filename='{escaped_subtitle_path}'[vout]"
+
             cmd = [
-                self.ffmpeg, '-y',
-                '-hide_banner',
-                '-nostats',
-                '-progress', 'pipe:2',
-                *base_video_input,  # Use the determined base video input
-                *overlay_inputs,
-                '-i', audio_path,
-                *extra_audio_inputs,
-                '-filter_complex', filter_complex_clean,  # Pass cleaned filtergraph as string
-                '-map', '[vout]', '-map', audio_map,
-                '-t', f'{duration:.3f}',
+                self.ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-nostats",
+                "-progress",
+                "pipe:2",
+                *base_video_input,
+                "-i",
+                narration_for_video,
+                "-filter_complex",
+                video_filter,
+                "-map",
+                "[vout]",
+                "-map",
+                "1:a",
+                "-t",
+                f"{duration:.3f}",
                 *_video_encoder_args(quality_mode),
-                '-pix_fmt', 'yuv420p',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                '-movflags', '+faststart',
-                '-shortest', str(tmp_output_path)
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                str(tmp_output_path),
             ]
-            
-            # Log the full command and filter graph for debugging
-            logger.info("FFmpeg command with arguments:")
-            for i, arg in enumerate(cmd):
-                logger.info(f"  Arg {i}: {arg}")
-                
-            logger.info("Filter graph steps:")
-            for i, step in enumerate(filter_steps, 1):
-                logger.info(f"  Step {i}: {step}")
-                
-            logger.info(f"Final filter complex string: {filter_complex_clean}")
+            logger.info("Final encode: subtitles + audio on %s", working_video or "color background")
             self._run_ffmpeg(cmd)
-            # Clean up temp filter script
-            try:
-                os.remove(fscript_path)
-                logger.debug(f"Removed temporary filter script: {fscript_path}")
-            except Exception as e:
-                logger.warning(f"Failed to remove temp filter script: {e}")
-                # Keep the file for debugging if removal fails
-                logger.info(f"Temporary filter script kept at: {fscript_path}")
+
+            for chunk_path in chunk_temp_paths:
+                if chunk_path != working_video and os.path.exists(chunk_path):
+                    try:
+                        os.remove(chunk_path)
+                    except OSError:
+                        pass
+            if temp_mixed_audio and os.path.exists(temp_mixed_audio):
+                try:
+                    os.remove(temp_mixed_audio)
+                except OSError:
+                    pass
 
             # Verify the output file was created
             if not os.path.exists(tmp_output_path):

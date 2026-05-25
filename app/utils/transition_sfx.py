@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -23,31 +22,92 @@ ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not i
     "false",
     "no",
 }
-TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "0.22"))
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "0.58"))
+# Trim long MP3 assets so a single cue does not play for 3–6 seconds
+TRANSITION_SFX_MAX_DURATION = float(os.getenv("TRANSITION_SFX_MAX_DURATION", "1.15"))
 
-# Map slideshow transition names to sfx filenames (under SFX_DIR)
-TRANSITION_SFX_FILES: Dict[str, str] = {
-    "fade": "soft_whoosh.wav",
-    "fade_eased": "soft_whoosh.wav",
-    "crossfade": "soft_whoosh.wav",
-    "zoom_dissolve": "impact_hit.wav",
-    "radial_wipe": "whoosh.wav",
-    "iris_wipe": "whoosh.wav",
-    "whip_pan_right": "whoosh.wav",
-    "whip_pan_left": "whoosh.wav",
-    "motion_slide_right": "slide.wav",
-    "motion_slide_left": "slide.wav",
-    "slide_left": "slide.wav",
-    "slide_right": "slide.wav",
-    "slide_up": "slide.wav",
-    "slide_down": "slide.wav",
-    "cube_rotation_left": "whoosh.wav",
-    "cube_rotation_right": "whoosh.wav",
-    "page_curl_tl": "paper.wav",
-    "page_curl_tr": "paper.wav",
-    "water_ripple": "soft_whoosh.wav",
-    "default": "soft_whoosh.wav",
+# Per-file gain tweaks (stem without extension). Values multiply TRANSITION_SFX_VOLUME.
+SFX_VOLUME_SCALE: Dict[str, float] = {
+    "impact_hit": 0.85,
+    "sub_boom": 0.75,
+    "riser": 0.9,
+    "stinger": 1.05,
+    "heartbeat": 0.7,
+    "electric_charge": 0.95,
+    "sword_slash": 1.0,
+    "sparkle": 0.8,
+    "whoosh": 1.0,
+    "soft_whoosh": 0.95,
+    "reverse_whoosh": 1.0,
+    "slide": 0.9,
 }
+
+# Exact transition name -> sfx stem (app/data/sfx/{stem}.mp3)
+TRANSITION_SFX_FILES: Dict[str, str] = {
+    "none": "",
+    "default": "soft_whoosh",
+    # Gentle blends
+    "fade": "soft_whoosh",
+    "fade_eased": "soft_whoosh",
+    "crossfade": "soft_whoosh",
+    # Impact / scale
+    "zoom_dissolve": "impact_hit",
+    "radial_wipe": "sub_boom",
+    # Circular / rotational
+    "iris_wipe": "riser",
+    "cube_rotation_left": "reverse_whoosh",
+    "cube_rotation_right": "reverse_whoosh",
+    "cube_rotation_up": "reverse_whoosh",
+    "cube_rotation_down": "reverse_whoosh",
+    # Directional motion
+    "whip_pan_right": "whoosh",
+    "whip_pan_left": "whoosh",
+    "motion_slide_right": "slide",
+    "motion_slide_left": "slide",
+    "slide_left": "slide",
+    "slide_right": "slide",
+    "slide_up": "slide",
+    "slide_down": "slide",
+    # Stylized
+    "page_curl_tl": "stinger",
+    "page_curl_tr": "stinger",
+    "page_curl_bl": "stinger",
+    "page_curl_br": "stinger",
+    "water_ripple": "sparkle",
+}
+
+# Longest-prefix wins when exact key is missing
+TRANSITION_SFX_PREFIXES: Tuple[Tuple[str, str], ...] = (
+    ("whip_pan", "whoosh"),
+    ("motion_slide", "slide"),
+    ("slide_", "slide"),
+    ("cube_rotation", "reverse_whoosh"),
+    ("page_curl", "stinger"),
+)
+
+# Optional per-visual-style overrides (prefix match on transition name -> sfx stem)
+VISUAL_STYLE_SFX_OVERRIDES: Dict[str, Dict[str, str]] = {
+    "manga_hype": {
+        "whip_pan": "electric_charge",
+        "zoom_dissolve": "impact_hit",
+    },
+    "action": {
+        "whip_pan": "electric_charge",
+        "motion_slide": "sword_slash",
+        "slide_": "sword_slash",
+    },
+    "emotional": {
+        "fade": "heartbeat",
+        "fade_eased": "heartbeat",
+        "crossfade": "heartbeat",
+    },
+    "dark_lore": {
+        "radial_wipe": "sub_boom",
+        "iris_wipe": "reverse_whoosh",
+    },
+}
+
+SUPPORTED_SFX_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".flac")
 
 
 def parse_time_to_seconds(value: str) -> float:
@@ -63,55 +123,87 @@ def parse_time_to_seconds(value: str) -> float:
     return hours * 3600 + minutes * 60 + seconds + centis / 100.0
 
 
-def resolve_transition_sfx(transition_type: str) -> Optional[Path]:
+def _resolve_sfx_file(stem: str) -> Optional[Path]:
+    """Resolve sfx stem to an existing file under SFX_DIR (mp3 preferred)."""
+    if not stem:
+        return None
+    for ext in SUPPORTED_SFX_EXTENSIONS:
+        path = SFX_DIR / f"{stem}{ext}"
+        if path.exists():
+            return path
+    return None
+
+
+def _style_override_stem(transition_type: str, visual_style: Optional[str]) -> Optional[str]:
+    style = (visual_style or "").strip().lower()
+    overrides = VISUAL_STYLE_SFX_OVERRIDES.get(style)
+    if not overrides:
+        return None
+    key = (transition_type or "").lower()
+    if key in overrides:
+        return overrides[key]
+    for prefix, stem in overrides.items():
+        if key.startswith(prefix):
+            return stem
+    return None
+
+
+def _sfx_stem_for_transition(
+    transition_type: str,
+    visual_style: Optional[str] = None,
+) -> Optional[str]:
+    key = (transition_type or "default").lower().strip()
+    if key in {"", "none"}:
+        return None
+    styled = _style_override_stem(key, visual_style)
+    if styled:
+        return styled
+    if key in TRANSITION_SFX_FILES:
+        stem = TRANSITION_SFX_FILES[key]
+        return stem or None
+    for prefix, stem in TRANSITION_SFX_PREFIXES:
+        if key.startswith(prefix):
+            return stem
+    return TRANSITION_SFX_FILES.get("default", "soft_whoosh")
+
+
+def resolve_transition_sfx(
+    transition_type: str,
+    visual_style: Optional[str] = None,
+) -> Optional[Path]:
     if not ENABLE_TRANSITION_SFX:
         return None
-    key = (transition_type or "default").lower()
-    if key.startswith("whip_pan"):
-        key = key
-    filename = TRANSITION_SFX_FILES.get(key) or TRANSITION_SFX_FILES["default"]
-    path = SFX_DIR / filename
-    return path if path.exists() else None
+    stem = _sfx_stem_for_transition(transition_type, visual_style=visual_style)
+    if not stem:
+        return None
+    path = _resolve_sfx_file(stem)
+    if not path:
+        logger.debug("No SFX file for transition %r (expected %s.*)", transition_type, stem)
+    return path
 
 
-def _generate_placeholder_wav(path: Path, duration_ms: int = 180, freq: int = 220) -> None:
-    """Create a short whoosh-like noise burst with ffmpeg when assets are missing."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    duration_s = duration_ms / 1000.0
-    fade_out_st = max(0.03, duration_s - 0.06)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        (
-            f"anoisesrc=d={duration_s:.3f}:color=pink:seed={freq},"
-            f"volume=0.28,afade=t=in:st=0:d=0.03,afade=t=out:st={fade_out_st:.3f}:d=0.05"
-        ),
-        "-ac",
-        "1",
-        "-ar",
-        "44100",
-        str(path),
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
-        logger.info("Generated placeholder SFX: %s", path.name)
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        logger.warning("Could not generate placeholder SFX %s: %s", path, exc)
+def sfx_volume_for_path(sfx_path: Path) -> float:
+    stem = sfx_path.stem.lower()
+    scale = SFX_VOLUME_SCALE.get(stem, 1.0)
+    return TRANSITION_SFX_VOLUME * scale
 
 
 def ensure_sfx_library() -> None:
-    """Ensure default sfx files exist (generates placeholders if missing)."""
+    """Log missing mapped SFX; does not generate placeholders when using real MP3 assets."""
     SFX_DIR.mkdir(parents=True, exist_ok=True)
-    for filename in set(TRANSITION_SFX_FILES.values()):
-        target = SFX_DIR / filename
-        if not target.exists():
-            _generate_placeholder_wav(target)
+    required_stems = set(TRANSITION_SFX_FILES.values()) | {s for _, s in TRANSITION_SFX_PREFIXES}
+    required_stems.discard("")
+    missing = [stem for stem in sorted(required_stems) if not _resolve_sfx_file(stem)]
+    if missing:
+        logger.warning(
+            "Missing transition SFX in %s: %s (expected %s)",
+            SFX_DIR,
+            ", ".join(missing),
+            ", ".join(f"{s}.mp3" for s in missing),
+        )
+    else:
+        found = sorted(p.name for p in SFX_DIR.iterdir() if p.suffix.lower() in SUPPORTED_SFX_EXTENSIONS)
+        logger.debug("Transition SFX library OK (%s files)", len(found))
 
 
 def build_transition_events_from_slides(slides: List[Dict]) -> List[Dict]:
@@ -124,6 +216,8 @@ def build_transition_events_from_slides(slides: List[Dict]) -> List[Dict]:
         if not start:
             continue
         transition_type = slide.get("transition_in") or slide.get("transition_type") or "default"
+        if (transition_type or "").lower() == "none":
+            continue
         events.append(
             {
                 "time": parse_time_to_seconds(start),
@@ -160,14 +254,30 @@ def save_transition_events(slides_json_path: str, events: List[Dict]) -> str:
     return str(out_path)
 
 
+def _sfx_clip_filter(input_idx: int, delay_ms: int, volume: float, label: str) -> str:
+    """Trim, fade, delay, and level a single SFX cue."""
+    max_dur = TRANSITION_SFX_MAX_DURATION
+    fade_out_st = max(0.02, max_dur - 0.08)
+    return (
+        f"[{input_idx}:a]aresample=44100,atrim=0:{max_dur:.3f},asetpts=PTS-STARTPTS,"
+        f"afade=t=in:st=0:d=0.01,afade=t=out:st={fade_out_st:.3f}:d=0.07,"
+        f"adelay={delay_ms}|{delay_ms},volume={volume:.3f}{label}"
+    )
+
+
 def mix_transition_sfx(
     voice_audio_path: str,
     events: List[Dict],
     output_path: str,
     duration: Optional[float] = None,
+    visual_style: Optional[str] = None,
 ) -> str:
     """
-    Mix transition SFX into the narration WAV/MP3. Returns path to mixed audio.
+    Mix transition SFX into the narration track.
+
+    Uses sequential 2-input amix (voice + one SFX at a time) with normalize=0 so
+    the voice stays at full level. A single amix over N+1 inputs was ducking voice
+    and making SFX inaudible.
     """
     if not ENABLE_TRANSITION_SFX or not events:
         return voice_audio_path
@@ -178,33 +288,48 @@ def mix_transition_sfx(
         return voice_audio_path
 
     inputs = ["-i", str(voice_path)]
-    filter_parts = ["[0:a]asetpts=PTS-STARTPTS[voice]"]
-    mix_labels = ["[voice]"]
+    filter_parts = [
+        "[0:a]aresample=44100,asetpts=PTS-STARTPTS,alimiter=limit=0.99[voice]"
+    ]
+    last_label = "[voice]"
     input_idx = 1
     used = 0
 
     for event in events:
         transition = event.get("transition") or "default"
-        sfx_path = resolve_transition_sfx(transition)
+        sfx_path = resolve_transition_sfx(transition, visual_style=visual_style)
         if not sfx_path:
+            logger.debug("No SFX file for transition %r", transition)
             continue
         start = max(0.0, float(event.get("time", 0)))
         delay_ms = int(start * 1000)
+        volume = sfx_volume_for_path(sfx_path)
         inputs.extend(["-i", str(sfx_path)])
-        label = f"[sfx{input_idx}]"
+        sfx_label = f"[sfx{input_idx}]"
+        mix_label = f"[mix{input_idx}]"
         filter_parts.append(
-            f"[{input_idx}:a]adelay={delay_ms}|{delay_ms},volume={TRANSITION_SFX_VOLUME:.3f}{label}"
+            _sfx_clip_filter(input_idx, delay_ms, volume, sfx_label)
         )
-        mix_labels.append(label)
+        filter_parts.append(
+            f"{last_label}{sfx_label}amix=inputs=2:duration=first:dropout_transition=0:"
+            f"normalize=0:weights=1 1{mix_label}"
+        )
+        last_label = mix_label
         input_idx += 1
         used += 1
+        logger.info(
+            "SFX cue @ %.2fs: %s -> %s (vol=%.2f)",
+            start,
+            transition,
+            sfx_path.name,
+            volume,
+        )
 
     if not used:
+        logger.warning("No transition SFX resolved for %s events", len(events))
         return voice_audio_path
 
-    filter_parts.append(
-        "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:duration=first:dropout_transition=0,alimiter=limit=0.98[aout]"
-    )
+    filter_parts.append(f"{last_label}alimiter=limit=0.98[aout]")
     filter_complex = ";".join(filter_parts)
 
     out = Path(output_path)
@@ -222,15 +347,31 @@ def mix_transition_sfx(
         "[aout]",
         "-c:a",
         "pcm_s16le",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
     ]
     if duration:
         cmd.extend(["-t", f"{duration:.3f}"])
     cmd.append(str(out))
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
-        logger.info("Mixed %s transition SFX into %s", used, out.name)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+        if result.stderr:
+            logger.debug("SFX mix ffmpeg: %s", result.stderr.strip())
+        logger.info(
+            "Mixed %s transition SFX cues into %s (voice level preserved)",
+            used,
+            out.name,
+        )
         return str(out)
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            "Transition SFX mix failed, using dry voice: %s",
+            (exc.stderr or str(exc)).strip(),
+        )
+        return voice_audio_path
+    except FileNotFoundError as exc:
         logger.warning("Transition SFX mix failed, using dry voice: %s", exc)
         return voice_audio_path

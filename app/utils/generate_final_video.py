@@ -112,6 +112,7 @@ def generate_final_video(
                 transition_events,
                 str(mixed_path),
                 duration=total_audio_duration,
+                visual_style=visual_style,
             )
             if narration_path != str(audio_path):
                 audio_path = Path(narration_path)

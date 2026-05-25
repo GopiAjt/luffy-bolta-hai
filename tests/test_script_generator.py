@@ -2,7 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-os.environ.setdefault("NVIDIA_API_KEY", "test-key")
+os.environ.setdefault("GEMINI_API_KEY", "test-key")
+os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 from app.utils import script_generator
 from app.utils.script_generator import generate_script, validate_generated_script
@@ -47,60 +48,42 @@ class FakeModel:
         return FakeResponse(self.responses.pop(0))
 
 
-class FakeDelta:
-    def __init__(self, content):
-        self.content = content
-
-
-class FakeChoice:
-    def __init__(self, content):
-        self.delta = FakeDelta(content)
-
-
-class FakeChunk:
-    def __init__(self, content):
-        self.choices = [FakeChoice(content)]
-
-
-class FakeCompletions:
-    def __init__(self):
-        self.kwargs = None
-
-    def create(self, **kwargs):
-        self.kwargs = kwargs
-        return [FakeChunk("TITLE: Test\n\n"), FakeChunk("SCRIPT: Body")]
-
-
-class FakeChat:
-    def __init__(self):
-        self.completions = FakeCompletions()
-
-
-class FakeOpenAIClient:
-    def __init__(self):
-        self.chat = FakeChat()
-
-
 class ScriptGeneratorTests(unittest.TestCase):
-    def test_nvidia_model_streams_openai_compatible_response(self):
-        fake_client = FakeOpenAIClient()
-        nvidia_model = script_generator.NvidiaScriptModel(api_key="test-key")
-        nvidia_model._client = fake_client
+    def test_gemini_model_calls_rest_api(self):
+        gemini_model = script_generator.GeminiScriptModel(api_key="test-key")
+        fake_payload = {
+            "candidates": [
+                {"content": {"parts": [{"text": "TITLE: Test\n\nSCRIPT: Body"}]}}
+            ]
+        }
 
-        response = nvidia_model.generate_content(
-            "hello",
-            generation_config={"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
-        )
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return fake_payload
+
+        captured = {}
+
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return FakeResponse()
+
+        with patch("app.utils.script_generator.requests.post", side_effect=fake_post):
+            response = gemini_model.generate_content(
+                "hello",
+                generation_config={"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
+            )
 
         self.assertEqual(response.text, "TITLE: Test\n\nSCRIPT: Body")
-        kwargs = fake_client.chat.completions.kwargs
-        self.assertEqual(kwargs["model"], "deepseek-ai/deepseek-v4-pro")
-        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "hello"}])
-        self.assertEqual(kwargs["temperature"], 1)
-        self.assertEqual(kwargs["top_p"], 0.95)
-        self.assertEqual(kwargs["max_tokens"], 16384)
-        self.assertEqual(kwargs["extra_body"], {"chat_template_kwargs": {"thinking": False}})
-        self.assertTrue(kwargs["stream"])
+        self.assertIn("gemini-2.5-pro", captured["url"])
+        self.assertEqual(captured["kwargs"]["params"]["key"], "test-key")
+        gen_cfg = captured["kwargs"]["json"]["generationConfig"]
+        self.assertEqual(gen_cfg["temperature"], 1)
+        self.assertEqual(gen_cfg["topP"], 0.95)
+        self.assertEqual(gen_cfg["maxOutputTokens"], 16384)
 
     def test_valid_structured_output_parses_and_returns_metadata(self):
         fake_model = FakeModel([model_text()])

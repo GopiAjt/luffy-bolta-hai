@@ -5,20 +5,23 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import requests
 from dotenv import load_dotenv
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover - exercised only when dependency is missing at runtime.
-    OpenAI = None
 
 from app.config import normalize_video_profile
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-NVIDIA_BASE_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = os.getenv("NVIDIA_SCRIPT_MODEL", "deepseek-ai/deepseek-v4-pro")
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+GEMINI_API_BASE = os.getenv(
+    "GEMINI_API_BASE",
+    "https://generativelanguage.googleapis.com/v1beta",
+).rstrip("/")
+# Best for creative narration: gemini-2.5-pro. Faster/cheaper: gemini-2.5-flash
+GEMINI_SCRIPT_MODEL = os.getenv("GEMINI_SCRIPT_MODEL", "gemini-3.5-pro")
+GEMINI_CONNECT_TIMEOUT = int(os.getenv("GEMINI_CONNECT_TIMEOUT", "15"))
+GEMINI_READ_TIMEOUT = int(os.getenv("GEMINI_READ_TIMEOUT", "120"))
 
 REQUIRED_SECTIONS = ("title", "script", "description", "hashtags")
 BANNED_HOOK_RE = re.compile(
@@ -92,9 +95,25 @@ GENERATION_SETTINGS = {
     "short_vertical": {"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
     "long_youtube": {"temperature": 1, "top_p": 0.95, "max_tokens": 16384},
 }
+PROSODY_MARKUP_RULES = (
+    "PROSODY MARKUP IN SCRIPT (write these characters directly in the narration for TTS):\n"
+    "- Commas (,) — breath between clauses; use often so lines do not sound rushed.\n"
+    "- Em dashes (—) — hard pivot, contrast, or dramatic weight before a reveal (use — not hyphen -).\n"
+    "- Ellipses (...) — suspense, hesitation, or a trailing beat before the next idea.\n"
+    "- ?! or !? — shock, disbelief, or a rhetorical punch (max 1–2 per script; do not overuse).\n"
+    "- Periods (.) — end a beat cleanly; mix short sentences with comma-linked longer ones.\n"
+    "- Rhythm pattern: punchy hook → comma breaths in evidence → em dash or ellipsis before payoff → crisp CTA.\n"
+    "- Do NOT use SSML, [pause], (beat), or other stage tags; punctuation alone controls delivery.\n"
+    "- WEAK (flat): \"Zoro took Luffy pain and Sanji found him and that is who Zoro is.\"\n"
+    "- STRONG (prosody): \"Zoro took every wound Luffy carried — all of it, Chapter 485 — "
+    "and Sanji still found him standing... nothing happened?!\"\n"
+    "- Short-form SCRIPT: include at least 4 commas, 1 em dash (—), and 1 ellipsis (...) or ?!.\n"
+    "- Long-form SCRIPT: use commas, dashes, and ellipses throughout; avoid flat run-on blocks.\n\n"
+)
+
 REQUIRED_OUTPUT_TEMPLATE = (
     "TITLE: <one title under 80 characters>\n\n"
-    "SCRIPT: <complete narration only, no markdown, target word count>\n\n"
+    "SCRIPT: <complete narration only, no markdown; use comma, —, ..., ?! prosody in the text>\n\n"
     "DESCRIPTION:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
@@ -120,52 +139,83 @@ class ModelResponse:
     text: str
 
 
-class NvidiaScriptModel:
+class GeminiScriptModel:
+    """Generate narration scripts via the Gemini REST API."""
+
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = NVIDIA_BASE_URL,
-        model_name: str = NVIDIA_MODEL,
+        base_url: str = GEMINI_API_BASE,
+        model_name: str = GEMINI_SCRIPT_MODEL,
     ):
-        self.api_key = api_key
-        self.base_url = base_url
+        self.api_key = api_key or GEMINI_API_KEY
+        self.base_url = base_url.rstrip("/")
         self.model_name = model_name
-        self._client = None
 
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-        if OpenAI is None:
-            raise ValueError("Install the openai package to use NVIDIA script generation")
-        if not self.api_key:
-            raise ValueError("Set NVIDIA_API_KEY in your .env file")
-        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
-        return self._client
+    def _extract_text(self, payload: dict) -> str:
+        for candidate in payload.get("candidates") or []:
+            parts = candidate.get("content", {}).get("parts") or []
+            chunks = [part.get("text", "") for part in parts if part.get("text")]
+            if chunks:
+                return "".join(chunks).strip()
+        prompt_feedback = payload.get("promptFeedback") or {}
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            raise ValueError(f"Gemini blocked the prompt: {block_reason}")
+        raise ValueError("Gemini returned no text candidates")
 
     def generate_content(self, prompt: str, generation_config: Optional[dict] = None) -> ModelResponse:
+        if not self.api_key:
+            raise ValueError("Set GEMINI_API_KEY or GOOGLE_API_KEY in your .env file")
+
         config = generation_config or {}
-        completion = self._get_client().chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=config.get("temperature", 0.7),
-            top_p=config.get("top_p", 0.9),
-            max_tokens=config.get("max_tokens", config.get("max_output_tokens", 1200)),
-            extra_body={"chat_template_kwargs": {"thinking": False}},
-            stream=True,
+        url = f"{self.base_url}/models/{self.model_name}:generateContent"
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": config.get("temperature", 1),
+                "topP": config.get("top_p", 0.95),
+                "maxOutputTokens": config.get(
+                    "max_tokens", config.get("max_output_tokens", 16384)
+                ),
+            },
+        }
+        logger.info(
+            "Calling Gemini for script (model=%s, max_output_tokens=%s)...",
+            self.model_name,
+            body["generationConfig"]["maxOutputTokens"],
         )
+        try:
+            response = requests.post(
+                url,
+                params={"key": self.api_key},
+                json=body,
+                timeout=(GEMINI_CONNECT_TIMEOUT, GEMINI_READ_TIMEOUT),
+            )
+            response.raise_for_status()
+        except requests.exceptions.Timeout as exc:
+            raise TimeoutError(
+                f"Gemini script request timed out (model={self.model_name}). "
+                "Try GEMINI_READ_TIMEOUT=180 or a faster model."
+            ) from exc
+        except requests.exceptions.HTTPError as exc:
+            detail = ""
+            if exc.response is not None:
+                try:
+                    detail = exc.response.json().get("error", {}).get("message", "")
+                except Exception:
+                    detail = (exc.response.text or "")[:300]
+            raise RuntimeError(
+                f"Gemini API HTTP {getattr(exc.response, 'status_code', '?')}: {detail or exc}"
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise ConnectionError(f"Gemini API request failed: {exc}") from exc
 
-        parts = []
-        for chunk in completion:
-            if not getattr(chunk, "choices", None):
-                continue
-            delta = chunk.choices[0].delta
-            content = getattr(delta, "content", None)
-            if content is not None:
-                parts.append(content)
-        return ModelResponse("".join(parts))
+        text = self._extract_text(response.json())
+        return ModelResponse(text)
 
 
-model = NvidiaScriptModel(api_key=NVIDIA_API_KEY)
+model = GeminiScriptModel(api_key=GEMINI_API_KEY)
 
 
 def is_generic_topic(topic: str) -> bool:
@@ -338,7 +388,8 @@ def _profile_blocks(video_profile: str, language_label: str, power_words_rule: s
             "- Theory chain: connect clues step by step to 2-3 larger lore pieces, not a random lore dump.\n"
             "- Counterpoint: include one fair objection fans may raise, then answer it.\n"
             "- Payoff: restate the theory as one memorable declarative claim before any CTA.\n"
-            "- Use natural transitions, but do not output headings inside SCRIPT.\n\n"
+            "- Use natural transitions, but do not output headings inside SCRIPT.\n"
+            "- Use commas, em dashes (—), and ellipses (...) across sections so long narration stays listenable.\n\n"
         )
         requirements = (
             "SCRIPT REQUIREMENTS:\n"
@@ -371,7 +422,7 @@ def _profile_blocks(video_profile: str, language_label: str, power_words_rule: s
         "- PURE narration only, no SFX/music.\n"
         "- Open with a 1-sentence powerful declarative hook, max 9 words.\n"
         "- First 10s must spark curiosity with a hidden truth, contradiction, or twist.\n"
-        "- Keep fast pace and vary sentence length.\n"
+        "- Keep fast pace and vary sentence length; weave in commas, —, ..., and ?! for spoken rhythm.\n"
         "- Add vivid, specific detail within the first 15s.\n"
         "- Show personal reaction to confirmed facts, not uncertainty about whether facts are true.\n"
         f"{power_words_rule}"
@@ -426,12 +477,12 @@ def _build_prompt(
         "- FAILURE EXAMPLE: If the title promises 'chapters 1-100 clues' but the script only uses chapter 1, that is a broken promise. Cover multiple chapters or rewrite the title to match.\n\n"
         "VOICE-FIRST WRITING RULES:\n"
         "- Write narration that naturally gives TTS emotional context: urgency in the hook, curiosity in evidence, confidence in payoff.\n"
-        "- Use punctuation as pacing control: commas for breath, short full-stop sentences for impact, em dashes for weight, ellipses only for suspense.\n"
         "- Shape sentence length as emotional rhythm: short punchy hook, medium evidence beats, one slightly longer payoff sentence, then crisp CTAs.\n"
         "- Use word-level phonetic shaping for spoken clarity: prefer hard consonants for impact, open vowel sounds for wonder, and avoid tongue-twisting clusters near the reveal.\n"
         "- Put emotionally loaded words near the reveal so the voice has semantic cues to emphasize.\n"
         "- Do NOT use markdown in SCRIPT: no **bold**, no *italic*, no underscores, no asterisks of any kind.\n"
-        "- Do not output stage directions or bracket tags inside SCRIPT; the TTS layer adds delivery markup separately.\n\n"
+        "- Do not output stage directions or bracket tags inside SCRIPT.\n\n"
+        f"{PROSODY_MARKUP_RULES}"
         f"{language_config['rules']}"
         f"TOPIC: \"{topic}\"\n\n"
         f"{context_block}"
@@ -449,7 +500,7 @@ def _build_prompt(
         f"{quality_blueprint}"
         "SELF-CHECK BEFORE FINAL ANSWER:\n"
         "- Did the script answer the title's promise with a concrete claim? If no, rewrite.\n"
-        "- Did punctuation create breath, weight, suspense, and impact without stage directions? If no, rewrite.\n"
+        "- Does SCRIPT use prosody punctuation (commas, —, ..., ?!) for breath and impact—not flat run-ons? If no, rewrite.\n"
         "- Does sentence length move from punchy hook to evidence rhythm to confident payoff? If no, rewrite.\n"
         "- Are reveal words easy to say aloud, with clear consonants and no awkward clusters? If no, rewrite.\n"
         "- Does the evidence section name at least 2 specific characters, chapters, locations, ships, powers, or canon terms? If no, rewrite with real named details.\n"
@@ -678,7 +729,7 @@ def _retry_prompt(
         "RULES THAT STILL APPLY:\n"
         "- Open with a declarative statement, not a question or memory-check phrase.\n"
         f"{canon_anchor_rule}"
-        "- Use punctuation as pacing: commas for breath, full stops for impact, dashes for weight, ellipses only for suspense.\n"
+        f"{PROSODY_MARKUP_RULES}"
         "- Vary sentence length for emotional rhythm: short hook, medium evidence, longer payoff, crisp CTA.\n"
         "- Choose reveal words that sound clean aloud; avoid awkward tongue-twisting clusters.\n"
         "- Include at least 2 named One Piece entities: characters, chapters, locations, ships, powers, or canon terms.\n"
@@ -716,7 +767,8 @@ def _strict_repair_prompt(
         "STRICT CONTENT REQUIREMENTS:\n"
         "- Include at least 2 named One Piece entities in SCRIPT.\n"
         "- Each evidence sentence must name a character, chapter, arc, location, ship, power, quote, or canon term.\n"
-        "- Do not use hollow phrases like 'one reaction', 'one pause', 'behind the curtain', or 'not random setup'.\n\n"
+        "- Do not use hollow phrases like 'one reaction', 'one pause', 'behind the curtain', or 'not random setup'.\n"
+        "- Keep prosody in SCRIPT: commas, em dashes (—), ellipses (...), and ?! where they add breath or shock.\n\n"
         "EXACT OUTPUT TEMPLATE:\n"
         f"{REQUIRED_OUTPUT_TEMPLATE}\n\n"
         "Use the previous attempt only as a rough idea, but write a complete valid version:\n"
@@ -734,7 +786,7 @@ def _generate_once(prompt: str, video_profile: str = "short_vertical") -> Dict[s
         generation_config=GENERATION_SETTINGS[video_profile],
     )
     if not response.text:
-        raise ValueError("No content generated by NVIDIA API")
+        raise ValueError("No content generated by Gemini API")
     return _parse_response(response.text)
 
 
@@ -748,7 +800,7 @@ def _raise_generation_failure(
     raise ValueError(
         "Script generation failed after all repair attempts. "
         f"Errors: {failures}. "
-        "Please retry with a more specific topic or check your NVIDIA API quota."
+        "Please retry with a more specific topic or check your Gemini API quota."
     )
 
 
@@ -761,7 +813,7 @@ def generate_script(
     context_sources: list = None,
     video_profile: str = "short_vertical",
 ) -> dict:
-    """Generate a One Piece narration script via NVIDIA's OpenAI-compatible API."""
+    """Generate a One Piece narration script via the Gemini API."""
     try:
         video_profile = normalize_video_profile(video_profile)
         context_text = (context_text or "").strip()

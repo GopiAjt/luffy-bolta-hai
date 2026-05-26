@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Index Vivre Card PNGs from a local Google Drive sync folder."""
+"""Index Vivre Card PNGs from app/data/vivre-card (or VIVRE_CARD_ASSETS_DIR)."""
 
 import argparse
 import sys
@@ -17,7 +17,7 @@ def main():
     parser.add_argument(
         "--dir",
         default=None,
-        help="Override VIVRE_CARD_ASSETS_DIR (folder synced from Google Drive)",
+        help="Override VIVRE_CARD_ASSETS_DIR (default: app/data/vivre-card)",
     )
     parser.add_argument("--force", action="store_true", help="Rebuild index even if cached")
     args = parser.parse_args()
@@ -25,6 +25,10 @@ def main():
     if args.dir:
         import os
         os.environ["VIVRE_CARD_ASSETS_DIR"] = args.dir
+    else:
+        from app.config import VIVRE_CARD_ASSETS_DIR
+        import os
+        os.environ.setdefault("VIVRE_CARD_ASSETS_DIR", str(VIVRE_CARD_ASSETS_DIR))
 
     records = build_vivre_card_index(force=args.force)
     print(f"Indexed {len(records)} PNG files")

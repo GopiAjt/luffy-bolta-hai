@@ -22,24 +22,28 @@ ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not i
     "false",
     "no",
 }
-TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "0.58"))
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.25"))
+# Extra weight on the SFX leg in amix (voice stays at 1.0; SFX is often short vs loud narration).
+TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.5"))
+# Human perception usually wants transition sounds to lead the visual by a frame or two.
+TRANSITION_SFX_SYNC_OFFSET = float(os.getenv("TRANSITION_SFX_SYNC_OFFSET", "-0.04"))
 # Trim long MP3 assets so a single cue does not play for 3–6 seconds
 TRANSITION_SFX_MAX_DURATION = float(os.getenv("TRANSITION_SFX_MAX_DURATION", "1.15"))
 
 # Per-file gain tweaks (stem without extension). Values multiply TRANSITION_SFX_VOLUME.
 SFX_VOLUME_SCALE: Dict[str, float] = {
-    "impact_hit": 0.85,
-    "sub_boom": 0.75,
-    "riser": 0.9,
-    "stinger": 1.05,
-    "heartbeat": 0.7,
-    "electric_charge": 0.95,
-    "sword_slash": 1.0,
-    "sparkle": 0.8,
-    "whoosh": 1.0,
-    "soft_whoosh": 0.95,
-    "reverse_whoosh": 1.0,
-    "slide": 0.9,
+    "impact_hit": 1.05,
+    "sub_boom": 1.0,
+    "riser": 1.1,
+    "stinger": 1.15,
+    "heartbeat": 1.0,
+    "electric_charge": 1.1,
+    "sword_slash": 1.1,
+    "sparkle": 1.05,
+    "whoosh": 1.1,
+    "soft_whoosh": 1.15,
+    "reverse_whoosh": 1.1,
+    "slide": 1.1,
 }
 
 # Exact transition name -> sfx stem (app/data/sfx/{stem}.mp3)
@@ -301,7 +305,7 @@ def mix_transition_sfx(
         if not sfx_path:
             logger.debug("No SFX file for transition %r", transition)
             continue
-        start = max(0.0, float(event.get("time", 0)))
+        start = max(0.0, float(event.get("time", 0)) + TRANSITION_SFX_SYNC_OFFSET)
         delay_ms = int(start * 1000)
         volume = sfx_volume_for_path(sfx_path)
         inputs.extend(["-i", str(sfx_path)])
@@ -310,9 +314,10 @@ def mix_transition_sfx(
         filter_parts.append(
             _sfx_clip_filter(input_idx, delay_ms, volume, sfx_label)
         )
+        w = max(1.0, TRANSITION_SFX_MIX_WEIGHT)
         filter_parts.append(
             f"{last_label}{sfx_label}amix=inputs=2:duration=first:dropout_transition=0:"
-            f"normalize=0:weights=1 1{mix_label}"
+            f"normalize=0:weights=1 {w:.2f}{mix_label}"
         )
         last_label = mix_label
         input_idx += 1

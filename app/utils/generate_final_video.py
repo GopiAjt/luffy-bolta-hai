@@ -16,13 +16,13 @@ from app.config import (
     BACKGROUND_MUSIC_DIR,
     ENABLE_BACKGROUND_MUSIC,
     UPLOADS_DIR,
-    IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
     COMPILED_VIDEO_DIR,
     get_video_profile_config,
     normalize_video_profile,
     normalize_visual_style,
 )
+from app.utils.image_slides_upload import slides_images_dir
 from app.utils.transition_sfx import load_transition_events, mix_transition_sfx
 
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +58,7 @@ def generate_final_video(
     audio_id: str,
     slides_json_path: str,
     subtitle_path: str,
-    images_dir: str = str(IMAGE_SLIDES_DIR),
+    images_dir: str = None,
     expressions_path: str = None,
     output_filename: str = None,
     generate_slides: bool = True,  # New parameter to control slides generation
@@ -90,6 +90,9 @@ def generate_final_video(
         visual_style = normalize_visual_style(visual_style)
         profile_config = get_video_profile_config(video_profile)
         video_resolution = profile_config["video_resolution"]
+        if not images_dir:
+            images_dir = str(slides_images_dir(audio_id))
+        logger.info("Using slide images directory: %s", images_dir)
         logger.info("Using video quality mode: %s", quality_mode)
         logger.info("Using video profile: %s (%sx%s)", video_profile, video_resolution[0], video_resolution[1])
         logger.info("Using visual style: %s", visual_style)
@@ -102,20 +105,6 @@ def generate_final_video(
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
         total_audio_duration = get_audio_duration(str(audio_path))
         logger.info(f"Total audio duration: {total_audio_duration:.2f}s")
-
-        narration_path = str(audio_path)
-        transition_events = load_transition_events(slides_json_path)
-        if transition_events:
-            mixed_path = COMPILED_VIDEO_DIR / f"narration_sfx_{Path(audio_id).stem}.wav"
-            narration_path = mix_transition_sfx(
-                narration_path,
-                transition_events,
-                str(mixed_path),
-                duration=total_audio_duration,
-                visual_style=visual_style,
-            )
-            if narration_path != str(audio_path):
-                audio_path = Path(narration_path)
 
         # 2. Generate the slideshow video (as a temporary file)
         slideshow_output_path = COMPILED_VIDEO_DIR / f"slideshow_temp_{Path(audio_id).stem}_{video_profile}.mp4"
@@ -138,6 +127,20 @@ def generate_final_video(
             logger.info("Slideshow video generated successfully.")
         else:
             logger.info("Using existing slideshow video")
+
+        narration_path = str(audio_path)
+        transition_events = load_transition_events(slides_json_path)
+        if transition_events:
+            mixed_path = COMPILED_VIDEO_DIR / f"narration_sfx_{Path(audio_id).stem}.wav"
+            narration_path = mix_transition_sfx(
+                narration_path,
+                transition_events,
+                str(mixed_path),
+                duration=total_audio_duration,
+                visual_style=visual_style,
+            )
+            if narration_path != str(audio_path):
+                audio_path = Path(narration_path)
 
         # 3. Initialize the VideoGenerator
         video_generator = VideoGenerator()
@@ -226,7 +229,11 @@ if __name__ == "__main__":
     parser.add_argument("--audio_id", required=True, help="Filename of the audio file in the uploads directory (e.g., 'my_audio.wav').")
     parser.add_argument("--slides_json", required=True, help="Path to the slides JSON file.")
     parser.add_argument("--subtitle_file", required=True, help="Path to the .ass subtitle file.")
-    parser.add_argument("--images_dir", default=str(IMAGE_SLIDES_DIR), help=f"Directory containing slide images. Defaults to {IMAGE_SLIDES_DIR}")
+    parser.add_argument(
+        "--images_dir",
+        default=None,
+        help="Directory containing slide images (default: output/image_slides/<audio_stem>/)",
+    )
     parser.add_argument("--expressions_file", default=None, help="Path to the expressions JSON file (optional).")
     parser.add_argument("--output_filename", default=None, help="Name for the final output video file (optional).")
     parser.add_argument("--blur", type=int, default=5, help="Amount of blur to apply to slides (0 = no blur, 5 = default, higher values = more blur, typical range: 0-10).")

@@ -45,6 +45,8 @@ data/uploads/*
 !data/uploads/.gitkeep
 app/output/image_slides/*
 !app/output/image_slides/.gitkeep
+app/data/vivre-card/*
+!app/data/vivre-card/.gitkeep
 
 # Logs
 logs/

@@ -71,7 +71,7 @@ def call_image_slides_llm(prompt: str, model_name: Optional[str] = None) -> str:
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": 0.35,
             "maxOutputTokens": 8192,
             "responseMimeType": "application/json",
         },

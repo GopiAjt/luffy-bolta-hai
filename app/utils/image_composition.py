@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Tuple
 
+import cv2
+import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 logger = logging.getLogger(__name__)
@@ -38,3 +40,22 @@ def compose_vertical_subject(
     y = max(int(target_h * 0.12), min(y, target_h - subject.height - int(target_h * 0.14)))
     canvas.paste(subject, (x, y))
     return canvas
+
+
+def compose_vertical_subject_bgr(
+    image_bgr: np.ndarray,
+    target_size: Tuple[int, int] = (1080, 1920),
+    subject_scale: float = 0.72,
+    blur_radius: int = 28,
+) -> np.ndarray:
+    """BGR wrapper around compose_vertical_subject (EXIF handled in PIL path)."""
+    if image_bgr is None or image_bgr.size == 0:
+        raise ValueError("empty image for compose_vertical_subject_bgr")
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    composed = compose_vertical_subject(
+        Image.fromarray(rgb),
+        target_size=target_size,
+        subject_scale=subject_scale,
+        blur_radius=blur_radius,
+    )
+    return cv2.cvtColor(np.asarray(composed), cv2.COLOR_RGB2BGR)

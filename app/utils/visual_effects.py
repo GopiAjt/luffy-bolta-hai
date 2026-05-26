@@ -13,7 +13,7 @@ VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
         "transition_mood": "clean",
         "transitions": ["crossfade", "fade_eased", "zoom_dissolve"],
         "transition_weights": [0.56, 0.30, 0.14],
-        "motion": ["slow_push", "stable_pan", "hold_still"],
+        "motion": ["slow_push", "slow_push", "hold_still"],
         "global_fx": [],
         "subtitle_style": "clean_pro",
         "expression_entry": "fade_scale",
@@ -111,6 +111,8 @@ def choose_motion_preset(visual_style: Optional[str], beat: str, index: int = 0)
         return "hold_still" if style == "emotional" else "pull_out"
     if beat == "cta":
         return "hold_still"
+    if style == "clean_pro":
+        return "slow_push" if index % 4 else "hold_still"
     return deterministic_pick(get_visual_preset(style)["motion"], style, index) or "stable_pan"
 
 
@@ -163,4 +165,3 @@ def build_global_ffmpeg_filter(visual_style: Optional[str]) -> str:
 
 def expression_entry_for_visual_style(visual_style: Optional[str]) -> str:
     return get_visual_preset(visual_style)["expression_entry"]
-

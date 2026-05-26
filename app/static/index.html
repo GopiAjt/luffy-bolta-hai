@@ -86,6 +86,76 @@
             margin: 10px 0;
         }
 
+        .image-slides-upload-panel {
+            text-align: left;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .image-slide-card {
+            background-color: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .image-slide-preview {
+            width: 100%;
+            max-height: 180px;
+            object-fit: contain;
+            border-radius: 6px;
+            background: #111;
+        }
+
+        .image-slide-preview--empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 120px;
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        .image-slide-query {
+            color: #7ec8ff;
+        }
+
+        .ai-prompt-block textarea.ai-prompt-text {
+            font-size: 0.8rem;
+            background: #1a1a1a;
+            color: #e8e8e8;
+            border-color: #444;
+        }
+
+        .vivre-suggestions-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .vivre-suggest-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            max-width: 100%;
+            padding: 0.25rem 0.5rem;
+        }
+
+        .vivre-suggest-thumb {
+            width: 36px;
+            height: 36px;
+            object-fit: contain;
+            background: #111;
+            border-radius: 4px;
+        }
+
+        .vivre-suggest-label {
+            font-size: 0.75rem;
+            text-align: left;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 140px;
+        }
+
         .video-container {
             background: #000;
             border-radius: 8px;
@@ -384,13 +454,16 @@
 
         <!-- Image Slides Generation Section -->
         <div class="section">
-            <h2 class="text-center mb-4"><i class="bi bi-images me-2"></i>Generate Image Slides</h2>
+            <h2 class="text-center mb-4"><i class="bi bi-images me-2"></i>Image Slides</h2>
             <div class="text-center">
+                <p class="text-white-50 small mb-3">
+                    Step 1: generate slide plan from subtitles. Step 2: use Vivre/search or copy AI prompts, then upload one image per slide.
+                </p>
                 <button id="generateImageSlidesButton" class="btn btn-primary mb-3">
-                    <i class="bi bi-image me-2"></i>Generate Image Slides from Latest Upload
+                    <i class="bi bi-image me-2"></i>Generate Slide Search Terms
                 </button>
-                <div id="imageSlidesStatus" class="mb-3"></div>
-                <pre id="imageSlidesOutput" class="p-3 bg-light rounded text-start" style="display: none;"></pre>
+                <div id="imageSlidesStatus" class="mb-3 text-white"></div>
+                <div id="imageSlidesUploadPanel" class="image-slides-upload-panel mb-3" style="display: none;"></div>
             </div>
         </div>
 

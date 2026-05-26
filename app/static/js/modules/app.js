@@ -2,6 +2,8 @@ import { generateScript } from './api/scriptApi.js';
 import { uploadAudio, generateVoiceover, getAudioMetadata, getLatestAudioFile } from './api/audioApi.js';
 import { generateSubtitles, getLatestSubtitleFile, getLatestExpressionsFile } from './api/subtitleApi.js';
 import { generateVideo, generateSlideshow, getOutputUsage, cleanupOutput } from './api/videoApi.js';
+import { generateImageSlides, fetchImageSlides } from './api/imageSlidesApi.js';
+import { ImageSlidesUploadPanel } from './ui/imageSlidesUpload.js';
 import { uploadMangaPdf, generateScriptFromPdf, generatePdfSlides, generateMangaVideo } from './api/mangaPdfApi.js';
 import { LoadingIndicator } from './ui/loadingIndicator.js';
 import { AudioPlayer } from './ui/audioPlayer.js';
@@ -35,6 +37,10 @@ export class LuffyBoltHaiApp {
             this.currentAudioId = window.localStorage.getItem('luffyCurrentAudioId') || null;
             this.currentPdfId = null;
             this.currentSlidesJson = null;
+            this.imageSlidesUpload = new ImageSlidesUploadPanel('imageSlidesUploadPanel', {
+                onStatusChange: (status) => this._updateFinalVideoButtonForUploads(status),
+                onUploadComplete: () => {},
+            });
 
             // Bind event handlers
             console.log('Setting up event listeners...');
@@ -804,97 +810,80 @@ export class LuffyBoltHaiApp {
         errorElement: document.getElementById('videoOutput')
     });
 
+    _updateFinalVideoButtonForUploads({ complete, uploaded, total }) {
+        const generateVideoButton = document.getElementById('generateFinalVideoButton');
+        if (!generateVideoButton) {
+            return;
+        }
+        generateVideoButton.disabled = !complete;
+        generateVideoButton.title = complete
+            ? 'All slide images uploaded'
+            : `Upload all slide images (${uploaded}/${total}) before generating video`;
+    }
+
     handleGenerateImageSlides = withErrorHandling(async () => {
         console.log('=== handleGenerateImageSlides started ===');
 
         if (!await this.ensureCurrentAudioId()) {
-            const errorMsg = 'Please upload an audio file first';
-            console.error(errorMsg);
-            throw new Error(errorMsg);
+            throw new Error('Please upload an audio file first');
         }
 
-        const generateSlidesButton = document.getElementById('generateSlidesButton');
-        const slidesStatus = document.getElementById('slidesStatus');
+        const generateButton = document.getElementById('generateImageSlidesButton');
+        const statusEl = document.getElementById('imageSlidesStatus');
 
-        console.log('Showing loading state for image slides generation...');
         this.videoLoading.show();
-        if (slidesStatus) {
-            slidesStatus.textContent = 'Generating image slides...';
-            slidesStatus.style.display = 'block';
+        if (statusEl) {
+            statusEl.textContent = 'Generating slide search terms from subtitles...';
         }
-
-        if (generateSlidesButton) {
-            generateSlidesButton.disabled = true;
-            generateSlidesButton.textContent = 'Generating...';
+        if (generateButton) {
+            generateButton.disabled = true;
         }
 
         try {
-            console.log('Starting image slides generation with audio:', this.currentAudioId);
-
-            // Call the API to generate image slides
-            const response = await fetch('/api/v1/generate-image-slides', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    audio_id: this.currentAudioId,
-                    ass_path: 'auto',  // Let server find the latest ASS file
-                    video_profile: this.getVideoProfile()
-                })
-            });
-
-            const responseText = await response.text();
-            console.log('Raw response from server:', responseText);
-
-            if (!response.ok) {
-                let errorData;
-                try {
-                    errorData = JSON.parse(responseText);
-                } catch (e) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}\n${responseText}`);
-                }
-                throw new Error(errorData.message || 'Failed to generate image slides');
-            }
-
-            let result;
-            try {
-                result = JSON.parse(responseText);
-                console.log('Image slides generation result:', result);
-            } catch (e) {
-                console.error('Failed to parse response as JSON:', e);
-                throw new Error('Invalid response format from server');
-            }
-
-            // Update UI to show success and enable final video generation
-            if (slidesStatus) {
-                slidesStatus.textContent = 'Image slides generated successfully!';
-            }
+            const result = await generateImageSlides(this.currentAudioId, this.getVideoProfile());
             this.currentSlidesJson = result.output_path || null;
+            const detail = result.slides_detail || result.slides || [];
 
-            // Enable the final video generation button
-            const generateVideoButton = document.getElementById('generateFinalVideoButton');
-            if (generateVideoButton) {
-                generateVideoButton.disabled = false;
+            if (statusEl) {
+                const aiCount = detail.filter((s) => s.visual_source === 'ai_generate').length;
+                const assetCount = detail.length - aiCount;
+                statusEl.textContent = (
+                    `Created ${detail.length} slides (${assetCount} Vivre/search, ${aiCount} AI prompts). `
+                    + 'Upload or generate images below.'
+                );
+            }
+            if (detail.length) {
+                this.imageSlidesUpload.render({
+                    audio_id: this.currentAudioId,
+                    slides_json: this.currentSlidesJson,
+                    slides: detail,
+                    uploaded: result.upload_status?.uploaded ?? 0,
+                    total: result.upload_status?.total ?? detail.length,
+                    complete: result.upload_status?.complete ?? false,
+                });
+            } else if (this.currentSlidesJson) {
+                const payload = await fetchImageSlides(this.currentAudioId, this.currentSlidesJson);
+                this.imageSlidesUpload.render(payload);
             }
 
-            console.log('=== handleGenerateImageSlides completed successfully ===');
-            return result;
+            this._updateFinalVideoButtonForUploads(
+                result.upload_status || { uploaded: 0, total: result.slides?.length || 0, complete: false }
+            );
 
+            return result;
         } catch (error) {
-            console.error('Error in handleGenerateImageSlides:', error);
-            if (slidesStatus) {
-                slidesStatus.textContent = `Error: ${error.message}`;
+            if (statusEl) {
+                statusEl.textContent = `Error: ${error.message}`;
             }
             throw error;
         } finally {
-            console.log('Cleaning up image slides generation...');
             this.videoLoading.hide();
-            if (generateSlidesButton) {
-                generateSlidesButton.disabled = false;
-                generateSlidesButton.textContent = 'Generate Image Slides';
+            if (generateButton) {
+                generateButton.disabled = false;
             }
         }
     }, {
-        errorElement: document.getElementById('slidesStatus')
+        errorElement: document.getElementById('imageSlidesStatus')
     });
 
     handleMangaPdfUpload = withErrorHandling(async (event) => {

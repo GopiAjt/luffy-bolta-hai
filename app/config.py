@@ -12,8 +12,14 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOADS_DIR = BASE_DIR / "output" / "data"
 IMAGE_SLIDES_DIR = BASE_DIR / "output" / "image_slides"
 EXPRESSIONS_DIR = BASE_DIR / "static" / "expressions"
-# Local copy of Vivre Card renders (sync from Google Drive); see scripts/index_vivre_cards.py
-VIVRE_CARD_ASSETS_DIR = Path(os.getenv("VIVRE_CARD_ASSETS_DIR", BASE_DIR / "data" / "vivre_cards"))
+# Expression overlays use only EXPRESSIONS_DIR ({emotion}.png). Vivre Card is for image slides only.
+EXPRESSION_ASSETS_SOURCE = os.getenv("EXPRESSION_ASSETS_SOURCE", "static").strip().lower()
+USE_STATIC_EXPRESSIONS_ONLY = EXPRESSION_ASSETS_SOURCE not in {"vivre", "vivre_card", "both"}
+# Vivre Card PNG pack (default: app/data/vivre-card); override via VIVRE_CARD_ASSETS_DIR in .env
+_DEFAULT_VIVRE_DIR = BASE_DIR / "data" / "vivre-card"
+VIVRE_CARD_ASSETS_DIR = Path(
+    os.getenv("VIVRE_CARD_ASSETS_DIR", str(_DEFAULT_VIVRE_DIR))
+).expanduser()
 NARRATOR_CHARACTER = os.getenv("NARRATOR_CHARACTER", "luffy").strip().lower()
 OPARCHIVE_ENABLED = os.getenv("OPARCHIVE_ENABLED", "true").lower() not in {"0", "false", "no"}
 COMPILED_VIDEO_DIR = BASE_DIR / "output" / "compiled_video"
@@ -21,6 +27,8 @@ MANGA_PDF_DIR = BASE_DIR / "output" / "manga_pdf"
 BACKGROUND_MUSIC_DIR = BASE_DIR / "data"
 TRANSITION_SFX_DIR = BASE_DIR / "data" / "sfx"
 ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not in {"0", "false", "no"}
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.25"))
+TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.5"))
 
 # --- AUDIO ---
 MAX_AUDIO_FILE_SIZE_MB = float(os.getenv("MAX_AUDIO_FILE_SIZE_MB", "100"))

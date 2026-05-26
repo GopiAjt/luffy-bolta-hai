@@ -791,27 +791,32 @@ class VideoGenerator:
                 character = group["character"]
                 label = group["label"]
                 intervals = group["intervals"]
+                context_samples = [
+                    (expr.get("text") or "").strip()
+                    for expr in expressions
+                    if (expr.get("character") or NARRATOR_CHARACTER).lower() == character
+                    and (expr.get("expression") or "neutral").lower() == label
+                    and (expr.get("text") or "").strip()
+                ]
+                context_text = " ".join(context_samples[:4])
                 img_path = resolve_expression_image(
                     character,
                     label,
                     fallback_dir=Path(expr_img_dir) if expr_img_dir else None,
+                    context_text=context_text,
                 )
                 if not img_path:
-                    img_filename = f"{label}.png"
-                    img_path = os.path.join(expr_img_dir, img_filename)
-                    if not os.path.exists(img_path):
-                        logger.warning(f"Image for expression '{label}' not found: {img_path}")
-                        matching_files = [
-                            f for f in available_images if f.lower() == img_filename.lower()
-                        ]
-                        if matching_files:
-                            img_path = os.path.join(expr_img_dir, matching_files[0])
-                            logger.info(f"Found case-insensitive match: {img_path}")
-                        else:
-                            logger.error(f"No matching image found for expression: {label}")
-                            continue
-                else:
-                    logger.info(f"Using expression asset for {character}/{label}: {img_path}")
+                    logger.error(
+                        "No expression PNG for '%s' in %s (expected {emotion}.png)",
+                        label,
+                        expr_img_dir,
+                    )
+                    continue
+                logger.info(
+                    "Using expression overlay %s -> %s",
+                    label,
+                    os.path.basename(img_path),
+                )
 
                 abs_img_path = os.path.abspath(img_path)
                 for start, end in intervals:

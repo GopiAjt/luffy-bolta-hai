@@ -10,6 +10,16 @@ from app.utils.script_generator import generate_script
 from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir
 from app.utils.subtitle_generator import SubtitleGenerator
 from app.utils.image_slides import generate_image_slides
+from app.utils.image_slides_upload import (
+    apply_vivre_asset_to_slide,
+    audio_stem,
+    build_slides_response,
+    load_slides,
+    save_slide_upload,
+    slides_images_dir,
+    slides_json_path_for_audio,
+    slides_upload_status,
+)
 from app.utils.generate_final_video import generate_final_video
 from app.utils.tts_generator import generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
@@ -25,10 +35,17 @@ from app.utils.manga_pdf_processor import (
 import re
 import json
 import glob
+from app.utils.expression_assets import (
+    ensure_vivre_card_index,
+    suggest_vivre_assets,
+    vivre_asset_path_from_relative,
+    vivre_card_status,
+)
 from app.config import (
     UPLOADS_DIR,
     IMAGE_SLIDES_DIR,
     EXPRESSIONS_DIR,
+    VIVRE_CARD_ASSETS_DIR,
     VIDEO_BACKGROUND_COLOR,
     MAX_PDF_SIZE,
     HOST,
@@ -50,6 +67,18 @@ app = Flask(__name__,
             static_folder='../../app/static',  # Path to static files
             static_url_path='/static')  # URL prefix for static files
 CORS(app)
+
+
+def _index_vivre_cards_on_startup():
+    try:
+        count = ensure_vivre_card_index()
+        if count:
+            logger.info("Vivre Card assets ready: %s PNGs indexed under %s", count, VIVRE_CARD_ASSETS_DIR)
+    except Exception as exc:
+        logger.warning("Vivre Card index skipped: %s", exc)
+
+
+_index_vivre_cards_on_startup()
 
 
 def _build_pdf_script_context(manifest: dict) -> dict:
@@ -373,7 +402,6 @@ def generate_slideshow():
             ass_path=str(ass_file),
             out_path=str(image_slides_json),
             total_duration=duration,
-            image_dir=str(image_dir)
         )
         
         # Generate the video from the slides
@@ -954,36 +982,38 @@ def generate_image_slides_endpoint():
         total_audio_duration = get_audio_duration(str(audio_path))
         logger.info(f"Total audio duration for image slides: {total_audio_duration:.2f}s")
 
-        # Set default output path if not provided
+        # Set default output path next to audio (upload images per slide in the UI)
         if not out_path:
-            out_path = str(Path(ass_path).with_suffix('.image_slides.json'))
+            out_path = str(UPLOADS_DIR / f"{audio_stem(audio_id)}.image_slides.json")
             logger.info(f"Using default output path: {out_path}")
-            
-        logger.info(f"Generating image slides with params: ass_path={ass_path}, out_path={out_path}, duration={total_audio_duration}")
-        
-        # Ensure the image directory exists
-        image_dir = Path(IMAGE_SLIDES_DIR)
-        image_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Call the image slides generator
-        result_path = generate_image_slides(
-            ass_path,  # Pass as string to avoid any Path object issues
-            out_path, 
-            total_audio_duration, 
-            image_dir=str(image_dir.absolute())
+
+        slides_images_dir(audio_id)
+
+        logger.info(
+            "Generating image slides with params: ass_path=%s, out_path=%s, duration=%.2f",
+            ass_path,
+            out_path,
+            total_audio_duration,
         )
-        
+
+        result_path = generate_image_slides(ass_path, out_path, total_audio_duration)
+
         logger.info(f"Image slides generated successfully at: {result_path}")
-        
-        # Read and return the result
-        with open(result_path, 'r', encoding='utf-8') as f:
-            slides = json.load(f)
-            
+
+        slides = load_slides(result_path)
+        payload = build_slides_response(audio_id, result_path, slides)
+
         return jsonify({
             'status': 'success',
             'slides': slides,
             'output_path': result_path,
             'video_profile': video_profile,
+            'upload_status': {
+                'total': payload['total'],
+                'uploaded': payload['uploaded'],
+                'complete': payload['complete'],
+            },
+            'slides_detail': payload['slides'],
         })
         
     except TimeoutError as e:
@@ -1005,6 +1035,104 @@ def generate_image_slides_endpoint():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@app.route('/api/v1/image-slides', methods=['GET'])
+def get_image_slides():
+    """Return slide definitions and upload status for an audio session."""
+    audio_id = request.args.get('audio_id')
+    if not audio_id:
+        return jsonify({'status': 'error', 'message': 'audio_id is required'}), 400
+
+    slides_path = request.args.get('slides_json')
+    if slides_path:
+        slides_path = str(Path(slides_path))
+        if not os.path.exists(slides_path):
+            return jsonify({'status': 'error', 'message': f'Slides file not found: {slides_path}'}), 404
+    else:
+        resolved = slides_json_path_for_audio(audio_id, UPLOADS_DIR)
+        if not resolved:
+            return jsonify({'status': 'error', 'message': 'No image slides JSON found for this audio'}), 404
+        slides_path = str(resolved)
+
+    slides = load_slides(slides_path)
+    payload = build_slides_response(audio_id, slides_path, slides)
+    return jsonify({'status': 'success', **payload})
+
+
+@app.route('/api/v1/image-slides/upload', methods=['POST'])
+def upload_image_slide():
+    """
+    Upload an image for one slide (multipart form).
+
+    Form fields: audio_id, slide_index, slides_json (optional), file (image)
+    """
+    audio_id = request.form.get('audio_id')
+    slide_index_raw = request.form.get('slide_index')
+    slides_json = request.form.get('slides_json')
+
+    if not audio_id:
+        return jsonify({'status': 'error', 'message': 'audio_id is required'}), 400
+    if slide_index_raw is None:
+        return jsonify({'status': 'error', 'message': 'slide_index is required'}), 400
+
+    try:
+        slide_index = int(slide_index_raw)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'slide_index must be an integer'}), 400
+
+    upload_file = request.files.get('file') or request.files.get('image')
+    if not upload_file:
+        return jsonify({'status': 'error', 'message': 'file is required'}), 400
+
+    if not slides_json:
+        resolved = slides_json_path_for_audio(audio_id, UPLOADS_DIR)
+        if not resolved:
+            return jsonify({'status': 'error', 'message': 'No image slides JSON found. Generate slides first.'}), 404
+        slides_json = str(resolved)
+
+    try:
+        updated_slide = save_slide_upload(audio_id, slide_index, upload_file, slides_json)
+        slides = load_slides(slides_json)
+        payload = build_slides_response(audio_id, slides_json, slides)
+        return jsonify({
+            'status': 'success',
+            'message': f'Uploaded image for slide {slide_index + 1}',
+            'slide': updated_slide,
+            'upload_status': {
+                'total': payload['total'],
+                'uploaded': payload['uploaded'],
+                'complete': payload['complete'],
+            },
+            'slides_detail': payload['slides'],
+        })
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error uploading slide image: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/image-slides/preview', methods=['GET'])
+def preview_image_slide():
+    """Serve an uploaded slide image for inline preview in the UI."""
+    audio_id = request.args.get('audio_id')
+    slide_index_raw = request.args.get('slide_index')
+
+    if not audio_id or slide_index_raw is None:
+        return jsonify({'status': 'error', 'message': 'audio_id and slide_index are required'}), 400
+
+    try:
+        # Tolerate malformed cache-bust URLs (slide_index=0?t=123)
+        slide_index = int(str(slide_index_raw).split("?")[0].split("&")[0])
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'slide_index must be an integer'}), 400
+
+    image_path = slides_images_dir(audio_id) / f"slide_{slide_index + 1:03d}.jpg"
+    if not image_path.exists():
+        return jsonify({'status': 'error', 'message': 'Image not found for this slide'}), 404
+
+    return send_file(image_path, mimetype='image/jpeg', max_age=0)
+
+
 @app.route("/api/v1/health")
 def health_check():
     """
@@ -1012,8 +1140,84 @@ def health_check():
     """
     return {
         "status": "healthy",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "vivre_cards": vivre_card_status(),
     }
+
+
+@app.route("/api/v1/vivre-cards/status", methods=["GET"])
+def vivre_cards_status_endpoint():
+    """Vivre Card asset pack scan status (app/data/vivre-card by default)."""
+    status = vivre_card_status()
+    return jsonify({"status": "success", **status})
+
+
+@app.route('/api/v1/vivre-cards/preview', methods=['GET'])
+def vivre_cards_preview():
+    """Inline preview for a Vivre PNG (relative path under the pack)."""
+    relative = request.args.get('relative', '').strip()
+    asset_path = vivre_asset_path_from_relative(relative)
+    if not asset_path:
+        return jsonify({'status': 'error', 'message': 'Asset not found'}), 404
+    return send_file(asset_path, mimetype='image/png', max_age=3600)
+
+
+@app.route('/api/v1/vivre-cards/suggest', methods=['GET'])
+def vivre_cards_suggest():
+    """Suggest symbol/location/character PNGs for a search query."""
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'status': 'error', 'message': 'q is required'}), 400
+    limit = min(int(request.args.get('limit', 5)), 12)
+    suggestions = suggest_vivre_assets(query, limit=limit)
+    return jsonify({'status': 'success', 'query': query, 'suggestions': suggestions})
+
+
+@app.route('/api/v1/image-slides/use-vivre', methods=['POST'])
+def use_vivre_for_slide():
+    """Apply a Vivre Card PNG to a slide slot (from suggestions)."""
+    data = request.get_json() or {}
+    audio_id = data.get('audio_id') or request.form.get('audio_id')
+    slide_index = data.get('slide_index')
+    vivre_relative = data.get('vivre_relative') or data.get('relative')
+    slides_json = data.get('slides_json')
+
+    if not audio_id or slide_index is None or not vivre_relative:
+        return jsonify({
+            'status': 'error',
+            'message': 'audio_id, slide_index, and vivre_relative are required',
+        }), 400
+
+    try:
+        slide_index = int(slide_index)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'slide_index must be an integer'}), 400
+
+    if not slides_json:
+        resolved = slides_json_path_for_audio(audio_id, UPLOADS_DIR)
+        if not resolved:
+            return jsonify({'status': 'error', 'message': 'No image slides JSON found'}), 404
+        slides_json = str(resolved)
+
+    try:
+        apply_vivre_asset_to_slide(audio_id, slide_index, vivre_relative, slides_json)
+        slides = load_slides(slides_json)
+        payload = build_slides_response(audio_id, slides_json, slides)
+        return jsonify({
+            'status': 'success',
+            'message': f'Applied Vivre asset to slide {slide_index + 1}',
+            'upload_status': {
+                'total': payload['total'],
+                'uploaded': payload['uploaded'],
+                'complete': payload['complete'],
+            },
+            'slides_detail': payload['slides'],
+        })
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+    except Exception as e:
+        logger.error(f"use_vivre_for_slide failed: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/v1/output-usage', methods=['GET'])
@@ -1309,6 +1513,20 @@ def generate_final_video_endpoint():
                 logger.error(error_msg)
                 return jsonify({'status': 'error', 'message': error_msg}), 400
 
+        slides = load_slides(slides_json)
+        upload_status = slides_upload_status(slides)
+        if not upload_status['complete']:
+            return jsonify({
+                'status': 'error',
+                'message': (
+                    f"Upload an image for each slide before generating video "
+                    f"({upload_status['uploaded']}/{upload_status['total']} uploaded)."
+                ),
+                'upload_status': upload_status,
+            }), 400
+
+        images_dir = str(slides_images_dir(audio_id))
+
         logger.info("Starting final video generation...")
         try:
             final_video_path = generate_final_video(
@@ -1321,6 +1539,7 @@ def generate_final_video_endpoint():
                 background_music_path=background_music_path,
                 video_profile=video_profile,
                 visual_style=visual_style,
+                images_dir=images_dir,
             )
             logger.info(f"Final video generated at: {final_video_path}")
             

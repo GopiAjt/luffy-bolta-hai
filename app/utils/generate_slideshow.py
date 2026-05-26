@@ -1,10 +1,10 @@
 import os
 import json
 import traceback
-from typing import Dict, List
+from typing import Dict, List, Optional
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 import logging
 import subprocess # Added this import
@@ -19,6 +19,7 @@ from app.utils.visual_effects import (
     get_visual_preset,
     normalize_visual_style,
 )
+from app.utils.image_composition import compose_vertical_subject_bgr
 from app.utils.transition_sfx import save_transition_events
 
 logger = logging.getLogger(__name__)
@@ -167,14 +168,60 @@ class RawVideoFFmpegWriter:
 
 def ensure_frame_for_writer(frame, resolution):
     """Return a contiguous BGR uint8 frame at the output resolution."""
-    res_w, res_h = sanitize_size(resolution)
-    if frame is None:
-        frame = np.zeros((res_h, res_w, 3), dtype=np.uint8)
-    if frame.shape[0] != res_h or frame.shape[1] != res_w:
-        frame = cv2.resize(frame, (res_w, res_h))
+    frame = fit_frame_to_resolution(frame, resolution)
     if frame.dtype != np.uint8:
         frame = np.clip(frame, 0, 255).astype(np.uint8)
     return np.ascontiguousarray(frame)
+
+
+def load_slide_bgr(img_path: str) -> Optional[np.ndarray]:
+    """Load a slide with EXIF orientation applied (PIL), returned as BGR uint8."""
+    try:
+        with Image.open(img_path) as pil_img:
+            pil_img = ImageOps.exif_transpose(pil_img)
+            if pil_img.mode == "RGBA":
+                background = Image.new("RGB", pil_img.size, (255, 255, 255))
+                background.paste(pil_img, mask=pil_img.split()[-1])
+                pil_img = background
+            elif pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+            rgb = np.asarray(pil_img)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    except Exception as exc:
+        logger.warning("PIL load failed for %s (%s), falling back to cv2.imread", img_path, exc)
+        return cv2.imread(img_path)
+
+
+def slide_aspect_ratio(img_bgr: np.ndarray) -> float:
+    h, w = img_bgr.shape[:2]
+    return w / max(h, 1)
+
+
+def should_use_subject_layout(img_bgr: np.ndarray, resolution) -> bool:
+    """
+    Use blurred-background + centered subject for uploads that are not close
+    to 9:16: tall cards, squares, and wide panels (Vivre, manga, screenshots).
+    Ultra-wide panoramas stay on cover+pan Ken Burns.
+    """
+    res_w, res_h = sanitize_size(resolution)
+    aspect = slide_aspect_ratio(img_bgr)
+    target_aspect = res_w / max(res_h, 1)
+    narrow_threshold = float(os.getenv("SLIDE_PORTRAIT_ASPECT_THRESHOLD", "0.72"))
+    max_wide = float(os.getenv("SLIDE_SUBJECT_MAX_ASPECT", "2.1"))
+    if aspect >= max_wide:
+        return False
+    if aspect <= narrow_threshold:
+        return True
+    if aspect > target_aspect * 1.05:
+        return True
+    return False
+
+
+def transition_progress(frame_index: int, total_frames: int) -> float:
+    """Map transition frame index to progress in [0, 1] (0 = current, 1 = next)."""
+    if total_frames <= 1:
+        return 1.0 if frame_index > 0 else 0.0
+    return max(0.0, min(1.0, frame_index / (total_frames - 1)))
 
 def parse_time(t):
     """Converts '0:00:06.28' to seconds."""
@@ -208,6 +255,16 @@ def blend_linear_bgr(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
     lb = to_linear_bgr(b)
     lc = la * (1.0 - t) + lb * t
     return to_srgb_bgr(lc)
+
+
+def blend_mask_linear_bgr(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Gamma-correct blend using a per-pixel mask where 0=a and 1=b."""
+    mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
+    if mask.ndim == 2:
+        mask = mask[..., np.newaxis]
+    la = to_linear_bgr(a)
+    lb = to_linear_bgr(b)
+    return to_srgb_bgr(la * (1.0 - mask) + lb * mask)
 
 
 def sanitize_size(size):
@@ -251,10 +308,17 @@ def normalize_blur_amount(blur_amount, max_kernel=15):
 def prepare_slide_canvas(img_path, resolution, blur_amount=0):
     """Load and scale a slide image once for panned frame rendering."""
     res_w, res_h = resolution
-    img = cv2.imread(img_path)
+    img = load_slide_bgr(img_path)
     if img is None:
         logger.error(f"Failed to load image: {img_path}")
         return None, res_w
+
+    if should_use_subject_layout(img, resolution):
+        composed = compose_vertical_subject_bgr(img, (res_w, res_h))
+        blur_amount = normalize_blur_amount(blur_amount, max_kernel=9)
+        if blur_amount > 0:
+            composed = apply_blur(composed, blur_amount)
+        return composed, res_w
 
     img_h, img_w = img.shape[:2]
     scale = res_h / img_h
@@ -307,20 +371,39 @@ KEN_BURNS_ZOOM = {
     "diagonal_pan": (1.0, 1.12),
 }
 
+KEN_BURNS_CENTER_LOCKED = {"slow_push", "impact_zoom", "hold_still", "pull_out"}
+
+
+def ken_burns_zoom_range(motion: str = "slow_push"):
+    """Return sanitized start/end zoom for a Ken Burns motion preset."""
+    z0, z1 = KEN_BURNS_ZOOM.get(motion or "slow_push", (1.0, 1.10))
+    return max(0.01, float(z0)), max(0.01, float(z1))
+
+
+def ken_burns_headroom_for_motion(motion: str = "slow_push", padding: float = 0.025) -> float:
+    """Scale source only as much as the selected motion needs, plus small safety padding."""
+    z0, z1 = ken_burns_zoom_range(motion)
+    return max(1.0, z0, z1) + max(0.0, float(padding))
+
 
 def ken_burns_enabled() -> bool:
     return os.getenv("ENABLE_KEN_BURNS", "true").lower() not in {"0", "false", "no"}
 
 
-def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: float = 1.22):
+def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: float = None, motion: str = "slow_push"):
     """Cover-scale image with zoom headroom for Ken Burns (vertical Shorts)."""
     res_w, res_h = resolution
-    img = cv2.imread(img_path)
+    img = load_slide_bgr(img_path)
     if img is None:
         logger.error(f"Failed to load image for Ken Burns: {img_path}")
         return None, res_w, res_h
 
+    if should_use_subject_layout(img, resolution):
+        img = compose_vertical_subject_bgr(img, (res_w, res_h))
+
     img_h, img_w = img.shape[:2]
+    if headroom is None:
+        headroom = ken_burns_headroom_for_motion(motion)
     cover_scale = max(res_w / max(img_w, 1), res_h / max(img_h, 1)) * headroom
     scaled_w = max(res_w, int(round(img_w * cover_scale)))
     scaled_h = max(res_h, int(round(img_h * cover_scale)))
@@ -331,6 +414,56 @@ def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: floa
         scaled = apply_blur(scaled, blur_amount)
 
     return scaled, scaled_w, scaled_h
+
+
+def ken_burns_viewport(
+    scaled_w,
+    scaled_h,
+    resolution,
+    idx: int,
+    t: float,
+    motion: str = "slow_push",
+    pan_strength: float = 1.0,
+):
+    """Return x, y, view_w, view_h for the current Ken Burns frame."""
+    res_w, res_h = resolution
+    t = ease_progress(t, PAN_EASING)
+    motion = motion or "slow_push"
+    z0, z1 = ken_burns_zoom_range(motion)
+    zoom = z0 + (z1 - z0) * t
+
+    view_w = min(float(scaled_w), res_w / max(zoom, 0.01))
+    view_h = min(float(scaled_h), res_h / max(zoom, 0.01))
+    max_x = max(0.0, float(scaled_w) - view_w)
+    max_y = max(0.0, float(scaled_h) - view_h)
+    pan_strength = max(0.0, min(1.0, float(pan_strength)))
+
+    center_x = max_x / 2.0
+    center_y = max_y / 2.0
+
+    if motion in KEN_BURNS_CENTER_LOCKED:
+        return center_x, center_y, view_w, view_h
+
+    travel_x = max_x * pan_strength
+    travel_y_factor = 0.45 if motion == "diagonal_pan" else 0.15
+    travel_y = max_y * pan_strength * travel_y_factor
+
+    base_x = (max_x - travel_x) / 2.0
+    base_y = (max_y - travel_y) / 2.0
+
+    if motion == "diagonal_pan":
+        x = base_x + t * travel_x
+        y = base_y + (1.0 - t) * travel_y
+    elif motion == "stable_pan" and max_x > 0:
+        x = base_x + (t * travel_x if idx % 2 == 0 else (1.0 - t) * travel_x)
+        y = base_y
+    else:
+        x = base_x
+        y = base_y
+
+    x = max(0.0, min(x, max_x))
+    y = max(0.0, min(y, max_y))
+    return x, y, view_w, view_h
 
 
 def crop_ken_burns_frame(
@@ -345,42 +478,15 @@ def crop_ken_burns_frame(
 ):
     """Ken Burns: slow zoom with optional pan (faceless anime slideshow)."""
     res_w, res_h = resolution
-    t = ease_progress(t, PAN_EASING)
-    motion = motion or "slow_push"
-    z0, z1 = KEN_BURNS_ZOOM.get(motion, (1.0, 1.10))
-    zoom = z0 + (z1 - z0) * t
-
-    view_w = res_w / max(zoom, 0.01)
-    view_h = res_h / max(zoom, 0.01)
-    max_x = max(0.0, float(scaled_w - view_w))
-    max_y = max(0.0, float(scaled_h - view_h))
-    pan_strength = max(0.0, min(1.0, float(pan_strength)))
-
-    travel_x = max_x * pan_strength
-    travel_y = max_y * pan_strength * (0.45 if motion == "diagonal_pan" else 0.15)
-
-    if motion == "pull_out":
-        travel_x = max_x * pan_strength * (1.0 - t)
-        travel_y = max_y * pan_strength * 0.2 * (1.0 - t)
-        start_x = travel_x / 2.0
-        start_y = travel_y / 2.0
-        x = start_x * (1.0 - t)
-        y = start_y * (1.0 - t)
-    elif max_x > 0 or max_y > 0:
-        start_x = (max_x - travel_x) / 2.0
-        start_y = (max_y - travel_y) / 2.0
-        if motion == "diagonal_pan":
-            x = start_x + t * travel_x
-            y = start_y + (1.0 - t) * travel_y
-        elif motion == "stable_pan" and max_x > 0:
-            x = start_x + (t * travel_x if idx % 2 == 0 else (1.0 - t) * travel_x)
-            y = start_y
-        else:
-            x = start_x
-            y = start_y
-    else:
-        x = max(0.0, (scaled_w - view_w) / 2.0)
-        y = max(0.0, (scaled_h - view_h) / 2.0)
+    x, y, view_w, view_h = ken_burns_viewport(
+        scaled_w,
+        scaled_h,
+        resolution,
+        idx,
+        t,
+        motion=motion,
+        pan_strength=pan_strength,
+    )
 
     center = (float(x + view_w / 2.0), float(y + view_h / 2.0))
     frame = cv2.getRectSubPix(scaled, (int(round(view_w)), int(round(view_h))), center)
@@ -673,7 +779,7 @@ def emit_panoramic_pan(
     use_kb = ken_burns_enabled()
     if use_kb:
         scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
-            img_path, resolution, blur_amount=blur_amount
+            img_path, resolution, blur_amount=blur_amount, motion=motion
         )
     else:
         scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount=blur_amount)
@@ -722,7 +828,9 @@ def render_panned_frame(
     """Render a single frame at pan progress t (matches emit_panoramic_pan)."""
     res_w, res_h = resolution
     if ken_burns_enabled():
-        scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(img_path, resolution, blur_amount)
+        scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
+            img_path, resolution, blur_amount, motion=motion
+        )
         if scaled is None:
             logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
             return np.zeros((res_h, res_w, 3), dtype=np.uint8)
@@ -911,7 +1019,7 @@ def flip_horizontal_transition(name):
 # ------------------ New Transition Effects ------------------
 
 def cube_rotation_effect(current_frame, next_frame, progress, direction='right'):
-    """3D cube rotation transition effect.
+    """Cube-inspired directional reveal with stable endpoints and soft shading.
     
     Args:
         current_frame: Current frame as numpy array (BGR)
@@ -922,81 +1030,30 @@ def cube_rotation_effect(current_frame, next_frame, progress, direction='right')
     Returns:
         Transitioned frame as numpy array
     """
-    h, w = current_frame.shape[:2]
-    
-    # Ease the progress for smoother motion
     p = ease_progress(progress, 'smoothstep')
-    
-    # Create output frame
-    output = np.zeros_like(current_frame, dtype=np.float32)
-    
-    # Convert to float for processing
-    current = current_frame.astype(np.float32) / 255.0
-    next_img = next_frame.astype(np.float32) / 255.0
-    
-    # Calculate rotation angle (0 to 90 degrees)
-    angle = p * 90.0
-    
-    # Convert to linear color space for better blending
-    current_lin = np.power(current, GAMMA)
-    next_lin = np.power(next_img, GAMMA)
-    
-    # Create grid of coordinates
-    x = np.linspace(-1, 1, w)
-    y = np.linspace(-1, 1, h)
-    xv, yv = np.meshgrid(x, y)
-    
-    # Apply rotation based on direction
-    if direction in ['left', 'right']:
-        # Horizontal rotation
-        rot = np.radians(angle)
-        if direction == 'left':
-            rot = -rot
-        
-        # Calculate perspective
-        xp = xv * np.cos(rot) + (1 if direction == 'right' else -1)
-        mask = (xp + 1) / 2  # Normalize to 0-1
-        
-        # Create visibility masks
-        mask_current = 1 - mask
-        mask_next = mask
-        
-        # Apply perspective scaling
-        scale = 0.5 + 0.5 * np.cos(np.radians(angle))
-        mask_current = mask_current * scale
-        mask_next = mask_next * scale
-        
-        # Blend images
-        for c in range(3):
-            output[..., c] = (current_lin[..., c] * mask_current + 
-                            next_lin[..., c] * mask_next)
-    
-    else:  # vertical rotation
-        rot = np.radians(angle)
-        if direction == 'up':
-            rot = -rot
-            
-        # Calculate perspective
-        yp = yv * np.cos(rot) + (1 if direction == 'down' else -1)
-        mask = (yp + 1) / 2  # Normalize to 0-1
-        
-        # Create visibility masks
-        mask_current = 1 - mask
-        mask_next = mask
-        
-        # Apply perspective scaling
-        scale = 0.5 + 0.5 * np.cos(np.radians(angle))
-        mask_current = mask_current * scale
-        mask_next = mask_next * scale
-        
-        # Blend images
-        for c in range(3):
-            output[..., c] = (current_lin[..., c] * mask_current[..., np.newaxis] + 
-                            next_lin[..., c] * mask_next[..., np.newaxis])
-    
-    # Convert back to sRGB and 8-bit
-    output = np.power(np.clip(output, 0, 1), 1.0/GAMMA)
-    return (output * 255).astype(np.uint8)
+    if p <= 0.0:
+        return current_frame.copy()
+    if p >= 1.0:
+        return next_frame.copy()
+
+    h, w = current_frame.shape[:2]
+    feather = max(8.0, min(w, h) * 0.035)
+    yy, xx = np.mgrid[0:h, 0:w]
+
+    if direction in ("left", "right"):
+        seam = w * (1.0 - p) if direction == "right" else w * p
+        signed_distance = xx - seam if direction == "right" else seam - xx
+    else:
+        seam = h * (1.0 - p) if direction == "down" else h * p
+        signed_distance = yy - seam if direction == "down" else seam - yy
+
+    mask = np.clip((signed_distance / feather) + 0.5, 0.0, 1.0)
+    frame = blend_mask_linear_bgr(current_frame, next_frame, mask)
+
+    seam_shadow = np.exp(-((signed_distance / max(feather, 1.0)) ** 2))
+    fold_strength = 0.18 * math.sin(math.pi * p)
+    shaded = frame.astype(np.float32) * (1.0 - fold_strength * seam_shadow[..., np.newaxis])
+    return np.clip(shaded, 0, 255).astype(np.uint8)
 
 def iris_wipe_effect(current_frame, next_frame, progress, center=None, feather=0.1):
     """Iris wipe transition effect with soft edges.
@@ -1012,6 +1069,11 @@ def iris_wipe_effect(current_frame, next_frame, progress, center=None, feather=0
         Transitioned frame as numpy array
     """
     h, w = current_frame.shape[:2]
+    raw_progress = max(0.0, min(1.0, float(progress)))
+    if raw_progress <= 0.0:
+        return current_frame.copy()
+    if raw_progress >= 1.0:
+        return next_frame.copy()
     
     # Default to center of image
     if center is None:
@@ -1060,15 +1122,27 @@ def ease_progress(p, kind='cosine'):
 
 
 def center_crop_to(frame, size_wh):
+    """Cover-scale then center-crop to exact size (preserves aspect ratio)."""
     w, h = size_wh
     fh, fw = frame.shape[:2]
-    # When scaled larger than target, center-crop; when smaller, resize
-    if fw < w or fh < h:
-        frame = cv2.resize(frame, (w, h))
+    if fw == w and fh == h:
         return frame
-    x0 = (fw - w) // 2
-    y0 = (fh - h) // 2
-    return frame[y0:y0 + h, x0:x0 + w]
+    scale = max(w / max(fw, 1), h / max(fh, 1))
+    new_w = max(w, int(round(fw * scale)))
+    new_h = max(h, int(round(fh * scale)))
+    if new_w != fw or new_h != fh:
+        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    x0 = max(0, (frame.shape[1] - w) // 2)
+    y0 = max(0, (frame.shape[0] - h) // 2)
+    return frame[y0 : y0 + h, x0 : x0 + w]
+
+
+def fit_frame_to_resolution(frame, resolution):
+    """Fit any BGR frame to output resolution without stretching."""
+    res_w, res_h = sanitize_size(resolution)
+    if frame is None:
+        return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    return center_crop_to(frame, (res_w, res_h))
 
 
 def zoom_dissolve_effect(current_frame, next_frame, progress, resolution, zoom=1.05, easing='cosine'):
@@ -1104,33 +1178,32 @@ def motion_blur_kernel(length, orientation='horizontal'):
 
 
 def motion_blur_slide_effect(current_frame, next_frame, progress, direction='right', strength=15):
-    # Base slide composition
     h, w = current_frame.shape[:2]
-    result = current_frame.copy()
     p = ease_progress(progress, 'smoothstep')
+    if p <= 0.0:
+        return current_frame.copy()
+    if p >= 1.0:
+        return next_frame.copy()
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    feather = max(6.0, min(w, h) * 0.02)
     if direction == 'right':
-        # Slide right: next frame comes from the right
-        x = int(w * p)
-        result[:, :w-x] = next_frame[:, x:]
-        result[:, w-x:] = current_frame[:, w-x:]
+        seam = w * (1.0 - p)
+        mask = np.clip((xx - seam) / feather + 0.5, 0.0, 1.0)
         orientation = 'horizontal'
     elif direction == 'left':
-        # Slide left: next frame comes from the left
-        x = int(w * (1 - p))
-        result[:, x:] = next_frame[:, :w-x]
-        result[:, :x] = current_frame[:, w-x:]
+        seam = w * p
+        mask = np.clip((seam - xx) / feather + 0.5, 0.0, 1.0)
         orientation = 'horizontal'
     elif direction == 'down':
-        # Slide down: next frame comes from the bottom
-        y = int(h * p)
-        result[:h-y, :] = next_frame[y:, :]
-        result[h-y:, :] = current_frame[h-y:, :]
+        seam = h * (1.0 - p)
+        mask = np.clip((yy - seam) / feather + 0.5, 0.0, 1.0)
         orientation = 'vertical'
     else:  # up
-        y = int(h * (1 - p))
-        result[y:, :] = next_frame[:h-y, :]
-        result[:y, :] = current_frame[h-y:, :]
+        seam = h * p
+        mask = np.clip((seam - yy) / feather + 0.5, 0.0, 1.0)
         orientation = 'vertical'
+    result = blend_mask_linear_bgr(current_frame, next_frame, mask)
     # Apply motion blur proportional to progress
     k = int(strength * max(0.1, min(1.0, 2 * abs(p - 0.5))))  # strongest mid-way
     kernel = motion_blur_kernel(max(3, k), 'horizontal' if orientation == 'horizontal' else 'vertical')
@@ -1141,25 +1214,35 @@ def motion_blur_slide_effect(current_frame, next_frame, progress, direction='rig
 def slide_push_effect(current_frame, next_frame, progress, direction='right'):
     """Push one frame out while the next frame enters from the chosen direction."""
     h, w = current_frame.shape[:2]
-    result = np.zeros_like(current_frame)
     p = ease_progress(progress, 'smoothstep')
+    if p <= 0.0:
+        return current_frame.copy()
+    if p >= 1.0:
+        return next_frame.copy()
 
+    result = np.zeros_like(current_frame)
     if direction == 'right':
         offset = int(round(w * p))
-        result[:, :offset] = next_frame[:, w - offset:] if offset > 0 else result[:, :offset]
-        result[:, offset:] = current_frame[:, :w - offset]
+        if offset > 0:
+            result[:, :offset] = next_frame[:, w - offset:]
+        if offset < w:
+            result[:, offset:] = current_frame[:, :w - offset]
     elif direction == 'left':
         offset = int(round(w * p))
-        result[:, :w - offset] = current_frame[:, offset:]
+        if offset < w:
+            result[:, :w - offset] = current_frame[:, offset:]
         if offset > 0:
             result[:, w - offset:] = next_frame[:, :offset]
     elif direction == 'down':
         offset = int(round(h * p))
-        result[:offset, :] = next_frame[h - offset:, :] if offset > 0 else result[:offset, :]
-        result[offset:, :] = current_frame[:h - offset, :]
+        if offset > 0:
+            result[:offset, :] = next_frame[h - offset:, :]
+        if offset < h:
+            result[offset:, :] = current_frame[:h - offset, :]
     else:  # up
         offset = int(round(h * p))
-        result[:h - offset, :] = current_frame[offset:, :]
+        if offset < h:
+            result[:h - offset, :] = current_frame[offset:, :]
         if offset > 0:
             result[h - offset:, :] = next_frame[:offset, :]
 
@@ -1168,12 +1251,17 @@ def slide_push_effect(current_frame, next_frame, progress, direction='right'):
 
 def fade_effect_eased(current_frame, next_frame, progress, easing='cosine'):
     p = ease_progress(progress, easing)
-    return cv2.addWeighted(current_frame, 1 - p, next_frame, p, 0)
+    return blend_linear_bgr(current_frame, next_frame, p)
 
 
 def radial_wipe_effect(current_frame, next_frame, progress, feather=0.05):
     # Build a circular mask from center that grows with progress
     h, w = current_frame.shape[:2]
+    raw_progress = max(0.0, min(1.0, float(progress)))
+    if raw_progress <= 0.0:
+        return current_frame.copy()
+    if raw_progress >= 1.0:
+        return next_frame.copy()
     cx, cy = w / 2.0, h / 2.0
     yy, xx = np.mgrid[0:h, 0:w]
     dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
@@ -1187,40 +1275,39 @@ def radial_wipe_effect(current_frame, next_frame, progress, feather=0.05):
     mask = np.clip(mask, 0.0, 1.0)
     mask = 1.0 - mask  # inside is 1, outside is 0
     mask = np.clip(mask, 0.0, 1.0)
-    mask3 = np.dstack([mask, mask, mask]).astype(np.float32)
-    out = (next_frame.astype(np.float32) * mask3 + current_frame.astype(np.float32) * (1.0 - mask3)).astype(np.uint8)
-    return out
+    return blend_mask_linear_bgr(current_frame, next_frame, mask.astype(np.float32))
 
 
 def whip_pan_effect(current_frame, next_frame, progress, direction='right', blur_strength=25):
-    # Aggressive slide with strong motion blur and easing that speeds up then snaps
     h, w = current_frame.shape[:2]
-    # Use sharper ease-in-out
     p = ease_progress(progress, 'sine')
-    result = current_frame.copy()
+    if p <= 0.0:
+        return current_frame.copy()
+    if p >= 1.0:
+        return next_frame.copy()
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    feather = max(10.0, min(w, h) * 0.04)
     if direction == 'right':
-        x = int(w * p)
-        result[:, :w - x] = next_frame[:, x:]
-        result[:, w - x:] = current_frame[:, w - x:]
+        seam = w * (1.0 - p)
+        mask = np.clip((xx - seam) / feather + 0.5, 0.0, 1.0)
         orientation = 'horizontal'
     elif direction == 'left':
-        x = int(w * (1 - p))
-        result[:, x:] = next_frame[:, :w - x]
-        result[:, :x] = current_frame[:, w - x:]
+        seam = w * p
+        mask = np.clip((seam - xx) / feather + 0.5, 0.0, 1.0)
         orientation = 'horizontal'
     elif direction == 'down':
-        y = int(h * p)
-        result[:h - y, :] = next_frame[y:, :]
-        result[h - y:, :] = current_frame[h - y:, :]
+        seam = h * (1.0 - p)
+        mask = np.clip((yy - seam) / feather + 0.5, 0.0, 1.0)
         orientation = 'vertical'
     else:
-        y = int(h * (1 - p))
-        result[y:, :] = next_frame[:h - y, :]
-        result[:y, :] = current_frame[h - y:, :]
+        seam = h * p
+        mask = np.clip((seam - yy) / feather + 0.5, 0.0, 1.0)
         orientation = 'vertical'
+    result = blend_mask_linear_bgr(current_frame, next_frame, mask)
     # Strong motion blur regardless of p
     kernel = motion_blur_kernel(max(5, int(blur_strength)), 'horizontal' if orientation == 'horizontal' else 'vertical')
-    blurred = cv2.filter2D(result, -1, kernel)
+    blurred = cv2.filter2D(result, -1, kernel, borderType=cv2.BORDER_REPLICATE)
     return blurred
 
 def get_video_duration(filepath):
@@ -1486,6 +1573,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     frames_written = 0
     last_valid_img_path = None
     last_output_frame = None
+    prev_img_path = None
+    prev_motion = "slow_push"
+    prev_slide_idx = 0
     frame_writer = RawVideoFFmpegWriter(output_path, resolution, fps, quality_mode, total_frames=total_output_frames)
 
     for idx, slide in enumerate(slides):
@@ -1600,18 +1690,12 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
             # Use preselected transition for this boundary to keep frame plan consistent
             selected_transition_type = boundary_transition_types[idx]
             if idx > 0 and selected_transition_type and selected_transition_type != "none":
-                transition_events.append(
-                    {
-                        "time": parse_time(slide["start_time"]),
-                        "transition": selected_transition_type,
-                        "slide_index": idx + 1,
-                    }
-                )
                 slide["transition_in"] = selected_transition_type
             skipped_duplicate_transition_frames = 0
             if same_as_previous and selected_transition_type and selected_transition_type != 'none' and idx > 0:
                 skipped_duplicate_transition_frames = transition_frames_list[idx]
                 selected_transition_type = 'none'
+                slide.pop("transition_in", None)
                 logger.info(
                     "Skipping transition for duplicate slide image: %s -> %s; preserving %d frames as slide hold",
                     os.path.basename(previous_img_path),
@@ -1640,34 +1724,45 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 
                 logger.debug(f"Original slide duration: {original_duration:.2f}s, After transition: {duration:.2f}s")
                 
-                # Load the next frame first
-                logger.debug(f"Preparing next frame using panned start of next slide: {img_path}")
-                # Estimate number of content frames for next slide (duration already adjusted)
-                next_num_frames = max(1, int(duration * fps))
-                # We will skip the first content frame after transition (start_frame=1),
-                # so align the transition's last frame to that first used progress
-                start_t = (1 / (next_num_frames - 1)) if next_num_frames > 1 else 0.0
                 slide_motion = slide.get("_motion", "slow_push")
                 next_frame = render_panned_frame(
                     img_path,
                     resolution,
                     idx=slides_processed,
-                    t=start_t,
+                    t=0.0,
                     blur_amount=slide_blur_amount,
                     pan_strength=pan_strength,
                     motion=slide_motion,
                 )
                 logger.debug(
-                    f"Next frame prepared via render_panned_frame | t={start_t:.4f}, frames={next_num_frames}, idx={slides_processed}"
+                    "Next transition endpoint: %s t=0.0 motion=%s idx=%s",
+                    os.path.basename(img_path),
+                    slide_motion,
+                    slides_processed,
                 )
-                
-                # For the first slide, use a black frame as current to fade in from black
+
                 if slides_processed == 0:
                     current_frame = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+                elif prev_img_path and os.path.exists(prev_img_path):
+                    current_frame = render_panned_frame(
+                        prev_img_path,
+                        resolution,
+                        idx=prev_slide_idx,
+                        t=1.0,
+                        blur_amount=slide_blur_amount,
+                        pan_strength=pan_strength,
+                        motion=prev_motion,
+                    )
+                    logger.debug(
+                        "Current transition endpoint: %s t=1.0 motion=%s idx=%s",
+                        os.path.basename(prev_img_path),
+                        prev_motion,
+                        prev_slide_idx,
+                    )
                 else:
                     current_frame = last_output_frame
                     if current_frame is None:
-                        logger.warning("No previous output frame available. Using first frame of current slide.")
+                        logger.warning("No previous slide frame available; using next frame as fallback.")
                         current_frame = next_frame.copy()
                 
                 # Log frame details
@@ -1682,14 +1777,27 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     f"between slides {slides_processed} and {slides_processed+1} | "
                     f"frame range: {frames_written:05d}-{frames_written + transition_frames - 1:05d}"
                 )
+
+                visual_transition_time = frames_written / max(1, fps)
+                transition_events.append(
+                    {
+                        "time": visual_transition_time,
+                        "transition": selected_transition_type,
+                        "slide_index": idx + 1,
+                        "duration": transition_frames / max(1, fps),
+                        "frame": frames_written,
+                        "nominal_slide_start": parse_time(slide["start_time"]),
+                    }
+                )
+                logger.info(
+                    "Transition SFX cue aligned to video frame %s (%.3fs): %s",
+                    frames_written,
+                    visual_transition_time,
+                    selected_transition_type,
+                )
                 
-                # Make sure both frames have the same dimensions
-                if current_frame.shape != next_frame.shape:
-                    logger.warning(
-                        f"Frame dimension mismatch: current {current_frame.shape} vs next {next_frame.shape}. Resizing both to {resolution[1]}x{resolution[0]}"
-                    )
-                    current_frame = cv2.resize(current_frame, (resolution[0], resolution[1]))
-                    next_frame = cv2.resize(next_frame, (resolution[0], resolution[1]))
+                current_frame = fit_frame_to_resolution(current_frame, resolution)
+                next_frame = fit_frame_to_resolution(next_frame, resolution)
                 
                 transition_params = {}
                 if selected_transition_type == 'iris_wipe' and random.random() < 0.3:
@@ -1710,7 +1818,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     transition_written = 0
                     for i in range(transition_frames):
                         try:
-                            progress = (i + 1) / transition_frames
+                            progress = transition_progress(i, transition_frames)
                             frame_num = frames_written + i
                             
                             # Generate transition frame
@@ -1803,9 +1911,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                                 logger.warning(f"Generated frame is None, using black frame instead")
                                 frame = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
                             
-                            # Ensure frame has correct dimensions
-                            if frame.shape[0] != resolution[1] or frame.shape[1] != resolution[0]:
-                                frame = cv2.resize(frame, (resolution[0], resolution[1]))
+                            frame = fit_frame_to_resolution(frame, resolution)
                             
                             frame_writer.write(frame)
                             last_output_frame = frame
@@ -1893,7 +1999,10 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     for _ in range(max(0, slide_frames)):
                         frame_writer.write(fallback)
                         frames_written += 1
-                
+
+                prev_img_path = img_path
+                prev_motion = slide_motion
+                prev_slide_idx = slides_processed
                 slides_processed += 1
                 
             except Exception as e:

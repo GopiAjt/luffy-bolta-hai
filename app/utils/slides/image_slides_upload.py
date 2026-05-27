@@ -14,7 +14,7 @@ from PIL import Image, ImageOps
 from werkzeug.datastructures import FileStorage
 
 from app.config import IMAGE_SLIDES_DIR
-from app.utils.expression_assets import suggest_vivre_assets, vivre_asset_path_from_relative
+from app.utils.expressions.expression_assets import suggest_vivre_assets, vivre_asset_path_from_relative
 
 logger = logging.getLogger(__name__)
 

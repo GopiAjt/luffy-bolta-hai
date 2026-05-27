@@ -10,16 +10,16 @@ import json
 from collections import deque
 
 
-from app.utils.subtitle_generator import SubtitleGenerator
+from app.utils.text.subtitle_generator import SubtitleGenerator
 from app.config import BACKGROUND_MUSIC_VOLUME
-from app.utils.visual_effects import build_global_ffmpeg_filter
-from app.utils.expression_assets import resolve_expression_image
-from app.utils.expression_effects import (
+from app.utils.video.visual_effects import build_global_ffmpeg_filter
+from app.utils.expressions.expression_assets import resolve_expression_image
+from app.utils.expressions.expression_effects import (
     format_expression_filter_step,
     format_expression_overlay,
     resolve_expression_effect,
 )
-from app.utils.expression_overlay_cv import render_expression_overlays_opencv
+from app.utils.expressions.expression_overlay_cv import render_expression_overlays_opencv
 from app.config import NARRATOR_CHARACTER
 
 # Configure logging

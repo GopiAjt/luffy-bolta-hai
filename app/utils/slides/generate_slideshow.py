@@ -12,15 +12,15 @@ import threading
 import random
 import math
 from app.config import VIDEO_RESOLUTION
-from app.utils.visual_effects import (
+from app.utils.video.visual_effects import (
     classify_beat,
     choose_motion_preset,
     choose_visual_transition,
     get_visual_preset,
     normalize_visual_style,
 )
-from app.utils.image_composition import compose_vertical_subject_bgr
-from app.utils.transition_sfx import save_transition_events
+from app.utils.images.image_composition import compose_vertical_subject_bgr
+from app.utils.audio.transition_sfx import save_transition_events
 
 logger = logging.getLogger(__name__)
 

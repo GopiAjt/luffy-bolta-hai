@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional, Tuple
 
-from app.utils.visual_effects import expression_entry_for_visual_style, normalize_visual_style
+from app.utils.video.visual_effects import expression_entry_for_visual_style, normalize_visual_style
 
 EXPRESSION_EMOTION_EFFECTS: Dict[str, str] = {
     "neutral": "fade_scale",

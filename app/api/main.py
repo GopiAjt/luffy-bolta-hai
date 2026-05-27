@@ -6,11 +6,11 @@ from datetime import datetime
 from typing import Optional
 from pathlib import Path
 import uuid
-from app.utils.script_generator import generate_script
-from app.utils.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir
-from app.utils.subtitle_generator import SubtitleGenerator
-from app.utils.image_slides import generate_image_slides
-from app.utils.image_slides_upload import (
+from app.utils.text.script_generator import generate_script
+from app.utils.audio.audio_processor import save_audio_file, convert_to_wav, get_audio_duration, create_uploads_dir
+from app.utils.text.subtitle_generator import SubtitleGenerator
+from app.utils.slides.image_slides import generate_image_slides
+from app.utils.slides.image_slides_upload import (
     apply_vivre_asset_to_slide,
     audio_stem,
     build_slides_response,
@@ -20,10 +20,10 @@ from app.utils.image_slides_upload import (
     slides_json_path_for_audio,
     slides_upload_status,
 )
-from app.utils.generate_final_video import generate_final_video
-from app.utils.tts_generator import generate_voiceover
+from app.utils.video.generate_final_video import generate_final_video
+from app.utils.audio.tts_generator import generate_voiceover
 from app.utils.output_cleanup import cleanup_output, get_output_usage
-from app.utils.manga_pdf_processor import (
+from app.utils.manga.manga_pdf_processor import (
     create_pdf_slides,
     fetch_ohara_context,
     load_manga_pdf_manifest,
@@ -35,7 +35,7 @@ from app.utils.manga_pdf_processor import (
 import re
 import json
 import glob
-from app.utils.expression_assets import (
+from app.utils.expressions.expression_assets import (
     ensure_vivre_card_index,
     suggest_vivre_assets,
     vivre_asset_path_from_relative,
@@ -163,7 +163,7 @@ def _generate_subtitle_assets(
     video_profile: str = 'short_vertical',
     visual_style: Optional[str] = None,
 ) -> dict:
-    from app.utils.visual_effects import subtitle_style_for_visual_style
+    from app.utils.video.visual_effects import subtitle_style_for_visual_style
 
     if visual_style:
         subtitle_style = subtitle_style_for_visual_style(visual_style, subtitle_style)
@@ -193,7 +193,7 @@ def _generate_subtitle_assets(
     expressions = None
     expr_json_path = None
     try:
-        from app.utils.expression_mapper import gemini_expression_mapping_from_ass, parse_ass_file
+        from app.utils.expressions.expression_mapper import gemini_expression_mapping_from_ass, parse_ass_file
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
         expr_json_path = ass_path.rsplit('.', 1)[0] + '.expressions.json'
         if gemini_api_key:
@@ -397,7 +397,7 @@ def generate_slideshow():
         image_dir.mkdir(exist_ok=True)
         
         # Generate the slideshow
-        from app.utils.image_slides import generate_image_slides
+        from app.utils.slides.image_slides import generate_image_slides
         generate_image_slides(
             ass_path=str(ass_file),
             out_path=str(image_slides_json),
@@ -405,7 +405,7 @@ def generate_slideshow():
         )
         
         # Generate the video from the slides
-        from app.utils.generate_slideshow import main as generate_slideshow_video
+        from app.utils.slides.generate_slideshow import main as generate_slideshow_video
         generate_slideshow_video(
             json_path=str(image_slides_json),
             image_dir=str(image_dir),

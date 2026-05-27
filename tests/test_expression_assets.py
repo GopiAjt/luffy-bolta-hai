@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.config import EXPRESSIONS_DIR, USE_STATIC_EXPRESSIONS_ONLY
-from app.utils.expression_assets import (
+from app.utils.expressions.expression_assets import (
     list_static_expression_files,
     normalize_expression_label,
     resolve_expression_image,

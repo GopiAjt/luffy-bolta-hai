@@ -9,9 +9,9 @@ import sys
 # Ensure the project root is in the Python path
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
-from app.utils.generate_slideshow import main as generate_slideshow_video
-from app.utils.video_generator import VideoGenerator
-from app.utils.audio_processor import get_audio_duration
+from app.utils.slides.generate_slideshow import main as generate_slideshow_video
+from app.utils.video.video_generator import VideoGenerator
+from app.utils.audio.audio_processor import get_audio_duration
 from app.config import (
     BACKGROUND_MUSIC_DIR,
     ENABLE_BACKGROUND_MUSIC,
@@ -22,8 +22,8 @@ from app.config import (
     normalize_video_profile,
     normalize_visual_style,
 )
-from app.utils.image_slides_upload import slides_images_dir
-from app.utils.transition_sfx import load_transition_events, mix_transition_sfx
+from app.utils.slides.image_slides_upload import slides_images_dir
+from app.utils.audio.transition_sfx import load_transition_events, mix_transition_sfx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

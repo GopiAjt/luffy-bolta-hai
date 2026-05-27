@@ -1,7 +1,7 @@
 import unittest
 
 from app.config import get_video_profile_config, normalize_video_profile
-from app.utils.tts_generator import (
+from app.utils.audio.tts_generator import (
     _qwen_generation_kwargs,
     _split_text_for_tts,
 )

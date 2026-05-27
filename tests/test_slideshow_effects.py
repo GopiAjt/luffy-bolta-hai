@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from app.utils.generate_slideshow import (
+from app.utils.slides.generate_slideshow import (
     cube_rotation_effect,
     iris_wipe_effect,
     ken_burns_headroom_for_motion,
@@ -12,7 +12,7 @@ from app.utils.generate_slideshow import (
     transition_progress,
     whip_pan_effect,
 )
-from app.utils.visual_effects import choose_motion_preset
+from app.utils.video.visual_effects import choose_motion_preset
 
 
 class SlideshowEffectsTests(unittest.TestCase):

@@ -1,8 +1,8 @@
 import os
 import unittest
 
-from app.utils.generate_slideshow import slideshow_encoder_args, x264_speed_settings
-from app.utils.video_generator import _video_encoder_args, _x264_speed_settings
+from app.utils.slides.generate_slideshow import slideshow_encoder_args, x264_speed_settings
+from app.utils.video.video_generator import _video_encoder_args, _x264_speed_settings
 
 
 class VideoEncodingTests(unittest.TestCase):

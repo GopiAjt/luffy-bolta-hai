@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 import logging
 
-from app.utils.image_slides_llm import call_image_slides_llm
+from app.utils.slides.image_slides_llm import call_image_slides_llm
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -493,12 +493,24 @@ def _image_slides_rules_block(context_entities: List[str]) -> str:
         "FIELD RULES:\n"
         "- summary: short beat from subtitles (what the viewer should understand).\n"
         "- image_search_query: ONLY if visual_source=asset_search. 2–6 words, Vivre-friendly "
-        "(Monkey D. Luffy, Jabra Enies Lobby, Egghead, Marshall D. Teach, One Piece Logo). "
         "Never repeat the same query twice. No jargon filenames.\n"
-        "- ai_image_prompt: ONLY if visual_source=ai_generate. One paragraph for an image model:\n"
-        "  * Start with: 'Vertical 9:16 One Piece anime style illustration, no text, no watermark.'\n"
-        "  * Describe ONE clear scene, characters if relevant, mood/lighting, mobile-readable composition.\n"
-        "  * Faceless video B-roll — not a poster collage.\n"
+        "- ai_image_prompt: ONLY if visual_source=ai_generate. Generate ONE cinematic image prompt for an image model.\n"
+        "Rules:\n"
+        "* Start EXACTLY with: "
+        "Vertical 9:16 One Piece anime style illustration, no text, no watermark.\n"
+        "* Anchor with: "
+        "Visualize this narration beat, without showing words: '<spoken subtitle text>'.\n"
+        "* Resolve pronouns using main context.\n"
+        "* Generate the SINGLE decisive cinematic moment (freeze-frame), not a generic setting.\n"
+        "* Use: SUBJECT + ACTION + SYMBOL + ENVIRONMENT + LIGHTING.\n"
+        "* Prefer ACTION + CONSEQUENCE: what happens, what changed, what object proves it.\n"
+        "* Prefer dynamic verbs: walking away, dropping, tearing, revealing, confronting.\n"
+        "* Avoid passive scenes: standing, looking, sitting.\n"
+        "* Show characters from behind/silhouette where possible.\n"
+        "* One clear focal subject only.\n"
+        "* Faceless YouTube B-roll only.\n"
+        "* Not a poster, not collage, not multiple panels.\n"
+        "* Highly detailed anime art.\n"
         "- If asset_search, set ai_image_prompt to empty string \"\".\n"
         "- If ai_generate, set image_search_query to empty string \"\".\n\n"
         f"SCRIPT-WIDE ENTITIES (context only): {entities_line}\n"
@@ -531,7 +543,8 @@ def _build_image_slides_full_prompt(
         f'"visual_source":"{_VISUAL_SOURCE_AI}",'
         '"image_search_query":"",'
         '"ai_image_prompt":"Vertical 9:16 One Piece anime style illustration, no text, no watermark. '
-        "Scientific diagram of two conflicting energy systems inside a human silhouette, "
+        "Visualize this narration beat, without showing words: 'Eating two devil fruits should destroy the body.' "
+        "Main context: Monkey D. Luffy. Scientific diagram of two conflicting energy systems inside a human silhouette, "
         'rubber-like texture, dramatic red and blue glow, faceless theory video B-roll."},'
         '{"start_time":"0:00:09.00","end_time":"0:00:11.84",'
         '"summary":"Jabra warns in Chapter 385",'
@@ -600,17 +613,72 @@ def _normalize_visual_source(raw: Optional[str]) -> str:
     return _VISUAL_SOURCE_ASSET
 
 
+def _clean_prompt_text(value: str, max_len: int = 260) -> str:
+    text = re.sub(r"\s+", " ", (value or "").strip())
+    return text[:max_len].rstrip(" ,.;")
+
+
+def _ai_prompt_context_entities(subtitle_text: str, summary: str, context_entities: List[str]) -> List[str]:
+    """Prefer entities from the spoken beat, then fall back to slide/script context."""
+    beat_entities = _extract_context_entities(f"{subtitle_text} {summary}", limit=3)
+    merged = []
+    for entity in [*beat_entities, *(context_entities or [])]:
+        if entity and entity not in merged:
+            merged.append(entity)
+    return merged[:3]
+
+
 def _build_ai_image_prompt(summary: str, subtitle_text: str, context_entities: List[str]) -> str:
     """Template prompt for external AI image tools (Gemini Imagen, DALL·E, etc.)."""
-    scene = (summary or subtitle_text or "One Piece theory scene").strip()[:200]
-    cast = ", ".join(context_entities[:2]) if context_entities else "One Piece characters"
+    line = _clean_prompt_text(subtitle_text or summary or "One Piece theory scene")
+    scene = _clean_prompt_text(summary or subtitle_text or "One Piece theory scene", max_len=180)
+    cast_entities = _ai_prompt_context_entities(subtitle_text, summary, context_entities)
+    cast = ", ".join(cast_entities) if cast_entities else "One Piece characters"
     return (
-        "Vertical 9:16 One Piece anime style illustration, no text, no watermark, "
-        "faceless YouTube theory video B-roll. "
-        f"Scene: {scene}. "
-        f"Context: {cast}. "
-        "Single clear focal subject, high contrast, readable on mobile, cinematic lighting."
+        "Vertical 9:16 One Piece anime style illustration, no text, no watermark. "
+        f"Visualize this narration beat, without showing words: '{line}'. "
+        f"Main context: {cast}. "
+        f"{scene}. "
+        "One clear cinematic scene, faceless theory video B-roll, dramatic lighting, readable on mobile."
     )
+
+
+def _anchor_ai_image_prompt(
+    ai_prompt: str,
+    summary: str,
+    subtitle_text: str,
+    context_entities: List[str],
+) -> str:
+    """Ensure Gemini-provided AI prompts stay tied to the exact spoken beat."""
+    base_prompt = (ai_prompt or "").strip()
+    if not base_prompt:
+        return _build_ai_image_prompt(summary, subtitle_text, context_entities)
+
+    prefix = "Vertical 9:16 One Piece anime style illustration, no text, no watermark."
+    if base_prompt.lower().startswith(prefix.lower()):
+        scene = base_prompt[len(prefix):].strip()
+    else:
+        scene = base_prompt
+    scene = re.sub(r"^faceless (youtube )?theory video b-roll\.?\s*", "", scene, flags=re.I)
+    scene = re.sub(
+        r"^visualize this narration beat,\s*without showing words:\s*'[^']*'\.?\s*",
+        "",
+        scene,
+        flags=re.I,
+    )
+    scene = re.sub(r"^main context:\s*[^.]+\.?\s*", "", scene, flags=re.I)
+    if "visualize this narration beat" in base_prompt.lower() and "main context:" in base_prompt.lower():
+        return base_prompt
+
+    line = _clean_prompt_text(subtitle_text or summary or "One Piece theory scene")
+    cast_entities = _ai_prompt_context_entities(subtitle_text, summary, context_entities)
+    cast = ", ".join(cast_entities) if cast_entities else "One Piece characters"
+    return (
+        f"{prefix} "
+        f"Visualize this narration beat, without showing words: '{line}'. "
+        f"Main context: {cast}. "
+        f"{scene}"
+    ).strip()
 
 
 def _needs_ai_visual(
@@ -668,7 +736,12 @@ def _apply_visual_source_plan(
 
     if _llm_chose_ai_slide(slide):
         slide["visual_source"] = _VISUAL_SOURCE_AI
-        slide["ai_image_prompt"] = ai_prompt
+        slide["ai_image_prompt"] = _anchor_ai_image_prompt(
+            ai_prompt,
+            summary,
+            subtitle_text,
+            context_entities,
+        )
         slide["image_search_query"] = ""
         return slide
 
@@ -681,8 +754,12 @@ def _apply_visual_source_plan(
         query = query or "One Piece Logo"
 
     if source == _VISUAL_SOURCE_AI:
-        if not ai_prompt or len(ai_prompt) < 40:
-            ai_prompt = _build_ai_image_prompt(summary, subtitle_text, context_entities)
+        ai_prompt = _anchor_ai_image_prompt(
+            ai_prompt,
+            summary,
+            subtitle_text,
+            context_entities,
+        )
         slide["visual_source"] = _VISUAL_SOURCE_AI
         slide["ai_image_prompt"] = ai_prompt
         slide["image_search_query"] = ""

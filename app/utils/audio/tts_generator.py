@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from app.config import UPLOADS_DIR, normalize_video_profile
-from app.utils.audio_processor import get_audio_duration
+from app.utils.audio.audio_processor import get_audio_duration
 
 logger = logging.getLogger(__name__)
 

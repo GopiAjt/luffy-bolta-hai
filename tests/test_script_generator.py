@@ -5,8 +5,8 @@ from unittest.mock import patch
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
-from app.utils import script_generator
-from app.utils.script_generator import generate_script, validate_generated_script
+from app.utils.text import script_generator
+from app.utils.text.script_generator import generate_script, validate_generated_script
 
 
 VALID_SCRIPT = (
@@ -71,7 +71,7 @@ class ScriptGeneratorTests(unittest.TestCase):
             captured["kwargs"] = kwargs
             return FakeResponse()
 
-        with patch("app.utils.script_generator.requests.post", side_effect=fake_post):
+        with patch("app.utils.text.script_generator.requests.post", side_effect=fake_post):
             response = gemini_model.generate_content(
                 "hello",
                 generation_config={"temperature": 1, "top_p": 0.95, "max_tokens": 16384},

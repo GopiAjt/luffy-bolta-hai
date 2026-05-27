@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from app.utils.expression_effects import EXPR_MAX_WIDTH, resolve_expression_effect
+from app.utils.expressions.expression_effects import EXPR_MAX_WIDTH, resolve_expression_effect
 
 logger = logging.getLogger(__name__)
 

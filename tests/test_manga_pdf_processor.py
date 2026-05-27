@@ -1,6 +1,6 @@
 import unittest
 
-from app.utils.manga_pdf_processor import (
+from app.utils.manga.manga_pdf_processor import (
     _chapter_matches_title,
     _extract_ohara_chapter_section,
     parse_chapter_number,

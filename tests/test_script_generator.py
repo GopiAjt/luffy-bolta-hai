@@ -50,7 +50,10 @@ class FakeModel:
 
 class ScriptGeneratorTests(unittest.TestCase):
     def test_gemini_model_calls_rest_api(self):
-        gemini_model = script_generator.GeminiScriptModel(api_key="test-key")
+        gemini_model = script_generator.GeminiScriptModel(
+            api_key="test-key",
+            model_name="gemini-test-model",
+        )
         fake_payload = {
             "candidates": [
                 {"content": {"parts": [{"text": "TITLE: Test\n\nSCRIPT: Body"}]}}
@@ -78,7 +81,7 @@ class ScriptGeneratorTests(unittest.TestCase):
             )
 
         self.assertEqual(response.text, "TITLE: Test\n\nSCRIPT: Body")
-        self.assertIn("gemini-2.5-pro", captured["url"])
+        self.assertIn("gemini-test-model", captured["url"])
         self.assertEqual(captured["kwargs"]["params"]["key"], "test-key")
         gen_cfg = captured["kwargs"]["json"]["generationConfig"]
         self.assertEqual(gen_cfg["temperature"], 1)
@@ -91,7 +94,7 @@ class ScriptGeneratorTests(unittest.TestCase):
             result = generate_script(topic_override="Shanks at Mary Geoise")
 
         self.assertEqual(result["title"], "Shanks Warning Changes Mary Geoise")
-        self.assertIn("Chapter 907", result["script"])
+        self.assertIn("Chapter nine hundred seven", result["script"])
         self.assertEqual(result["resolved_topic"], "Shanks at Mary Geoise")
         self.assertEqual(result["quality_warnings"], [])
         self.assertFalse(result["retry_attempted"])
@@ -150,6 +153,17 @@ class ScriptGeneratorTests(unittest.TestCase):
         validation = validate_generated_script(result, chapter_number=1182)
         self.assertIn("Chapter-locked script must open with Chapter 1182", validation.errors)
 
+    def test_chapter_lock_accepts_tts_worded_chapter_number(self):
+        result = {
+            "title": "Shanks Warning Changes Mary Geoise",
+            "script": VALID_SCRIPT.replace("Chapter 907", "Chapter nine hundred seven"),
+            "description": "desc",
+            "hashtags": "#onepiece",
+        }
+        validation = validate_generated_script(result, chapter_number=907)
+
+        self.assertNotIn("Chapter-locked script must open with Chapter 907", validation.errors)
+
     def test_retry_succeeds_when_second_response_is_valid(self):
         invalid_script = VALID_SCRIPT.replace("Chapter 907 puts", "Remember Chapter 907 puts")
         fake_model = FakeModel([model_text(script=invalid_script), model_text()])
@@ -172,7 +186,7 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertEqual(
             parsed["script"],
-            "Chapter 907 makes Shanks feel dangerous. Mary Geoise listens.",
+            "Chapter nine hundred seven makes Shanks feel dangerous. Mary Geoise listens.",
         )
 
     def test_parse_response_accepts_markdown_wrapped_section_labels(self):
@@ -184,8 +198,24 @@ class ScriptGeneratorTests(unittest.TestCase):
         )
 
         self.assertEqual(parsed["title"], "Shanks Warning Changes Mary Geoise")
+        self.assertEqual(parsed["script"], "Chapter nine hundred seven makes Shanks feel dangerous. Mary Geoise listens.")
         self.assertEqual(parsed["description"], "desc")
         self.assertEqual(parsed["hashtags"], "#onepiece #anime")
+
+    def test_parse_response_preserves_paragraphs_and_words_script_numbers(self):
+        parsed = script_generator._parse_response(
+            "TITLE: Zoro Fear\n\n"
+            "SCRIPT: Chapter 513 breaks Zoro.\n\n"
+            "He watches 3 friends vanish after 2 impossible defeats.\n\n"
+            "DESCRIPTION: desc\n\n"
+            "HASHTAGS: #onepiece"
+        )
+
+        self.assertEqual(
+            parsed["script"],
+            "Chapter five hundred thirteen breaks Zoro.\n\n"
+            "He watches three friends vanish after two impossible defeats.",
+        )
 
     def test_question_word_declarative_opener_is_allowed(self):
         script = (

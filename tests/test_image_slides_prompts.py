@@ -1,6 +1,13 @@
 import unittest
 
-from app.utils.slides.image_slides import _anchor_ai_image_prompt, _build_ai_image_prompt
+from app.utils.slides.image_slides import (
+    _anchor_ai_image_prompt,
+    _apply_visual_source_plan,
+    _build_ai_image_prompt,
+    _infer_query_from_subtitle_text,
+    _needs_ai_visual,
+    _split_long_slides_by_dialogues,
+)
 
 
 class ImageSlidesPromptTests(unittest.TestCase):
@@ -44,6 +51,89 @@ class ImageSlidesPromptTests(unittest.TestCase):
         self.assertEqual(prompt.count("Visualize this narration beat"), 1)
         self.assertIn("Main context: Poseidon, Gol D. Roger", prompt)
         self.assertIn("drops a useless ancient weapon blueprint", prompt)
+
+    def test_zoro_specific_queries_are_inferred_from_spoken_context(self):
+        self.assertEqual(
+            _infer_query_from_subtitle_text(
+                "When Zoro learned Kuina died falling down the stairs in Shimotsuki Village",
+                ["Zoro"],
+            ),
+            "Zoro Kuina Shimotsuki stairs",
+        )
+        self.assertEqual(
+            _infer_query_from_subtitle_text(
+                "Mihawk stops Zoro at Baratie with a tiny cross knife",
+                ["Zoro"],
+            ),
+            "Zoro Mihawk Baratie cross knife",
+        )
+
+    def test_psychological_beats_stay_on_searchable_canon_scenes(self):
+        self.assertFalse(
+            _needs_ai_visual(
+                "He is haunted by the randomness of mortality and powerlessness.",
+                "Zoro's fear of weakness becomes a shield",
+                "Zoro Kuina Shimotsuki stairs",
+                0,
+            )
+        )
+
+    def test_long_slides_split_into_subtitle_grounded_beats(self):
+        slides = [
+            {
+                "start_time": "0:00:14.48",
+                "end_time": "0:00:32.20",
+                "summary": "The tragic death of Kuina on the stairs.",
+                "visual_source": "asset_search",
+                "image_search_query": "Kuina Shimotsuki Village",
+                "ai_image_prompt": "",
+                "context_entities": ["Zoro", "Kuina"],
+            }
+        ]
+        dialogues = [
+            {
+                "start": "0:00:14.48",
+                "end": "0:00:17.22",
+                "text": "All of it traces back to a single moment in chapter five.",
+            },
+            {
+                "start": "0:00:17.56",
+                "end": "0:00:24.73",
+                "text": "Inside a quiet dojo in Shimotsuki Village, Zoro learned Kuina died falling down stairs.",
+            },
+            {
+                "start": "0:00:24.75",
+                "end": "0:00:32.20",
+                "text": "That moment shatters Zoro's understanding of the world and leaves him terrified of mortality.",
+            },
+        ]
+
+        result = _split_long_slides_by_dialogues(slides, dialogues, ["Zoro", "Kuina"])
+
+        self.assertGreater(len(result), 1)
+        self.assertEqual(result[0]["start_time"], "0:00:14.48")
+        self.assertTrue(any("Kuina" in slide["summary"] for slide in result))
+        self.assertTrue(all(slide["visual_source"] == "asset_search" for slide in result))
+        self.assertTrue(any("Zoro Kuina Shimotsuki stairs" in slide["image_search_query"] for slide in result))
+
+    def test_gemini_ai_choice_is_overridden_when_canon_scene_is_searchable(self):
+        slide = {
+            "summary": "Mihawk exposes Zoro's weakness at Baratie",
+            "visual_source": "ai_generate",
+            "image_search_query": "",
+            "ai_image_prompt": "Vertical 9:16 One Piece anime style illustration, no text, no watermark. Zoro faces Mihawk.",
+        }
+
+        result = _apply_visual_source_plan(
+            slide,
+            "Mihawk defeats Zoro at Baratie with a tiny cross knife.",
+            ["Zoro", "Mihawk", "Baratie"],
+            0,
+        )
+
+        self.assertEqual(result["visual_source"], "asset_search")
+        self.assertEqual(result["image_search_query"], "Zoro Mihawk Baratie cross knife")
+        self.assertEqual(result["ai_image_prompt"], "")
 
 
 if __name__ == "__main__":

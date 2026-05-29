@@ -42,6 +42,21 @@ def _scale_factor(effect: str, t_ratio: float) -> float:
     return 0.94 + 0.06 * t_ratio  # fade_scale / fade_rise / fade_soft base
 
 
+def _hold_motion(local_t: float, fade_duration: float, enabled: bool) -> Tuple[float, int, int, float]:
+    """Subtle motion for continuous expression holds after the entry animation."""
+    if not enabled or local_t <= fade_duration:
+        return 1.0, 0, 0, 1.0
+
+    hold_t = local_t - fade_duration
+    breath = math.sin(hold_t * math.tau * 0.55)
+    drift = math.sin(hold_t * math.tau * 0.23)
+    scale = 1.0 + 0.018 * breath
+    x_offset = int(round(4 * drift))
+    y_offset = int(round(5 * breath))
+    alpha = 0.96 + 0.04 * (0.5 + 0.5 * math.sin(hold_t * math.tau * 0.37))
+    return scale, x_offset, y_offset, alpha
+
+
 def _alpha_for_time(
     local_t: float,
     interval_duration: float,
@@ -195,6 +210,13 @@ def render_expression_overlays_opencv(
 
             t_ratio = min(1.0, local_t / fade_duration) if fade_duration > 0 else 1.0
             scale = _scale_factor(effect, t_ratio)
+            hold_scale, hold_x, hold_y, hold_alpha = _hold_motion(
+                local_t,
+                fade_duration,
+                bool(spec.get("continuous_hold")),
+            )
+            scale *= hold_scale
+            alpha *= hold_alpha
             target_w = max(1, int(EXPR_MAX_WIDTH * scale))
             cache_key = (spec["img_path"], target_w)
             if cache_key not in resize_cache:
@@ -206,7 +228,9 @@ def render_expression_overlays_opencv(
             x = (width - ow) // 2
             if effect == "shake_in":
                 x += int(6 * math.sin(local_t * 24.0))
+            x += hold_x
             y = height - oh - y_bottom
+            y += hold_y
             _composite_rgba(frame, overlay, x, y, alpha)
 
         writer.write(frame)

@@ -27,8 +27,8 @@ MANGA_PDF_DIR = BASE_DIR / "output" / "manga_pdf"
 BACKGROUND_MUSIC_DIR = BASE_DIR / "data"
 TRANSITION_SFX_DIR = BASE_DIR / "data" / "sfx"
 ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not in {"0", "false", "no"}
-TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.25"))
-TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.5"))
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.5"))
+TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.0"))
 
 # --- AUDIO ---
 MAX_AUDIO_FILE_SIZE_MB = float(os.getenv("MAX_AUDIO_FILE_SIZE_MB", "100"))

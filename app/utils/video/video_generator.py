@@ -40,6 +40,7 @@ EXPRESSION_OVERLAY_CHUNK_SIZE = max(
 )
 # opencv = single-pass (fast); ffmpeg = chunked filter_complex (legacy)
 EXPRESSION_RENDERER = os.getenv("EXPRESSION_RENDERER", "opencv").strip().lower()
+EXPRESSION_MERGE_GAP_SECONDS = float(os.getenv("EXPRESSION_MERGE_GAP_SECONDS", "0.15"))
 
 
 def _x264_speed_settings(quality_mode: str) -> Tuple[str, str]:
@@ -705,6 +706,35 @@ class VideoGenerator:
                 merged.append(current)
         return merged
 
+    def _merge_expression_intervals(
+        self,
+        intervals: List[Tuple[float, float]],
+        gap_tolerance: float = EXPRESSION_MERGE_GAP_SECONDS,
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge subtitle-sized expression spans into longer holds.
+
+        The expression mapper can emit many tiny lines with the same expression and
+        small gaps between them. Treat those as one visual cue so the same PNG does
+        not repeatedly re-enter for a continuous emotion.
+        """
+        if not intervals:
+            return []
+
+        sorted_intervals = sorted(intervals, key=lambda item: item[0])
+        merged: List[Dict[str, Any]] = []
+        for start, end in sorted_intervals:
+            if end <= start:
+                continue
+            if not merged or start > merged[-1]["end"] + gap_tolerance:
+                merged.append({"start": start, "end": end, "source_count": 1})
+                continue
+
+            merged[-1]["end"] = max(merged[-1]["end"], end)
+            merged[-1]["source_count"] += 1
+
+        return merged
+
     def generate_video_with_expressions(
         self,
         audio_path: str,
@@ -775,7 +805,7 @@ class VideoGenerator:
                 overlay_groups[group_key]["intervals"].append((start_time, end_time))
 
             for group in overlay_groups.values():
-                group["intervals"] = self._merge_intervals(group["intervals"])
+                group["intervals"] = self._merge_expression_intervals(group["intervals"])
 
             logger.info(
                 "Processed expression overlays: %s",
@@ -819,7 +849,9 @@ class VideoGenerator:
                 )
 
                 abs_img_path = os.path.abspath(img_path)
-                for start, end in intervals:
+                for interval in intervals:
+                    start = interval["start"]
+                    end = interval["end"]
                     if end <= start:
                         logger.warning(
                             f"Skipping invalid interval for label '{label}': start={start}, end={end}"
@@ -837,15 +869,18 @@ class VideoGenerator:
                             "fade_duration": fade_duration,
                             "interval_duration": interval_duration,
                             "effect": resolve_expression_effect(label, visual_style),
+                            "source_count": interval["source_count"],
+                            "continuous_hold": interval["source_count"] > 1,
                         }
                     )
                     logger.info(
-                        "Expression cue %s/%s effect=%s %.2f-%.2fs",
+                        "Expression cue %s/%s effect=%s %.2f-%.2fs source_count=%s",
                         character,
                         label,
                         overlay_specs[-1]["effect"],
                         start,
                         end,
+                        interval["source_count"],
                     )
 
             working_video = str(background_video_path) if background_video_path else None

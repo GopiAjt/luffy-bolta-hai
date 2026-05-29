@@ -16,7 +16,7 @@ from app.utils.audio.audio_processor import get_audio_duration
 logger = logging.getLogger(__name__)
 
 DEFAULT_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-DEFAULT_VOICE_SAMPLE_PATH = Path(__file__).resolve().parents[1] / "static" / "Sample_voice.wav"
+DEFAULT_VOICE_SAMPLE_PATH = Path(__file__).resolve().parents[2] / "static" / "Sample_voice.wav"
 DEFAULT_VOICE_SAMPLE_TRANSCRIPT = (
     "So chapter 1182 dropped and we gotta talk about Ragnar. "
     "Imu's all like traitor about Nidhogg, right? But then Ragnar appears, "

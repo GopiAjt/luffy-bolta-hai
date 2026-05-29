@@ -33,8 +33,16 @@ QUESTION_START_RE = re.compile(
     r"^\s*(what|why|how|who|when|where|is|are|was|were|can|could|would|did|do)\b",
     re.IGNORECASE,
 )
+SPOKEN_NUMBER_PATTERN = (
+    r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)"
+    r"(?:[\s-]+(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|and)){0,5}"
+)
 CANON_ANCHOR_RE = re.compile(
-    r"\b(chapter\s+\d+|episode\s+\d+|sbs\b|volume\s+\d+|arc\b|"
+    rf"\b(chapter\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|episode\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|sbs\b|volume\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|arc\b|"
     r"marineford|enies lobby|wano|egghead|mary geoise|mariejois|elbaf|ohara|"
     r"dressrosa|alabasta|skypiea|whole cake|fishman island|sabaody|god valley|"
     r"onigashima|water 7|thriller bark|impel down|zou)\b",
@@ -47,7 +55,7 @@ ONE_PIECE_ENTITIES_RE = re.compile(
     r"dragon|ace|sabo|law|hancock|crocodile|doflamingo|katakuri|"
     r"vegapunk|kuma|bonney|imu|gorosei|five elders|cp9|cp0|"
     r"merry|going merry|sunny|thousand sunny|moby dick|oro jackson|"
-    r"chapter\s+\d+|episode\s+\d+|sbs(?:\s+vol(?:ume)?\.?\s*\d+)?|volume\s+\d+|"
+    rf"chapter\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|episode\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|sbs(?:\s+vol(?:ume)?\.?\s*(?:\d+|{SPOKEN_NUMBER_PATTERN}))?|volume\s+(?:\d+|{SPOKEN_NUMBER_PATTERN})|"
     r"marineford|enies lobby|wano|egghead|mary geoise|mariejois|ohara|sabaody|"
     r"water 7|thriller bark|impel down|alabasta|skypiea|whole cake|"
     r"fishman island|dressrosa|zou|elbaf|god valley|onigashima|"
@@ -97,6 +105,7 @@ GENERATION_SETTINGS = {
 }
 PROSODY_MARKUP_RULES = (
     "PROSODY MARKUP IN SCRIPT (write these characters directly in the narration for TTS):\n"
+    "- Use punctuation as pacing control for spoken delivery, not decoration.\n"
     "- Commas (,) — breath between clauses; use often so lines do not sound rushed.\n"
     "- Em dashes (—) — hard pivot, contrast, or dramatic weight before a reveal (use — not hyphen -).\n"
     "- Ellipses (...) — suspense, hesitation, or a trailing beat before the next idea.\n"
@@ -111,9 +120,56 @@ PROSODY_MARKUP_RULES = (
     "- Long-form SCRIPT: use commas, dashes, and ellipses throughout; avoid flat run-on blocks.\n\n"
 )
 
+TTS_FORMATTING_RULES = (
+    "TTS-FRIENDLY SCRIPT FORMATTING - MANDATORY:\n"
+    "- Write SCRIPT as multiple short paragraphs separated by blank lines; never one continuous wall of text.\n"
+    "- Use 1-3 sentences per paragraph for long-form narration.\n"
+    "- Write spoken numbers as words inside SCRIPT, especially chapter numbers: write 'chapter five hundred thirteen', not 'Chapter 513'.\n"
+    "- Also write ordinary numbers as words when they are meant to be spoken: 'three swords', not '3 swords'.\n"
+    "- Keep section labels unchanged, but the narration itself should be TTS-friendly.\n\n"
+)
+
+_ONES = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+]
+_TENS = [
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+]
+_NUMBER_WORDS = {
+    word: value for value, word in enumerate(_ONES)
+}
+_NUMBER_WORDS.update({word: value * 10 for value, word in enumerate(_TENS) if word})
 REQUIRED_OUTPUT_TEMPLATE = (
     "TITLE: <one title under 80 characters>\n\n"
-    "SCRIPT: <complete narration only, no markdown; use comma, —, ..., ?! prosody in the text>\n\n"
+    "SCRIPT: <complete narration only, multiple short paragraphs, no markdown; use comma, —, ..., ?! prosody in the text; write spoken numbers as words>\n\n"
     "DESCRIPTION:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
@@ -122,6 +178,84 @@ REQUIRED_OUTPUT_TEMPLATE = (
     "- <bullet 5>\n\n"
     "HASHTAGS: #onepiece #anime #theory <more relevant lowercase hashtags>"
 )
+
+
+def _int_to_words(number: int) -> str:
+    if number < 0:
+        return f"minus {_int_to_words(abs(number))}"
+    if number < 20:
+        return _ONES[number]
+    if number < 100:
+        tens, ones = divmod(number, 10)
+        return _TENS[tens] if ones == 0 else f"{_TENS[tens]} {_ONES[ones]}"
+    if number < 1000:
+        hundreds, remainder = divmod(number, 100)
+        words = f"{_ONES[hundreds]} hundred"
+        return words if remainder == 0 else f"{words} {_int_to_words(remainder)}"
+    if number < 100000:
+        thousands, remainder = divmod(number, 1000)
+        words = f"{_int_to_words(thousands)} thousand"
+        return words if remainder == 0 else f"{words} {_int_to_words(remainder)}"
+    return str(number)
+
+
+def _words_to_int(text: str) -> Optional[int]:
+    total = 0
+    current = 0
+    saw_number = False
+    for token in re.findall(r"[a-z]+", (text or "").lower()):
+        if token in _NUMBER_WORDS:
+            current += _NUMBER_WORDS[token]
+            saw_number = True
+        elif token == "hundred" and saw_number:
+            current = max(current, 1) * 100
+        elif token == "thousand" and saw_number:
+            total += max(current, 1) * 1000
+            current = 0
+        elif token in {"and"}:
+            continue
+        else:
+            break
+    return total + current if saw_number else None
+
+
+def _numbers_to_words_for_tts(text: str) -> str:
+    def replace(match: re.Match) -> str:
+        raw = match.group(0)
+        try:
+            return _int_to_words(int(raw.replace(",", "")))
+        except ValueError:
+            return raw
+
+    return re.sub(r"\b\d{1,5}(?:,\d{3})*\b", replace, text or "")
+
+
+def _normalize_script_paragraphs(text: str) -> str:
+    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text or "")
+    text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
+    text = re.sub(r"\[.*?\]", "", text)
+    paragraphs = [
+        re.sub(r"[ \t]+", " ", paragraph).strip()
+        for paragraph in re.split(r"\n\s*\n+", text.strip())
+        if paragraph.strip()
+    ]
+    paragraphs = [re.sub(r"\s*\n\s*", " ", paragraph).strip() for paragraph in paragraphs]
+    if len(paragraphs) == 1 and _word_count(paragraphs[0]) > 140:
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", paragraphs[0])
+            if sentence.strip()
+        ]
+        if len(sentences) > 3:
+            paragraphs = [
+                " ".join(sentences[index:index + 2])
+                for index in range(0, len(sentences), 2)
+            ]
+    return "\n\n".join(paragraphs)
+
+
+def _normalize_script_for_tts(text: str) -> str:
+    return _numbers_to_words_for_tts(_normalize_script_paragraphs(text))
 
 
 @dataclass
@@ -483,6 +617,7 @@ def _build_prompt(
         "- Do NOT use markdown in SCRIPT: no **bold**, no *italic*, no underscores, no asterisks of any kind.\n"
         "- Do not output stage directions or bracket tags inside SCRIPT.\n\n"
         f"{PROSODY_MARKUP_RULES}"
+        f"{TTS_FORMATTING_RULES}"
         f"{language_config['rules']}"
         f"TOPIC: \"{topic}\"\n\n"
         f"{context_block}"
@@ -501,6 +636,7 @@ def _build_prompt(
         "SELF-CHECK BEFORE FINAL ANSWER:\n"
         "- Did the script answer the title's promise with a concrete claim? If no, rewrite.\n"
         "- Does SCRIPT use prosody punctuation (commas, —, ..., ?!) for breath and impact—not flat run-ons? If no, rewrite.\n"
+        "- Is SCRIPT split into multiple short paragraphs with blank lines, and are spoken numbers written as words? If no, rewrite.\n"
         "- Does sentence length move from punchy hook to evidence rhythm to confident payoff? If no, rewrite.\n"
         "- Are reveal words easy to say aloud, with clear consonants and no awkward clusters? If no, rewrite.\n"
         "- Does the evidence section name at least 2 specific characters, chapters, locations, ships, powers, or canon terms? If no, rewrite with real named details.\n"
@@ -545,10 +681,7 @@ def _parse_response(text: str) -> Dict[str, str]:
         key = match.group(1).lower()
         value = match.group(2).strip()
         if key == "script":
-            value = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", value)
-            value = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", value)
-            value = re.sub(r"\[.*?\]", "", value)
-            value = re.sub(r"\s+", " ", value).strip()
+            value = _normalize_script_for_tts(value)
         result[key] = value
     return result
 
@@ -590,7 +723,20 @@ def _count_named_entities(text: str) -> int:
 
 
 def _extract_chapter_numbers(text: str) -> List[int]:
-    return [int(number) for number in re.findall(r"\bchapter\s+(\d+)\b", text or "", re.IGNORECASE)]
+    chapters: List[int] = []
+    for match in re.finditer(
+        rf"\bchapter\s+(\d+|{SPOKEN_NUMBER_PATTERN})\b",
+        text or "",
+        re.IGNORECASE,
+    ):
+        raw = match.group(1)
+        if raw.isdigit():
+            chapters.append(int(raw))
+            continue
+        parsed = _words_to_int(raw)
+        if parsed is not None:
+            chapters.append(parsed)
+    return chapters
 
 
 def _is_question_hook(hook: str) -> bool:
@@ -660,7 +806,7 @@ def validate_generated_script(
     if not CANON_ANCHOR_RE.search(opening):
         errors.append("Opening lines do not include a concrete canon anchor")
 
-    if chapter_number and not re.search(rf"\bchapter\s+{re.escape(str(chapter_number))}\b", opening, re.IGNORECASE):
+    if chapter_number and chapter_number not in _extract_chapter_numbers(opening):
         errors.append(f"Chapter-locked script must open with Chapter {chapter_number}")
 
     entity_count = _count_named_entities(script)
@@ -730,6 +876,7 @@ def _retry_prompt(
         "- Open with a declarative statement, not a question or memory-check phrase.\n"
         f"{canon_anchor_rule}"
         f"{PROSODY_MARKUP_RULES}"
+        f"{TTS_FORMATTING_RULES}"
         "- Vary sentence length for emotional rhythm: short hook, medium evidence, longer payoff, crisp CTA.\n"
         "- Choose reveal words that sound clean aloud; avoid awkward tongue-twisting clusters.\n"
         "- Include at least 2 named One Piece entities: characters, chapters, locations, ships, powers, or canon terms.\n"
@@ -769,6 +916,7 @@ def _strict_repair_prompt(
         "- Each evidence sentence must name a character, chapter, arc, location, ship, power, quote, or canon term.\n"
         "- Do not use hollow phrases like 'one reaction', 'one pause', 'behind the curtain', or 'not random setup'.\n"
         "- Keep prosody in SCRIPT: commas, em dashes (—), ellipses (...), and ?! where they add breath or shock.\n\n"
+        f"{TTS_FORMATTING_RULES}"
         "EXACT OUTPUT TEMPLATE:\n"
         f"{REQUIRED_OUTPUT_TEMPLATE}\n\n"
         "Use the previous attempt only as a rough idea, but write a complete valid version:\n"

@@ -23,10 +23,11 @@ CANONICAL_ENTITIES = [
     "Luffy", "Zoro", "Sanji", "Nami", "Usopp", "Chopper", "Robin", "Franky",
     "Brook", "Jinbe", "Shanks", "Mihawk", "Blackbeard", "Marshall D. Teach",
     "Whitebeard", "Ace", "Sabo", "Dragon", "Garp", "Koby", "Law", "Kid",
-    "Bonney", "Kuma", "Vegapunk", "Imu", "Five Elders", "Gorosei",
+    "Bonney", "Kuma", "Kuina", "King", "Vegapunk", "Imu", "Five Elders", "Gorosei",
     "Joy Boy", "Nika", "Mary Geoise", "Wano", "Egghead", "Elbaf",
     "Marineford", "Dressrosa", "Whole Cake Island", "Thriller Bark",
-    "Enies Lobby", "Ohara", "Void Century", "Poneglyph", "Sunny Ship",
+    "Baratie", "Sabaody", "Onigashima", "Kuraigana Island",
+    "Shimotsuki Village", "Enies Lobby", "Ohara", "Void Century", "Poneglyph", "Sunny Ship",
     "Grand Line", "Red Line", "World Government", "Revolutionary Army",
 ]
 
@@ -49,11 +50,19 @@ ENTITY_ALIASES = {
     "poseidon": "Poseidon",
     "pluton": "Pluton",
     "fishman island": "Fishman Island",
+    "shimotsuki": "Shimotsuki Village",
+    "sabaody archipelago": "Sabaody",
+    "bartholomew kuma": "Kuma",
+    "dracule mihawk": "Mihawk",
+    "enma": "Enma",
 }
 
-for _extra_entity in ("Caribou", "Shirahoshi", "Pluton", "Poseidon", "Fishman Island"):
+for _extra_entity in ("Caribou", "Shirahoshi", "Pluton", "Poseidon", "Fishman Island", "Enma"):
     if _extra_entity not in CANONICAL_ENTITIES:
         CANONICAL_ENTITIES.append(_extra_entity)
+
+IMAGE_SLIDE_MAX_SECONDS = float(os.getenv("IMAGE_SLIDE_MAX_SECONDS", "5.5"))
+IMAGE_SLIDE_MIN_SECONDS = float(os.getenv("IMAGE_SLIDE_MIN_SECONDS", "1.6"))
 
 
 def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
@@ -476,23 +485,33 @@ def _image_slides_rules_block(context_entities: List[str]) -> str:
     )
     return (
         "CRITICAL — each slide matches the SPOKEN lines in [start_time, end_time]. Faceless theory video (voiceover + B-roll).\n\n"
+        "CONTEXT-AWARE PACING:\n"
+        "- Cut on idea changes, not only character names: hook, cause, consequence, example, rebuttal, payoff.\n"
+        "- Prefer 2-5 seconds per slide. Never hold one visual across a new canon event, new character, or new emotional turn.\n"
+        "- Long narration sections must become multiple visual beats with different scene-search queries.\n"
+        "- For trauma/psychology narration, DO NOT invent symbolic AI art first. Map the feeling to the closest canon scene: Kuina stairs, Mihawk Baratie, Zoro nothing happened, Kuma Sabaody, Enma Onigashima, Zoro bowing to Mihawk.\n"
+        "- Avoid generic repeats like only 'Zoro training' or 'Zoro scars'; each slide needs a new focal action or object.\n\n"
         "For EVERY slide set visual_source to ONE of:\n"
         f'  - "{_VISUAL_SOURCE_ASSET}": use existing art (Vivre pack / upload). Provide image_search_query only.\n'
-        f'  - "{_VISUAL_SOURCE_AI}": no suitable catalog still — user will generate with AI. Provide ai_image_prompt only.\n\n'
+        f'  - "{_VISUAL_SOURCE_AI}": LAST RESORT only. Provide ai_image_prompt only when no searchable canon scene exists.\n\n'
         "USE asset_search WHEN:\n"
         "- A named character appears (Monkey D. Luffy, Jabra, Marshall D. Teach, Five Elders, etc.)\n"
         "- A known place in the asset pack (Egghead, Enies Lobby, Marineford, Skypiea, Mary Geoise)\n"
         "- Pirate crew / flag / logo (Straw Hat Pirates, Blackbeard Pirates, One Piece Logo)\n"
         "- A specific manga chapter beat tied to a named character or arc location\n\n"
+        "SEARCH QUERY STYLE FOR asset_search:\n"
+        "- Use specific manga/anime scene phrases, not abstract emotions.\n"
+        "- Good: 'Zoro Kuina Shimotsuki stairs', 'Zoro Mihawk Baratie cross knife', 'Zoro nothing happened Thriller Bark', 'Kuma Sabaody Straw Hats vanish', 'Zoro Enma King Onigashima', 'Zoro bows to Mihawk Kuraigana'.\n"
+        "- Bad: 'Zoro trauma', 'fear of weakness', 'fragility of life', 'Zoro aesthetic', 'sad anime boy'.\n\n"
         "USE ai_generate WHEN (do NOT use vague image_search_query):\n"
         "- Abstract science (thermodynamics, kinetic energy, friction, pressure, elastic limit)\n"
         "- Diagrams, comparisons, 'two devil fruits rule', internal explosion metaphor\n"
         "- Impossible or non-catalog queries (Hito Hito Model Nika, Gear V aura, laboratory explosion)\n"
         "- Generic 'manga panels' or 'tell me your theories' — use a concrete AI scene instead\n"
-        "- Same hero pose would repeat for the 3rd+ time — switch to diagram or antagonist AI shot\n\n"
+        "- Same hero pose would repeat for the 3rd+ time and no better canon scene exists\n\n"
         "FIELD RULES:\n"
         "- summary: short beat from subtitles (what the viewer should understand).\n"
-        "- image_search_query: ONLY if visual_source=asset_search. 2–6 words, Vivre-friendly "
+        "- image_search_query: ONLY if visual_source=asset_search. 3–9 words, searchable canon scene phrase. "
         "Never repeat the same query twice. No jargon filenames.\n"
         "- ai_image_prompt: ONLY if visual_source=ai_generate. Generate ONE cinematic image prompt for an image model.\n"
         "Rules:\n"
@@ -532,31 +551,28 @@ def _build_image_slides_full_prompt(
         "You are an expert video content designer specializing in One Piece. "
         "Map timestamped subtitles to image search queries as a JSON array.\n\n"
         f"{_image_slides_rules_block(context_entities)}\n"
-        "GOOD EXAMPLE (mixed asset + AI):\n"
+        "GOOD EXAMPLE (canon-scene-first, AI only when unavoidable):\n"
         '[{"start_time":"0:00:00.03","end_time":"0:00:03.08",'
-        '"summary":"Luffy cannot eat two devil fruits",'
+        '"summary":"Zoro trains from fear of weakness",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
-        '"image_search_query":"Monkey D. Luffy",'
+        '"image_search_query":"Roronoa Zoro training dojo",'
         '"ai_image_prompt":""},'
-        '{"start_time":"0:00:01.79","end_time":"0:00:03.55",'
-        '"summary":"Violates thermodynamic limits",'
-        f'"visual_source":"{_VISUAL_SOURCE_AI}",'
-        '"image_search_query":"",'
-        '"ai_image_prompt":"Vertical 9:16 One Piece anime style illustration, no text, no watermark. '
-        "Visualize this narration beat, without showing words: 'Eating two devil fruits should destroy the body.' "
-        "Main context: Monkey D. Luffy. Scientific diagram of two conflicting energy systems inside a human silhouette, "
-        'rubber-like texture, dramatic red and blue glow, faceless theory video B-roll."},'
-        '{"start_time":"0:00:09.00","end_time":"0:00:11.84",'
-        '"summary":"Jabra warns in Chapter 385",'
+        '{"start_time":"0:00:03.60","end_time":"0:00:07.80",'
+        '"summary":"Kuina death creates Zoro fear",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
-        '"image_search_query":"Jabra Enies Lobby",'
+        '"image_search_query":"Zoro Kuina Shimotsuki stairs",'
+        '"ai_image_prompt":""},'
+        '{"start_time":"0:00:09.00","end_time":"0:00:11.84",'
+        '"summary":"Mihawk humiliates Zoro at Baratie",'
+        f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
+        '"image_search_query":"Zoro Mihawk Baratie cross knife",'
         '"ai_image_prompt":""},'
         '{"start_time":"0:00:31.49","end_time":"0:00:32.43",'
         '"summary":"Follow CTA",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"One Piece Logo",'
         '"ai_image_prompt":""}]\n\n'
-        "BAD: Marineford for thermodynamics; Hito Hito Model Nika as search query; five Luffy asset slides in a row.\n\n"
+        "BAD: abstract emotion queries like 'Zoro trauma'; AI prompts for searchable scenes; five generic Zoro asset slides in a row.\n\n"
         "Subtitles:\n"
         f"{raw_subtitles}\n"
     )
@@ -564,6 +580,15 @@ def _build_image_slides_full_prompt(
 
 # Ordered (pattern, preferred Vivre query) — subtitle-driven fallbacks when LLM is generic
 _SUBTITLE_QUERY_HOOKS: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bkuina\b|shimotsuki|flight of stairs|dojo", re.I), "Zoro Kuina Shimotsuki stairs"),
+    (re.compile(r"\bmihawk\b|baratie|cross knife|tiny knife", re.I), "Zoro Mihawk Baratie cross knife"),
+    (re.compile(r"\bnothing happened\b|thriller bark|luffy'?s pain|red bubble|pool of blood", re.I), "Zoro nothing happened Thriller Bark"),
+    (re.compile(r"\bkuma\b|sabaody|vanish|erases|separation", re.I), "Kuma Sabaody Straw Hats vanish"),
+    (re.compile(r"\bking\b|onigashima|enma|conflagration|armament haki", re.I), "Zoro Enma King Onigashima"),
+    (re.compile(r"\bkuraigana\b|bows to mihawk|begging.*train|mihawk.*train", re.I), "Zoro bows to Mihawk Kuraigana"),
+    (re.compile(r"\bzoro\b.*\btrain|\btraining\b.*\bzoro\b", re.I), "Roronoa Zoro training"),
+    (re.compile(r"\bzoro\b.*\bscar|\bscar\b.*\bzoro\b", re.I), "Roronoa Zoro scars"),
+    (re.compile(r"\bzoro\b.*\bcrew|\bprotect\b.*\bcrew|\bstraw hat pirates\b", re.I), "Zoro Straw Hat Pirates"),
     (re.compile(r"\bjabra\b|chapter\s*385", re.I), "Jabra Enies Lobby"),
     (re.compile(r"\begghead\b", re.I), "Egghead"),
     (re.compile(r"\benies lobby\b", re.I), "Enies Lobby"),
@@ -602,6 +627,160 @@ def _collect_subtitle_text_in_range(
         if text:
             parts.append(text)
     return " ".join(parts).strip()
+
+
+def _subtitle_lines_in_range(
+    dialogues: List[Dict],
+    start_time: str,
+    end_time: str,
+) -> List[Dict]:
+    """Return subtitle lines overlapping a slide window."""
+    win_start = parse_time(start_time)
+    win_end = parse_time(end_time)
+    lines: List[Dict] = []
+    for line in dialogues:
+        line_start = parse_time(line["start"])
+        line_end = parse_time(line["end"])
+        if line_end <= win_start or line_start >= win_end:
+            continue
+        text = (line.get("text") or "").strip()
+        if text:
+            lines.append(
+                {
+                    "start": line["start"],
+                    "end": line["end"],
+                    "text": text,
+                }
+            )
+    return lines
+
+
+def _split_subtitle_lines_into_visual_beats(lines: List[Dict]) -> List[List[Dict]]:
+    """Chunk subtitle lines into visual beats with an upper duration bound."""
+    if not lines:
+        return []
+
+    beats: List[List[Dict]] = []
+    current: List[Dict] = []
+    for line in lines:
+        candidate = [*current, line]
+        start = parse_time(candidate[0]["start"])
+        end = parse_time(candidate[-1]["end"])
+        duration = end - start
+        current_text = " ".join(item["text"] for item in candidate)
+        sentence_boundary = bool(re.search(r"[.!?]$", (line.get("text") or "").strip()))
+
+        if current and duration > IMAGE_SLIDE_MAX_SECONDS:
+            beats.append(current)
+            current = [line]
+            continue
+
+        current = candidate
+        current_duration = parse_time(current[-1]["end"]) - parse_time(current[0]["start"])
+        if current_duration >= IMAGE_SLIDE_MIN_SECONDS and sentence_boundary:
+            beats.append(current)
+            current = []
+        elif current_duration >= IMAGE_SLIDE_MAX_SECONDS * 0.8 and re.search(
+            r"\bbut|when|because|then|only this time|even during|ultimately\b",
+            current_text,
+            re.I,
+        ):
+            beats.append(current)
+            current = []
+
+    if current:
+        if beats and parse_time(current[-1]["end"]) - parse_time(current[0]["start"]) < IMAGE_SLIDE_MIN_SECONDS:
+            beats[-1].extend(current)
+        else:
+            beats.append(current)
+    return beats
+
+
+def _summarize_visual_beat(text: str, fallback: str) -> str:
+    """Short context-aware summary from the actual spoken beat."""
+    cleaned = _clean_prompt_text(text, max_len=150)
+    if not cleaned:
+        return fallback
+
+    entity_match = re.search(
+        r"\b(Zoro|Kuina|Mihawk|Kuma|Sanji|Luffy|King|Enma|Sabaody|Baratie|Thriller Bark|Onigashima|Kuraigana)\b",
+        cleaned,
+        re.I,
+    )
+    subject = entity_match.group(0) if entity_match else ""
+    lower = cleaned.lower()
+    if "stairs" in lower or "kuina" in lower:
+        return "Kuina's death breaks Zoro's sense of safety"
+    if "mihawk" in lower or "cross knife" in lower:
+        return "Mihawk exposes the gap in Zoro's strength"
+    if "nothing happened" in lower or "pain" in lower:
+        return "Zoro hides unbearable pain at Thriller Bark"
+    if "sabaody" in lower or "vanish" in lower or "erases" in lower:
+        return "Zoro watches the crew disappear at Sabaody"
+    if "enma" in lower or "king" in lower:
+        return "Zoro risks being drained by Enma against King"
+    if "bows" in lower or "begging" in lower or "train" in lower and "mihawk" in lower:
+        return "Zoro sacrifices pride to train under Mihawk"
+    if subject:
+        return f"{subject}: {cleaned[:90].rstrip(' ,.;')}"
+    return cleaned[:110].rstrip(" ,.;")
+
+
+def _split_long_slides_by_dialogues(
+    slides: List[Dict],
+    dialogues: List[Dict],
+    context_entities: List[str],
+) -> List[Dict]:
+    """Split overlong LLM slides into smaller subtitle-grounded visual beats."""
+    split_slides: List[Dict] = []
+    for slide in slides:
+        start = parse_time(slide["start_time"])
+        end = parse_time(slide["end_time"])
+        if end - start <= IMAGE_SLIDE_MAX_SECONDS:
+            split_slides.append(slide)
+            continue
+
+        lines = _subtitle_lines_in_range(dialogues, slide["start_time"], slide["end_time"])
+        beats = _split_subtitle_lines_into_visual_beats(lines)
+        if len(beats) <= 1:
+            split_slides.append(slide)
+            continue
+
+        logger.info(
+            "Splitting long image slide %.2f-%.2fs into %s visual beats",
+            start,
+            end,
+            len(beats),
+        )
+        for beat in beats:
+            subtitle_text = " ".join(line["text"] for line in beat).strip()
+            summary = _summarize_visual_beat(subtitle_text, slide.get("summary", ""))
+            child = dict(slide)
+            child["start_time"] = beat[0]["start"]
+            child["end_time"] = beat[-1]["end"]
+            child["summary"] = summary
+            child["subtitle_text"] = subtitle_text
+            child["context_entities"] = _ai_prompt_context_entities(
+                subtitle_text,
+                summary,
+                slide.get("context_entities") or context_entities,
+            )
+            inferred_query = _infer_query_from_subtitle_text(subtitle_text, child["context_entities"])
+            if inferred_query:
+                child["image_search_query"] = inferred_query
+            if _needs_ai_visual(subtitle_text, summary, child.get("image_search_query", ""), 0):
+                child["visual_source"] = _VISUAL_SOURCE_AI
+                child["image_search_query"] = ""
+                child["ai_image_prompt"] = _build_ai_image_prompt(
+                    summary,
+                    subtitle_text,
+                    child["context_entities"],
+                )
+            else:
+                child["ai_image_prompt"] = ""
+            split_slides.append(child)
+
+    return split_slides
 
 
 def _normalize_visual_source(raw: Optional[str]) -> str:
@@ -733,8 +912,17 @@ def _apply_visual_source_plan(
     query = (slide.get("image_search_query") or "").strip()
     ai_prompt = (slide.get("ai_image_prompt") or "").strip()
     source = _normalize_visual_source(slide.get("visual_source"))
+    inferred_query = _infer_query_from_subtitle_text(
+        f"{subtitle_text} {summary}",
+        context_entities,
+    )
 
     if _llm_chose_ai_slide(slide):
+        if inferred_query and not _needs_ai_visual(subtitle_text, summary, inferred_query, luffy_asset_count):
+            slide["visual_source"] = _VISUAL_SOURCE_ASSET
+            slide["image_search_query"] = _dedupe_query_words(inferred_query)
+            slide["ai_image_prompt"] = ""
+            return slide
         slide["visual_source"] = _VISUAL_SOURCE_AI
         slide["ai_image_prompt"] = _anchor_ai_image_prompt(
             ai_prompt,
@@ -950,6 +1138,11 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
             }
             final_slides.append(slide)
 
+        final_slides = _split_long_slides_by_dialogues(
+            final_slides,
+            timestamped_dialogues,
+            context_entities,
+        )
         final_slides = _refine_slides_from_subtitles(
             final_slides,
             timestamped_dialogues,

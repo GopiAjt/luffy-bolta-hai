@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 SFX_DIR = Path(
     os.getenv(
         "TRANSITION_SFX_DIR",
-        Path(__file__).resolve().parent.parent / "data" / "sfx",
+        Path(__file__).resolve().parents[2] / "data" / "sfx",
     )
 )
 ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not in {
@@ -22,9 +22,9 @@ ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not i
     "false",
     "no",
 }
-TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.25"))
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.5"))
 # Extra weight on the SFX leg in amix (voice stays at 1.0; SFX is often short vs loud narration).
-TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.5"))
+TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.0"))
 # Human perception usually wants transition sounds to lead the visual by a frame or two.
 TRANSITION_SFX_SYNC_OFFSET = float(os.getenv("TRANSITION_SFX_SYNC_OFFSET", "-0.04"))
 # Trim long MP3 assets so a single cue does not play for 3–6 seconds

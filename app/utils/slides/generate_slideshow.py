@@ -201,13 +201,22 @@ def should_use_subject_layout(img_bgr: np.ndarray, resolution) -> bool:
     """
     Use blurred-background + centered subject for uploads that are not close
     to 9:16: tall cards, squares, and wide panels (Vivre, manga, screenshots).
-    Ultra-wide panoramas stay on cover+pan Ken Burns.
+
+    Safe contain is the default because generated/search images are mixed aspect
+    ratios, and hard cover crops can push the useful subject outside the frame.
     """
     res_w, res_h = sanitize_size(resolution)
     aspect = slide_aspect_ratio(img_bgr)
     target_aspect = res_w / max(res_h, 1)
+    safe_contain = os.getenv("SLIDE_SAFE_CONTAIN_MODE", "true").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
     narrow_threshold = float(os.getenv("SLIDE_PORTRAIT_ASPECT_THRESHOLD", "0.72"))
     max_wide = float(os.getenv("SLIDE_SUBJECT_MAX_ASPECT", "2.1"))
+    if safe_contain and abs(aspect - target_aspect) > 0.08:
+        return True
     if aspect >= max_wide:
         return False
     if aspect <= narrow_threshold:
@@ -362,6 +371,18 @@ def crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=1.0):
     return frame
 
 
+def crop_static_frame(scaled, resolution):
+    """Return a centered frame with no Ken Burns or pan movement."""
+    res_w, res_h = resolution
+    height, width = scaled.shape[:2]
+    center = (float(width / 2.0), float(height / 2.0))
+    frame = cv2.getRectSubPix(scaled, (res_w, res_h), center)
+    if frame is None or frame.size == 0:
+        logger.warning("Empty static crop generated, using black frame")
+        return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    return frame
+
+
 KEN_BURNS_ZOOM = {
     "slow_push": (1.0, 1.14),
     "impact_zoom": (1.06, 1.22),
@@ -372,6 +393,29 @@ KEN_BURNS_ZOOM = {
 }
 
 KEN_BURNS_CENTER_LOCKED = {"slow_push", "impact_zoom", "hold_still", "pull_out"}
+STATIC_HOLD_MOTIONS = {"static_hold", "still_frame", "no_ken_burns"}
+FRAME_SAFE_TRANSITIONS = {
+    "fade",
+    "fade_eased",
+    "crossfade",
+    "zoom_dissolve",
+    "iris_wipe",
+    "radial_wipe",
+}
+
+
+def safe_transition_name(name: str) -> str:
+    """Map harsh directional transitions to frame-safe equivalents."""
+    key = (name or "crossfade").strip().lower()
+    if key in FRAME_SAFE_TRANSITIONS or key == "none":
+        return key
+    if key.startswith("whip_pan") or key.startswith("motion_slide") or key.startswith("slide_"):
+        return "crossfade"
+    if key.startswith("cube_rotation"):
+        return "iris_wipe"
+    if key.startswith("page_curl") or key == "water_ripple":
+        return "fade_eased"
+    return key
 
 
 def ken_burns_zoom_range(motion: str = "slow_push"):
@@ -388,6 +432,10 @@ def ken_burns_headroom_for_motion(motion: str = "slow_push", padding: float = 0.
 
 def ken_burns_enabled() -> bool:
     return os.getenv("ENABLE_KEN_BURNS", "true").lower() not in {"0", "false", "no"}
+
+
+def motion_uses_ken_burns(motion: str) -> bool:
+    return ken_burns_enabled() and (motion or "slow_push") not in STATIC_HOLD_MOTIONS
 
 
 def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: float = None, motion: str = "slow_push"):
@@ -776,7 +824,7 @@ def emit_panoramic_pan(
         logger.warning(f"Skipping slide with non-positive frame count: {img_path}")
         return frame_counter, None
 
-    use_kb = ken_burns_enabled()
+    use_kb = motion_uses_ken_burns(motion)
     if use_kb:
         scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
             img_path, resolution, blur_amount=blur_amount, motion=motion
@@ -807,6 +855,8 @@ def emit_panoramic_pan(
                 motion=motion,
                 pan_strength=pan_strength,
             )
+        elif (motion or "") in STATIC_HOLD_MOTIONS:
+            frame = crop_static_frame(scaled, resolution)
         else:
             frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
         frame_writer.write(frame)
@@ -827,7 +877,7 @@ def render_panned_frame(
 ):
     """Render a single frame at pan progress t (matches emit_panoramic_pan)."""
     res_w, res_h = resolution
-    if ken_burns_enabled():
+    if motion_uses_ken_burns(motion):
         scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
             img_path, resolution, blur_amount, motion=motion
         )
@@ -842,6 +892,8 @@ def render_panned_frame(
     if scaled is None:
         logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
         return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+    if (motion or "") in STATIC_HOLD_MOTIONS:
+        return crop_static_frame(scaled, resolution)
     return crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
 
 
@@ -878,88 +930,35 @@ def choose_transition(slides_processed, next_slide_duration, last_selected_trans
     Returns:
         Name of the selected transition effect
     """
-    # Base weights for different transition types
-    soft_weights = [
-        ("fade", 0.3), 
-        ("fade_eased", 0.2), 
-        ("crossfade", 0.15), 
-        ("zoom_dissolve", 0.1),
-        ("iris_wipe", 0.15),
-        ("cube_rotation_right", 0.05),
-        ("cube_rotation_left", 0.05)
-    ]
-    
     # Adjust weights based on next slide duration
     if next_slide_duration < 2.0:
         # For very short slides, prefer softer transitions
         soft_mix = [
-            ("fade", 0.25),
-            ("fade_eased", 0.2),
-            ("crossfade", 0.15),
-            ("iris_wipe", 0.2),
-            ("zoom_dissolve", 0.2)
+            ("fade_eased", 0.38),
+            ("crossfade", 0.32),
+            ("fade", 0.18),
+            ("iris_wipe", 0.12),
         ]
     elif next_slide_duration < 4.0:
         # For medium duration slides, mix in more dynamic transitions
         soft_mix = [
-            ("fade", 0.2),
-            ("fade_eased", 0.15),
-            ("crossfade", 0.1),
-            ("iris_wipe", 0.15),
-            ("zoom_dissolve", 0.15),
-            ("cube_rotation_right", 0.1),
-            ("cube_rotation_left", 0.1),
-            ("radial_wipe", 0.05)
+            ("crossfade", 0.34),
+            ("fade_eased", 0.28),
+            ("zoom_dissolve", 0.18),
+            ("iris_wipe", 0.12),
+            ("radial_wipe", 0.08),
         ]
     else:
         # For longer slides, use more dynamic transitions
         soft_mix = [
-            ("fade", 0.15),
-            ("fade_eased", 0.1),
-            ("crossfade", 0.08),
-            ("iris_wipe", 0.12),
-            ("zoom_dissolve", 0.1),
-            ("cube_rotation_right", 0.12),
-            ("cube_rotation_left", 0.12),
-            ("radial_wipe", 0.08),
-            ("motion_slide_right", 0.06),
-            ("motion_slide_left", 0.06),
-            ("whip_pan_right", 0.03),
-            ("whip_pan_left", 0.03)
+            ("crossfade", 0.30),
+            ("fade_eased", 0.24),
+            ("zoom_dissolve", 0.20),
+            ("iris_wipe", 0.14),
+            ("radial_wipe", 0.12),
         ]
-    
-    # Add directional transitions
-    if slides_processed % 2 == 0:
-        hard_mix = [
-            ("slide_right", 0.12),
-            ("motion_slide_right", 0.08),
-            ("whip_pan_right", 0.03),
-            ("cube_rotation_right", 0.12)
-        ]
-    else:
-        hard_mix = [
-            ("slide_left", 0.12),
-            ("motion_slide_left", 0.08),
-            ("whip_pan_left", 0.03),
-            ("cube_rotation_left", 0.12)
-        ]
-    
-    # Add vertical transitions (less frequent)
-    vertical_mix = [
-        ("slide_up", 0.03),
-        ("slide_down", 0.03),
-        ("cube_rotation_up", 0.02),
-        ("cube_rotation_down", 0.02)
-    ]
-    
-    # Special transitions (used occasionally)
-    special_mix = [
-        ("radial_wipe", 0.05),
-        ("iris_wipe", 0.1)
-    ]
-    
-    # Combine all transitions
-    candidates = soft_mix + hard_mix + vertical_mix + special_mix
+
+    candidates = soft_mix
     
     # Avoid repeating the same transition
     if last_selected_transition:
@@ -981,6 +980,63 @@ def choose_transition(slides_processed, next_slide_duration, last_selected_trans
     if not candidates:
         return "crossfade"  # Fallback
         
+    return weighted_choice(candidates)
+
+
+def choose_slide_motion(
+    visual_style: Optional[str],
+    beat: str,
+    index: int,
+    duration: float,
+    previous_motion: Optional[str] = None,
+) -> str:
+    """Randomized, beat-aware slide motion. Some slides intentionally use no Ken Burns."""
+    duration = max(0.0, float(duration))
+    if duration < 1.4:
+        candidates = [
+            ("static_hold", 0.55),
+            ("hold_still", 0.25),
+            ("slow_push", 0.20),
+        ]
+    elif beat in {"hook", "reveal"}:
+        candidates = [
+            ("impact_zoom", 0.28),
+            ("slow_push", 0.24),
+            ("static_hold", 0.18),
+            ("diagonal_pan", 0.16),
+            ("pull_out", 0.14),
+        ]
+    elif beat == "payoff":
+        candidates = [
+            ("static_hold", 0.34),
+            ("pull_out", 0.28),
+            ("slow_push", 0.22),
+            ("hold_still", 0.16),
+        ]
+    elif beat == "cta":
+        candidates = [
+            ("static_hold", 0.62),
+            ("hold_still", 0.24),
+            ("slow_push", 0.14),
+        ]
+    else:
+        candidates = [
+            ("slow_push", 0.26),
+            ("static_hold", 0.22),
+            ("stable_pan", 0.18),
+            ("diagonal_pan", 0.14),
+            ("hold_still", 0.12),
+            ("pull_out", 0.08),
+        ]
+
+    if visual_style:
+        style_motion = choose_motion_preset(visual_style, beat, index)
+        if style_motion and style_motion not in STATIC_HOLD_MOTIONS:
+            candidates.append((style_motion, 0.16))
+
+    if previous_motion and len(candidates) > 1:
+        candidates = [(motion, weight) for motion, weight in candidates if motion != previous_motion] or candidates
+
     return weighted_choice(candidates)
 
 
@@ -1511,6 +1567,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     selected_transition_type = choose_transition(idx, expected_content_duration, last_selected_transition, avoid_same_direction_horizontal)
                 else:
                     selected_transition_type = transition_type
+            selected_transition_type = safe_transition_name(selected_transition_type)
             # Normalize horizontal transitions to match upcoming pan (unless that would violate avoidance rule)
             if selected_transition_type and selected_transition_type != 'none':
                 next_pan = 'lr' if (idx % 2 == 0) else 'rl'
@@ -1674,10 +1731,14 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     logger.info(f"Using converted JPG: {jpg_path}")
                     img_path = jpg_path
 
-            slide_motion = "slow_push"
-            if visual_style:
-                beat = classify_beat(slide.get("summary", ""), idx, len(slides))
-                slide_motion = choose_motion_preset(visual_style, beat, idx)
+            beat = classify_beat(slide.get("summary", ""), idx, len(slides))
+            slide_motion = choose_slide_motion(
+                visual_style,
+                beat,
+                idx,
+                duration,
+                previous_motion=prev_motion,
+            )
             slide["_motion"] = slide_motion
 
             logger.info(f"Processing image: {img_path} (motion={slide_motion})")

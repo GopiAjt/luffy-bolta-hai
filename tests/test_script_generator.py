@@ -362,6 +362,10 @@ class ScriptGeneratorTests(unittest.TestCase):
 
         self.assertIn("CONTENT SPECIFICITY RULES", prompt)
         self.assertIn("Use punctuation as pacing control", prompt)
+        self.assertIn("prosody shaping", prompt)
+        self.assertIn("punctuation shaping pass", prompt)
+        self.assertIn("voiceover breath groups", prompt)
+        self.assertIn("essay prose", prompt)
         self.assertIn("Shape sentence length as emotional rhythm", prompt)
         self.assertIn("word-level phonetic shaping", prompt)
         self.assertIn("WEAK (fails)", prompt)

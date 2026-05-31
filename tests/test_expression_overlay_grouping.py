@@ -1,5 +1,6 @@
 import unittest
 
+from app.utils.expressions.expression_mapper import normalize_expression_mapping
 from app.utils.expressions.expression_overlay_cv import _hold_motion
 from app.utils.video.video_generator import VideoGenerator
 
@@ -31,6 +32,38 @@ class ExpressionOverlayGroupingTests(unittest.TestCase):
 
         self.assertEqual(len(merged), 2)
         self.assertEqual([item["source_count"] for item in merged], [1, 1])
+
+    def test_sanitizes_expression_interval_that_overlaps_next_subtitle(self):
+        generator = VideoGenerator()
+        sanitized = generator._sanitize_expression_intervals(
+            [
+                (89.80, 91.43),
+                (91.50, 193.86),
+                (92.71, 93.35),
+            ]
+        )
+
+        self.assertEqual(sanitized[1], (91.50, 92.70))
+
+    def test_normalizes_gemini_expression_timings_to_ass_lines(self):
+        sub_lines = [
+            {"start": "0:02:29.80", "end": "0:02:31.43", "text": "That memory was buried."},
+            {"start": "0:02:32.71", "end": "0:02:33.35", "text": "Next beat."},
+        ]
+        expressions = [
+            {
+                "start": "0:01:31.50",
+                "end": "0:03:13.86",
+                "text": "That memory was buried.",
+                "expression": "neutral",
+                "character": "narrator",
+            }
+        ]
+
+        normalized = normalize_expression_mapping(expressions, sub_lines)
+
+        self.assertEqual(normalized[0]["start"], "0:02:29.80")
+        self.assertEqual(normalized[0]["end"], "0:02:31.43")
 
     def test_hold_motion_only_applies_after_entry_for_continuous_holds(self):
         self.assertEqual(_hold_motion(0.1, 0.2, True), (1.0, 0, 0, 1.0))

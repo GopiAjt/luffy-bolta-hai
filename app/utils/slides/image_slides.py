@@ -25,6 +25,7 @@ CANONICAL_ENTITIES = [
     "Whitebeard", "Ace", "Sabo", "Dragon", "Garp", "Koby", "Law", "Kid",
     "Bonney", "Kuma", "Kuina", "King", "Vegapunk", "Imu", "Five Elders", "Gorosei",
     "Joy Boy", "Nika", "Mary Geoise", "Wano", "Egghead", "Elbaf",
+    "Loki", "Dory", "Brogy", "Yggdrasil", "Little Garden", "Drum Island",
     "Marineford", "Dressrosa", "Whole Cake Island", "Thriller Bark",
     "Baratie", "Sabaody", "Onigashima", "Kuraigana Island",
     "Shimotsuki Village", "Enies Lobby", "Ohara", "Void Century", "Poneglyph", "Sunny Ship",
@@ -43,6 +44,13 @@ ENTITY_ALIASES = {
     "mary geoise": "Mary Geoise",
     "mariejois": "Mary Geoise",
     "elbaf": "Elbaf",
+    "loki": "Loki",
+    "prince loki": "Loki",
+    "dory": "Dory",
+    "brogy": "Brogy",
+    "yggdrasil": "Yggdrasil",
+    "little garden": "Little Garden",
+    "drum island": "Drum Island",
     "egghead": "Egghead",
     "wano": "Wano",
     "caribou": "Caribou",
@@ -373,7 +381,7 @@ _SLIDE_REQUIRED_KEYS = ("start_time", "end_time", "summary")
 _VISUAL_SOURCE_ASSET = "asset_search"
 _VISUAL_SOURCE_AI = "ai_generate"
 
-# Queries that Vivre / manual search cannot satisfy — route to AI generation
+# Queries that are usually poor manual-search terms; rewrite them to grounded assets.
 _BAD_ASSET_QUERY_RE = re.compile(
     r"\b("
     r"model\s+\w+|hito\s+hito|gear\s+v\b|laboratory|battlefield|manga\s+panel|"
@@ -484,57 +492,36 @@ def _image_slides_rules_block(context_entities: List[str]) -> str:
         else "None detected; use One Piece Logo or Grand Line Map for transitions"
     )
     return (
-        "CRITICAL — each slide matches the SPOKEN lines in [start_time, end_time]. Faceless theory video (voiceover + B-roll).\n\n"
+        "CRITICAL — each slide matches the SPOKEN lines in [start_time, end_time]. Faceless theory video (voiceover + B-roll).\n"
+        "Before making slides, read ALL subtitles as one complete script. Infer the main topic, arc, characters, and argument, then choose each slide's search query from that whole-script understanding plus the local spoken beat.\n\n"
         "CONTEXT-AWARE PACING:\n"
         "- Cut on idea changes, not only character names: hook, cause, consequence, example, rebuttal, payoff.\n"
         "- Prefer 2-5 seconds per slide. Never hold one visual across a new canon event, new character, or new emotional turn.\n"
         "- Long narration sections must become multiple visual beats with different scene-search queries.\n"
-        "- For trauma/psychology narration, DO NOT invent symbolic AI art first. Map the feeling to the closest canon scene: Kuina stairs, Mihawk Baratie, Zoro nothing happened, Kuma Sabaody, Enma Onigashima, Zoro bowing to Mihawk.\n"
+        "- For trauma/psychology/symbolic narration, DO NOT invent symbolic art. Map the feeling to the closest searchable canon entity, arc, place, object, or logo.\n"
         "- Avoid generic repeats like only 'Zoro training' or 'Zoro scars'; each slide needs a new focal action or object.\n\n"
-        "For EVERY slide set visual_source to ONE of:\n"
-        f'  - "{_VISUAL_SOURCE_ASSET}": use existing art (Vivre pack / upload). Provide image_search_query only.\n'
-        f'  - "{_VISUAL_SOURCE_AI}": LAST RESORT only. Provide ai_image_prompt only when no searchable canon scene exists.\n\n'
-        "USE asset_search WHEN:\n"
-        "- A named character appears (Monkey D. Luffy, Jabra, Marshall D. Teach, Five Elders, etc.)\n"
-        "- A known place in the asset pack (Egghead, Enies Lobby, Marineford, Skypiea, Mary Geoise)\n"
-        "- Pirate crew / flag / logo (Straw Hat Pirates, Blackbeard Pirates, One Piece Logo)\n"
-        "- A specific manga chapter beat tied to a named character or arc location\n\n"
+        f'For EVERY slide set visual_source to "{_VISUAL_SOURCE_ASSET}". AI image generation is disabled.\n'
+        'For EVERY slide set ai_image_prompt to empty string "".\n\n'
+        "USE asset_search FOR:\n"
+        "- Named characters, crews, places, arcs, objects, powers, chapter beats, logos, and maps.\n"
+        "- When the spoken beat is abstract, choose the closest concrete One Piece anchor from the whole script.\n"
+        "- If no exact scene exists, use a searchable fallback: main character + arc/place, main object + arc, One Piece Logo, or Grand Line Map.\n\n"
         "SEARCH QUERY STYLE FOR asset_search:\n"
-        "- Use specific manga/anime scene phrases, not abstract emotions.\n"
+        "- Use specific searchable manga/anime scene phrases, not abstract emotions or cinematic descriptions.\n"
+        "- Prefer 3-7 words: character + arc/place + object/action.\n"
+        "- Include exact names from the script when possible: Loki, Elbaf, Yggdrasil, Dory, Brogy, Ohara, Void Century, Five Elders.\n"
         "- Good: 'Zoro Kuina Shimotsuki stairs', 'Zoro Mihawk Baratie cross knife', 'Zoro nothing happened Thriller Bark', 'Kuma Sabaody Straw Hats vanish', 'Zoro Enma King Onigashima', 'Zoro bows to Mihawk Kuraigana'.\n"
-        "- Bad: 'Zoro trauma', 'fear of weakness', 'fragility of life', 'Zoro aesthetic', 'sad anime boy'.\n\n"
-        "USE ai_generate WHEN (do NOT use vague image_search_query):\n"
-        "- Abstract science (thermodynamics, kinetic energy, friction, pressure, elastic limit)\n"
-        "- Diagrams, comparisons, 'two devil fruits rule', internal explosion metaphor\n"
-        "- Impossible or non-catalog queries (Hito Hito Model Nika, Gear V aura, laboratory explosion)\n"
-        "- Generic 'manga panels' or 'tell me your theories' — use a concrete AI scene instead\n"
-        "- Same hero pose would repeat for the 3rd+ time and no better canon scene exists\n\n"
+        "- Good for Elbaf: 'Loki Elbaf chains', 'Dory Brogy Little Garden', 'Ohara scholars library', 'Elbaf giant village', 'Void Century Poneglyph', 'Five Elders Mary Geoise'.\n"
+        "- Bad: 'Zoro trauma', 'fear of weakness', 'emotional thesis', 'buried memory', 'giant prince sitting in darkness', 'dramatic silhouette'.\n\n"
         "FIELD RULES:\n"
         "- summary: short beat from subtitles (what the viewer should understand).\n"
-        "- image_search_query: ONLY if visual_source=asset_search. 3–9 words, searchable canon scene phrase. "
+        "- image_search_query: REQUIRED. 3–9 words, searchable canon scene/entity phrase. "
         "Never repeat the same query twice. No jargon filenames.\n"
-        "- ai_image_prompt: ONLY if visual_source=ai_generate. Generate ONE cinematic image prompt for an image model.\n"
-        "Rules:\n"
-        "* Start EXACTLY with: "
-        "Vertical 9:16 One Piece anime style illustration, no text, no watermark.\n"
-        "* Anchor with: "
-        "Visualize this narration beat, without showing words: '<spoken subtitle text>'.\n"
-        "* Resolve pronouns using main context.\n"
-        "* Generate the SINGLE decisive cinematic moment (freeze-frame), not a generic setting.\n"
-        "* Use: SUBJECT + ACTION + SYMBOL + ENVIRONMENT + LIGHTING.\n"
-        "* Prefer ACTION + CONSEQUENCE: what happens, what changed, what object proves it.\n"
-        "* Prefer dynamic verbs: walking away, dropping, tearing, revealing, confronting.\n"
-        "* Avoid passive scenes: standing, looking, sitting.\n"
-        "* Show characters from behind/silhouette where possible.\n"
-        "* One clear focal subject only.\n"
-        "* Faceless YouTube B-roll only.\n"
-        "* Not a poster, not collage, not multiple panels.\n"
-        "* Highly detailed anime art.\n"
-        "- If asset_search, set ai_image_prompt to empty string \"\".\n"
-        "- If ai_generate, set image_search_query to empty string \"\".\n\n"
+        "- ai_image_prompt: ALWAYS empty string \"\". Do not write AI prompts, image-generation descriptions, or symbolic art instructions.\n\n"
         f"SCRIPT-WIDE ENTITIES (context only): {entities_line}\n"
-        "Max 2 slides with Monkey D. Luffy in image_search_query; use Teach/Jabra/diagrams for variety.\n"
-        "TIMING: merge short fragments; max ~3.5s per slide; continuous timestamps.\n\n"
+        "Max 2 slides with Monkey D. Luffy in image_search_query unless the entire script is about Luffy.\n"
+        "TIMING: merge short fragments; max ~3.5s per slide; continuous timestamps with no gaps. "
+        "Each slide's end_time must equal the next slide's start_time.\n\n"
         "OUTPUT: ONLY a JSON array. Each object MUST include:\n"
         "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt\n"
     )
@@ -551,7 +538,7 @@ def _build_image_slides_full_prompt(
         "You are an expert video content designer specializing in One Piece. "
         "Map timestamped subtitles to image search queries as a JSON array.\n\n"
         f"{_image_slides_rules_block(context_entities)}\n"
-        "GOOD EXAMPLE (canon-scene-first, AI only when unavoidable):\n"
+        "GOOD EXAMPLE (whole-script context, asset-search-only):\n"
         '[{"start_time":"0:00:00.03","end_time":"0:00:03.08",'
         '"summary":"Zoro trains from fear of weakness",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
@@ -572,7 +559,7 @@ def _build_image_slides_full_prompt(
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"One Piece Logo",'
         '"ai_image_prompt":""}]\n\n'
-        "BAD: abstract emotion queries like 'Zoro trauma'; AI prompts for searchable scenes; five generic Zoro asset slides in a row.\n\n"
+        "BAD: abstract emotion queries like 'Zoro trauma'; any ai_image_prompt text; five generic Zoro asset slides in a row.\n\n"
         "Subtitles:\n"
         f"{raw_subtitles}\n"
     )
@@ -768,26 +755,70 @@ def _split_long_slides_by_dialogues(
             inferred_query = _infer_query_from_subtitle_text(subtitle_text, child["context_entities"])
             if inferred_query:
                 child["image_search_query"] = inferred_query
-            if _needs_ai_visual(subtitle_text, summary, child.get("image_search_query", ""), 0):
-                child["visual_source"] = _VISUAL_SOURCE_AI
-                child["image_search_query"] = ""
-                child["ai_image_prompt"] = _build_ai_image_prompt(
-                    summary,
-                    subtitle_text,
-                    child["context_entities"],
-                )
-            else:
-                child["ai_image_prompt"] = ""
+            child["visual_source"] = _VISUAL_SOURCE_ASSET
+            child["image_search_query"] = (
+                child.get("image_search_query")
+                or _infer_query_from_subtitle_text(summary, child["context_entities"])
+                or " ".join(child["context_entities"][:2])
+                or "One Piece Logo"
+            )
+            child["ai_image_prompt"] = ""
             split_slides.append(child)
 
     return split_slides
 
 
+def _repair_slide_timing_continuity(
+    slides: List[Dict],
+    total_duration: float,
+    dialogues: Optional[List[Dict]] = None,
+) -> List[Dict]:
+    """
+    Make slide timings continuous for the sequential slideshow renderer.
+
+    Gemini can return small holes between slides. The renderer consumes durations
+    in order, so those holes are lost and later stretched across the video. Use
+    slide start times as cut points, then make every slide end at the next cut.
+    """
+    if not slides:
+        return []
+
+    sorted_slides = sorted(slides, key=lambda slide: parse_time(slide["start_time"]))
+    dialogue_starts = [parse_time(line["start"]) for line in (dialogues or [])]
+
+    def snap_cut(value: float) -> float:
+        if not dialogue_starts:
+            return value
+        nearest = min(dialogue_starts, key=lambda candidate: abs(candidate - value))
+        return nearest if abs(nearest - value) <= 0.18 else value
+
+    total_end = max(total_duration, 0.0)
+    cuts: List[float] = [0.0]
+    for slide in sorted_slides[1:]:
+        cut = snap_cut(parse_time(slide["start_time"]))
+        cut = max(cuts[-1] + 0.05, min(cut, total_end))
+        cuts.append(cut)
+    cuts.append(total_end)
+
+    repaired: List[Dict] = []
+    for index, slide in enumerate(sorted_slides):
+        start = cuts[index]
+        end = cuts[index + 1]
+        if end <= start:
+            end = min(total_end, start + 0.05)
+        fixed = dict(slide)
+        fixed["start_time"] = format_time(start)
+        fixed["end_time"] = format_time(end)
+        repaired.append(fixed)
+
+    return repaired
+
+
 def _normalize_visual_source(raw: Optional[str]) -> str:
     value = (raw or "").strip().lower().replace("-", "_")
-    if value in {"ai", "ai_generate", "generate", "ai_generation", "ai_image"}:
-        return _VISUAL_SOURCE_AI
     if value in {"asset", "search", "asset_search", "vivre", "upload", "catalog"}:
+        return _VISUAL_SOURCE_ASSET
+    if value in {"ai", "ai_generate", "generate", "ai_generation", "ai_image"}:
         return _VISUAL_SOURCE_ASSET
     return _VISUAL_SOURCE_ASSET
 
@@ -894,10 +925,8 @@ def _needs_ai_visual(
 
 
 def _llm_chose_ai_slide(slide: Dict) -> bool:
-    """Trust Gemini when it already returned a full AI prompt."""
-    source = _normalize_visual_source(slide.get("visual_source"))
-    prompt = (slide.get("ai_image_prompt") or "").strip()
-    return source == _VISUAL_SOURCE_AI and len(prompt) >= 24
+    """AI image prompts are disabled; Gemini AI choices are always rewritten."""
+    return False
 
 
 def _apply_visual_source_plan(
@@ -906,57 +935,36 @@ def _apply_visual_source_plan(
     context_entities: List[str],
     luffy_asset_count: int,
 ) -> Dict:
-    """Finalize visual_source, image_search_query, and ai_image_prompt per slide."""
+    """Finalize visual_source, image_search_query, and ai_image_prompt per slide.
+
+    The user-facing workflow is asset/search only, so this function strips any
+    AI prompt Gemini returned and rewrites non-searchable ideas to a concrete
+    query fallback.
+    """
     slide = dict(slide)
     summary = slide.get("summary") or ""
     query = (slide.get("image_search_query") or "").strip()
-    ai_prompt = (slide.get("ai_image_prompt") or "").strip()
-    source = _normalize_visual_source(slide.get("visual_source"))
     inferred_query = _infer_query_from_subtitle_text(
         f"{subtitle_text} {summary}",
         context_entities,
     )
 
-    if _llm_chose_ai_slide(slide):
-        if inferred_query and not _needs_ai_visual(subtitle_text, summary, inferred_query, luffy_asset_count):
-            slide["visual_source"] = _VISUAL_SOURCE_ASSET
-            slide["image_search_query"] = _dedupe_query_words(inferred_query)
-            slide["ai_image_prompt"] = ""
-            return slide
-        slide["visual_source"] = _VISUAL_SOURCE_AI
-        slide["ai_image_prompt"] = _anchor_ai_image_prompt(
-            ai_prompt,
-            summary,
-            subtitle_text,
-            context_entities,
-        )
-        slide["image_search_query"] = ""
-        return slide
+    if not query or _BAD_ASSET_QUERY_RE.search(query) or _AI_VISUAL_HINTS_RE.search(f"{subtitle_text} {summary} {query}"):
+        query = inferred_query or _infer_query_from_subtitle_text(summary, context_entities) or query
 
-    if _needs_ai_visual(subtitle_text, summary, query, luffy_asset_count):
-        source = _VISUAL_SOURCE_AI
-    elif query and not _BAD_ASSET_QUERY_RE.search(query):
-        source = _VISUAL_SOURCE_ASSET
-    elif _ASSET_ONLY_HINTS_RE.search(f"{subtitle_text} {summary}"):
-        source = _VISUAL_SOURCE_ASSET
-        query = query or "One Piece Logo"
+    if not query or _BAD_ASSET_QUERY_RE.search(query):
+        query = " ".join(context_entities[:2]) if context_entities else "One Piece Logo"
+    elif len(query.split()) == 1 and len(context_entities) > 1:
+        for entity in context_entities[1:3]:
+            if entity.lower() != query.lower():
+                query = f"{query} {entity}"
+                break
 
-    if source == _VISUAL_SOURCE_AI:
-        ai_prompt = _anchor_ai_image_prompt(
-            ai_prompt,
-            summary,
-            subtitle_text,
-            context_entities,
-        )
-        slide["visual_source"] = _VISUAL_SOURCE_AI
-        slide["ai_image_prompt"] = ai_prompt
-        slide["image_search_query"] = ""
-    else:
-        slide["visual_source"] = _VISUAL_SOURCE_ASSET
-        slide["image_search_query"] = _dedupe_query_words(
-            query or _infer_query_from_subtitle_text(subtitle_text, context_entities) or "One Piece Logo"
-        )
-        slide["ai_image_prompt"] = ""
+    slide["visual_source"] = _VISUAL_SOURCE_ASSET
+    slide["image_search_query"] = _dedupe_query_words(
+        _sanitize_image_query(query or "One Piece Logo", f"{subtitle_text} {summary}", context_entities)
+    )
+    slide["ai_image_prompt"] = ""
 
     return slide
 
@@ -973,7 +981,7 @@ def _infer_query_from_subtitle_text(text: str, context_entities: List[str]) -> O
     if entities:
         return _sanitize_image_query(" ".join(entities[:2]), text, entities)
     if context_entities:
-        return _sanitize_image_query(context_entities[0], text, context_entities)
+        return _sanitize_image_query(" ".join(context_entities[:2]), text, context_entities)
     return None
 
 
@@ -1147,6 +1155,11 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
             final_slides,
             timestamped_dialogues,
             context_entities,
+        )
+        final_slides = _repair_slide_timing_continuity(
+            final_slides,
+            total_duration,
+            timestamped_dialogues,
         )
 
         with open(out_path, 'w', encoding='utf-8') as f:

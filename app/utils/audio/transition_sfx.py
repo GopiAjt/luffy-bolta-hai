@@ -29,6 +29,11 @@ TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.0"))
 TRANSITION_SFX_SYNC_OFFSET = float(os.getenv("TRANSITION_SFX_SYNC_OFFSET", "-0.04"))
 # Trim long MP3 assets so a single cue does not play for 3–6 seconds
 TRANSITION_SFX_MAX_DURATION = float(os.getenv("TRANSITION_SFX_MAX_DURATION", "1.15"))
+# Avoid adding a sound on every visual cut in long videos.
+TRANSITION_SFX_MIN_GAP_SECONDS = float(os.getenv("TRANSITION_SFX_MIN_GAP_SECONDS", "4.75"))
+TRANSITION_SFX_IMPACT_COOLDOWN_SECONDS = float(
+    os.getenv("TRANSITION_SFX_IMPACT_COOLDOWN_SECONDS", "14.0")
+)
 
 # Per-file gain tweaks (stem without extension). Values multiply TRANSITION_SFX_VOLUME.
 SFX_VOLUME_SCALE: Dict[str, float] = {
@@ -87,6 +92,20 @@ TRANSITION_SFX_PREFIXES: Tuple[Tuple[str, str], ...] = (
     ("slide_", "slide"),
     ("cube_rotation", "reverse_whoosh"),
     ("page_curl", "stinger"),
+)
+
+GENTLE_TRANSITION_SFX_VARIANTS: Tuple[str, ...] = (
+    "soft_whoosh",
+    "reverse_whoosh",
+    "slide",
+    "sparkle",
+)
+
+IMPACT_TRANSITION_SFX_VARIANTS: Tuple[str, ...] = (
+    "impact_hit",
+    "sub_boom",
+    "riser",
+    "reverse_whoosh",
 )
 
 # Optional per-visual-style overrides (prefix match on transition name -> sfx stem)
@@ -169,6 +188,114 @@ def _sfx_stem_for_transition(
         if key.startswith(prefix):
             return stem
     return TRANSITION_SFX_FILES.get("default", "soft_whoosh")
+
+
+def _transition_sfx_candidates(
+    transition_type: str,
+    visual_style: Optional[str] = None,
+) -> Tuple[str, ...]:
+    """Return preferred SFX stems for a transition, with variety fallbacks."""
+    key = (transition_type or "default").lower().strip()
+    styled = _style_override_stem(key, visual_style)
+    base = styled or _sfx_stem_for_transition(key, visual_style=None)
+    if not base:
+        return tuple()
+
+    if key in {"fade", "fade_eased", "crossfade", "default"}:
+        return tuple(dict.fromkeys((base, *GENTLE_TRANSITION_SFX_VARIANTS)))
+    if key == "zoom_dissolve":
+        return tuple(dict.fromkeys((base, *IMPACT_TRANSITION_SFX_VARIANTS)))
+    if base in {"soft_whoosh", "whoosh", "reverse_whoosh", "slide", "sparkle"}:
+        return tuple(dict.fromkeys((base, *GENTLE_TRANSITION_SFX_VARIANTS)))
+    return (base,)
+
+
+def _pick_varied_sfx_stem(
+    candidates: Tuple[str, ...],
+    index: int,
+    previous_stem: Optional[str],
+    last_impact_time: Optional[float],
+    event_time: float,
+) -> Optional[str]:
+    if not candidates:
+        return None
+
+    if "impact_hit" in candidates:
+        impact_ready = (
+            last_impact_time is None
+            or event_time - last_impact_time >= TRANSITION_SFX_IMPACT_COOLDOWN_SECONDS
+        )
+        if impact_ready and previous_stem != "impact_hit" and _resolve_sfx_file("impact_hit"):
+            return "impact_hit"
+
+    ordered = list(candidates)
+    if len(ordered) > 1:
+        offset = index % len(ordered)
+        ordered = ordered[offset:] + ordered[:offset]
+
+    for stem in ordered:
+        if stem == previous_stem and len(candidates) > 1:
+            continue
+        if stem == "impact_hit" and last_impact_time is not None:
+            if event_time - last_impact_time < TRANSITION_SFX_IMPACT_COOLDOWN_SECONDS:
+                continue
+        if _resolve_sfx_file(stem):
+            return stem
+
+    for stem in candidates:
+        if _resolve_sfx_file(stem):
+            return stem
+    return None
+
+
+def plan_transition_sfx_cues(
+    events: List[Dict],
+    visual_style: Optional[str] = None,
+) -> List[Dict]:
+    """Plan sparse, varied SFX cues from transition events."""
+    planned: List[Dict] = []
+    previous_stem: Optional[str] = None
+    last_cue_time: Optional[float] = None
+    last_impact_time: Optional[float] = None
+
+    for index, event in enumerate(events):
+        transition = event.get("transition") or "default"
+        event_time = float(event.get("time", 0))
+        if last_cue_time is not None and event_time - last_cue_time < TRANSITION_SFX_MIN_GAP_SECONDS:
+            logger.debug(
+                "Skipping transition SFX at %.2fs (%s): too close to previous cue",
+                event_time,
+                transition,
+            )
+            continue
+
+        candidates = _transition_sfx_candidates(transition, visual_style=visual_style)
+        stem = _pick_varied_sfx_stem(
+            candidates,
+            index,
+            previous_stem,
+            last_impact_time,
+            event_time,
+        )
+        sfx_path = _resolve_sfx_file(stem or "")
+        if not sfx_path:
+            logger.debug("No SFX file for transition %r", transition)
+            continue
+
+        planned.append(
+            {
+                "time": event_time,
+                "transition": transition,
+                "sfx_path": sfx_path,
+                "stem": sfx_path.stem.lower(),
+            }
+        )
+        previous_stem = sfx_path.stem.lower()
+        last_cue_time = event_time
+        if previous_stem == "impact_hit":
+            last_impact_time = event_time
+
+    return planned
 
 
 def resolve_transition_sfx(
@@ -298,13 +425,11 @@ def mix_transition_sfx(
     last_label = "[voice]"
     input_idx = 1
     used = 0
+    planned_cues = plan_transition_sfx_cues(events, visual_style=visual_style)
 
-    for event in events:
+    for event in planned_cues:
         transition = event.get("transition") or "default"
-        sfx_path = resolve_transition_sfx(transition, visual_style=visual_style)
-        if not sfx_path:
-            logger.debug("No SFX file for transition %r", transition)
-            continue
+        sfx_path = event["sfx_path"]
         start = max(0.0, float(event.get("time", 0)) + TRANSITION_SFX_SYNC_OFFSET)
         delay_ms = int(start * 1000)
         volume = sfx_volume_for_path(sfx_path)

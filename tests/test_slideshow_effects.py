@@ -3,12 +3,17 @@ import unittest
 import numpy as np
 
 from app.utils.slides.generate_slideshow import (
+    choose_slide_motion,
+    choose_transition,
     cube_rotation_effect,
     iris_wipe_effect,
     ken_burns_headroom_for_motion,
     ken_burns_viewport,
+    motion_uses_ken_burns,
     motion_blur_slide_effect,
     radial_wipe_effect,
+    safe_transition_name,
+    should_use_subject_layout,
     transition_progress,
     whip_pan_effect,
 )
@@ -111,6 +116,44 @@ class SlideshowEffectsTests(unittest.TestCase):
         motions = {choose_motion_preset("clean_pro", "evidence", i) for i in range(12)}
         self.assertNotIn("stable_pan", motions)
         self.assertLessEqual(motions, {"slow_push", "hold_still"})
+
+    def test_static_hold_disables_ken_burns_per_slide(self):
+        self.assertFalse(motion_uses_ken_burns("static_hold"))
+        self.assertTrue(motion_uses_ken_burns("slow_push"))
+
+    def test_wide_images_use_safe_subject_layout_by_default(self):
+        wide = np.zeros((300, 1200, 3), dtype=np.uint8)
+
+        self.assertTrue(should_use_subject_layout(wide, (1080, 1920)))
+
+    def test_harsh_transition_names_map_to_frame_safe_transitions(self):
+        self.assertEqual(safe_transition_name("whip_pan_right"), "crossfade")
+        self.assertEqual(safe_transition_name("motion_slide_left"), "crossfade")
+        self.assertEqual(safe_transition_name("cube_rotation_right"), "iris_wipe")
+        self.assertEqual(safe_transition_name("page_curl_tr"), "fade_eased")
+
+    def test_auto_transition_pool_uses_frame_safe_choices(self):
+        allowed = {"fade", "fade_eased", "crossfade", "zoom_dissolve", "iris_wipe", "radial_wipe"}
+        for idx in range(24):
+            transition = choose_transition(idx, 4.5, None)
+            self.assertIn(transition, allowed)
+
+    def test_slide_motion_can_choose_static_hold_for_cta(self):
+        original_uniform = __import__("random").uniform
+        try:
+            __import__("random").uniform = lambda _a, _b: 0.0
+            self.assertEqual(
+                choose_slide_motion(
+                    visual_style="clean_pro",
+                    beat="cta",
+                    index=4,
+                    duration=2.5,
+                    previous_motion="slow_push",
+                ),
+                "static_hold",
+            )
+        finally:
+            __import__("random").uniform = original_uniform
 
 
 if __name__ == "__main__":

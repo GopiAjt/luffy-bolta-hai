@@ -735,6 +735,40 @@ class VideoGenerator:
 
         return merged
 
+    def _sanitize_expression_intervals(
+        self,
+        intervals: List[Tuple[float, float]],
+        max_interval_seconds: float = 8.0,
+    ) -> List[Tuple[float, float]]:
+        """Drop/clamp impossible expression spans before overlay grouping."""
+        if not intervals:
+            return []
+
+        sorted_intervals = sorted(intervals, key=lambda item: item[0])
+        sanitized: List[Tuple[float, float]] = []
+        for index, (start, end) in enumerate(sorted_intervals):
+            if end <= start:
+                continue
+
+            next_start = sorted_intervals[index + 1][0] if index + 1 < len(sorted_intervals) else None
+            original_end = end
+            if next_start is not None and end > next_start:
+                end = max(start + 0.05, next_start - 0.01)
+            if end - start > max_interval_seconds:
+                end = start + max_interval_seconds
+
+            if end != original_end:
+                logger.warning(
+                    "Clamped expression interval %.2f-%.2fs to %.2f-%.2fs",
+                    start,
+                    original_end,
+                    start,
+                    end,
+                )
+            sanitized.append((round(start, 3), round(end, 3)))
+
+        return sanitized
+
     def generate_video_with_expressions(
         self,
         audio_path: str,
@@ -805,7 +839,9 @@ class VideoGenerator:
                 overlay_groups[group_key]["intervals"].append((start_time, end_time))
 
             for group in overlay_groups.values():
-                group["intervals"] = self._merge_expression_intervals(group["intervals"])
+                group["intervals"] = self._merge_expression_intervals(
+                    self._sanitize_expression_intervals(group["intervals"])
+                )
 
             logger.info(
                 "Processed expression overlays: %s",

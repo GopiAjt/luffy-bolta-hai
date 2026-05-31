@@ -4,13 +4,33 @@ from app.utils.slides.image_slides import (
     _anchor_ai_image_prompt,
     _apply_visual_source_plan,
     _build_ai_image_prompt,
+    _build_image_slides_full_prompt,
     _infer_query_from_subtitle_text,
     _needs_ai_visual,
+    _repair_slide_timing_continuity,
     _split_long_slides_by_dialogues,
 )
 
 
 class ImageSlidesPromptTests(unittest.TestCase):
+    def test_full_prompt_disables_ai_image_prompts(self):
+        prompt = _build_image_slides_full_prompt(
+            [
+                {
+                    "start": "0:00:00.03",
+                    "end": "0:00:03.00",
+                    "text": "Loki is chained beneath Elbaf because history remembers him.",
+                }
+            ],
+            ["Loki", "Elbaf"],
+        )
+
+        self.assertIn('visual_source to "asset_search"', prompt)
+        self.assertIn('ai_image_prompt to empty string ""', prompt)
+        self.assertIn("read ALL subtitles as one complete script", prompt)
+        self.assertIn("Loki Elbaf chains", prompt)
+        self.assertNotIn("USE ai_generate", prompt)
+
     def test_build_ai_prompt_anchors_to_spoken_line_and_context(self):
         prompt = _build_ai_image_prompt(
             "Dragon leaves the Marines due to corruption",
@@ -134,6 +154,44 @@ class ImageSlidesPromptTests(unittest.TestCase):
         self.assertEqual(result["visual_source"], "asset_search")
         self.assertEqual(result["image_search_query"], "Zoro Mihawk Baratie cross knife")
         self.assertEqual(result["ai_image_prompt"], "")
+
+    def test_gemini_ai_choice_is_stripped_when_no_ai_prompts_are_allowed(self):
+        slide = {
+            "summary": "Loki is the reason Oda made us wait",
+            "visual_source": "ai_generate",
+            "image_search_query": "",
+            "ai_image_prompt": "Vertical 9:16 One Piece anime style illustration, no text.",
+        }
+
+        result = _apply_visual_source_plan(
+            slide,
+            "He is the reason Oda made us wait.",
+            ["Loki", "Elbaf"],
+            0,
+        )
+
+        self.assertEqual(result["visual_source"], "asset_search")
+        self.assertEqual(result["image_search_query"], "Loki Elbaf")
+        self.assertEqual(result["ai_image_prompt"], "")
+
+    def test_slide_timing_repair_removes_gaps_for_sequential_renderer(self):
+        slides = [
+            {"start_time": "0:00:00.03", "end_time": "0:00:03.24", "summary": "one"},
+            {"start_time": "0:00:03.30", "end_time": "0:00:05.66", "summary": "two"},
+            {"start_time": "0:00:06.60", "end_time": "0:00:08.88", "summary": "three"},
+        ]
+        dialogues = [
+            {"start": "0:00:00.03", "end": "0:00:03.24", "text": "one"},
+            {"start": "0:00:03.30", "end": "0:00:05.66", "text": "two"},
+            {"start": "0:00:06.60", "end": "0:00:08.88", "text": "three"},
+        ]
+
+        repaired = _repair_slide_timing_continuity(slides, 9.5, dialogues)
+
+        self.assertEqual(repaired[0]["start_time"], "0:00:00.00")
+        self.assertEqual(repaired[0]["end_time"], repaired[1]["start_time"])
+        self.assertEqual(repaired[1]["end_time"], repaired[2]["start_time"])
+        self.assertEqual(repaired[-1]["end_time"], "0:00:09.50")
 
 
 if __name__ == "__main__":

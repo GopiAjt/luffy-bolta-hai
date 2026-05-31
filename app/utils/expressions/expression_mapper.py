@@ -1,8 +1,12 @@
 import re
 import json
 import sys
+import logging
 from pathlib import Path
 import google.generativeai as genai
+
+NARRATOR_CHARACTER = "narrator"
+logger = logging.getLogger(__name__)
 
 
 def ass_time_to_seconds(ass_time):
@@ -32,6 +36,68 @@ def parse_ass_file(ass_path):
             'text': text
         })
     return result
+
+
+def _time_distance(a: str, b: str) -> float:
+    return abs(ass_time_to_seconds(a) - ass_time_to_seconds(b))
+
+
+def normalize_expression_mapping(expressions, sub_lines):
+    """
+    Snap model expression output back to the original subtitle timings.
+
+    Gemini sometimes preserves the text/expression but mutates one timestamp,
+    creating huge overlapping expression holds. The subtitle file is the timing
+    authority, so each output item is aligned by index/text to the ASS line.
+    """
+    if not isinstance(expressions, list):
+        return []
+
+    normalized = []
+    used_indexes = set()
+    for index, expr in enumerate(expressions):
+        if not isinstance(expr, dict):
+            continue
+
+        match_index = index if index < len(sub_lines) else None
+        expr_text = re.sub(r"\s+", " ", (expr.get("text") or "").strip()).lower()
+        if expr_text:
+            for candidate_index, sub_line in enumerate(sub_lines):
+                if candidate_index in used_indexes:
+                    continue
+                sub_text = re.sub(r"\s+", " ", (sub_line.get("text") or "").strip()).lower()
+                if expr_text == sub_text:
+                    match_index = candidate_index
+                    break
+
+        if match_index is None or match_index >= len(sub_lines):
+            continue
+        used_indexes.add(match_index)
+
+        sub_line = sub_lines[match_index]
+        item = dict(expr)
+        item["start"] = sub_line["start"]
+        item["end"] = sub_line["end"]
+        item["text"] = sub_line.get("text", item.get("text", ""))
+        item["expression"] = (item.get("expression") or "neutral").strip().lower()
+        item["character"] = (item.get("character") or NARRATOR_CHARACTER).strip().lower()
+
+        if _time_distance(expr.get("start", item["start"]), item["start"]) > 0.25 or _time_distance(
+            expr.get("end", item["end"]), item["end"]
+        ) > 0.25:
+            logger.debug(
+                "Corrected expression timing:",
+                extra={
+                    "original_start": expr.get("start"),
+                    "original_end": expr.get("end"),
+                    "corrected_start": item["start"],
+                    "corrected_end": item["end"],
+                },
+            )
+
+        normalized.append(item)
+
+    return normalized
 
 
 def build_gemini_prompt(sub_lines):
@@ -80,7 +146,7 @@ def generate_expression_mapping_with_gemini(model, sub_lines):
             text = text[7:]
         if text.endswith('```'):
             text = text[:-3]
-        return json.loads(text)
+        return normalize_expression_mapping(json.loads(text), sub_lines)
     except Exception as e:
         print("Failed to parse Gemini response as JSON:", e)
         print("Raw response:\n", response.text)

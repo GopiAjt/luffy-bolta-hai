@@ -3,7 +3,7 @@ import json
 import textwrap
 import re
 import subprocess
-from typing import List, Dict, Set, Optional, Callable
+from typing import List, Dict, Set, Optional, Callable, Tuple
 import logging
 import tempfile
 import nltk
@@ -721,6 +721,141 @@ class SubtitleGenerator:
         wrapped = self._wrap_subtitle_text(" ".join(styled), max_chars=24, max_lines=2)
         return f"{{\\fad(70,70)}}{wrapped}"
 
+    def _is_horizontal_resolution(self, resolution: str) -> bool:
+        try:
+            res_x, res_y = map(int, resolution.lower().split("x"))
+            return res_x > res_y
+        except Exception:
+            return False
+
+    def _long_form_word_score(self, word: str, index: int, total: int) -> int:
+        clean = re.sub(r"[^\w'-]", "", word or "").strip()
+        if not clean:
+            return 0
+        lower = clean.lower()
+        stopwords = {
+            "the", "and", "but", "for", "with", "that", "this", "into", "from",
+            "because", "when", "then", "there", "their", "they", "what", "why",
+            "how", "was", "were", "are", "is", "his", "her", "him", "you",
+        }
+        if lower in stopwords or len(lower) <= 2:
+            return 0
+        score = 1
+        if self._is_keyword_boost(clean):
+            score += 5
+        if self._is_one_piece_term(clean, self._CHARACTERS | self._LOCATIONS | self._TITLES | self._POWERS):
+            score += 5
+        if clean[:1].isupper() and len(clean) > 3:
+            score += 3
+        if len(clean) >= 7:
+            score += 2
+        if index in {0, total - 1}:
+            score += 1
+        return score
+
+    def _long_form_keyword_words(self, phrase: Dict, phrase_index: int) -> List[Dict]:
+        words = phrase.get("words") or []
+        if not words:
+            return []
+        scored: List[Tuple[int, int, Dict]] = []
+        total = len(words)
+        for index, word in enumerate(words):
+            score = self._long_form_word_score(word.get("word", ""), index, total)
+            if score > 0:
+                scored.append((score, index, word))
+        if not scored:
+            # Keep long-form subtitles sparse: show a fallback word only on every
+            # third phrase when no meaningful keyword exists.
+            if phrase_index % 3:
+                return []
+            longest = max(words, key=lambda item: len(re.sub(r"\W+", "", item.get("word", ""))))
+            return [longest]
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        selected = sorted(scored[:2], key=lambda item: item[1])
+        return [word for _score, _index, word in selected]
+
+    def _style_long_form_keyword(self, word: str, slot: int = 0) -> str:
+        clean = (word or "").replace("{", "").replace("}", "").strip()
+        if not clean:
+            return ""
+        style = self._get_style_config(self.style)
+        style_type = "proper_noun"
+        if self._is_one_piece_term(clean, self._CHARACTERS):
+            style_type = "character"
+        elif self._is_one_piece_term(clean, self._POWERS):
+            style_type = "power"
+        elif self._is_one_piece_term(clean, self._LOCATIONS):
+            style_type = "location"
+        elif self._is_one_piece_term(clean, self._TITLES):
+            style_type = "title"
+        word_style = dict(style.get(style_type, style["default"]))
+        word_style["size"] = min(76, int(word_style.get("size", 76) * 0.82))
+        word_style["bold"] = True
+        if slot % 2:
+            word_style["outline"] = "000000"
+            word_style["color"] = word_style.get("color", "FFD700")
+        styled = self._apply_style(clean, word_style)
+        # A very small transform keeps the word alive without turning long-form
+        # into always-on Shorts captions.
+        return f"{{\\fad(90,150)\\t(0,180,\\fscx108\\fscy108)}}{styled}"
+
+    def _generate_storyboard_ass_events(self, phrases: List[Dict]) -> List[str]:
+        """Hidden full-sentence narration events for storyboard/expression planning."""
+        script = re.sub(r"\s+", " ", getattr(self, "script_text", "") or "").strip()
+        if not script or not phrases:
+            return []
+
+        sentences = [
+            item.strip()
+            for item in re.split(r"(?<=[.!?।])\s+", script)
+            if item.strip()
+        ]
+        if not sentences:
+            return []
+
+        start = float(phrases[0].get("start", 0.0))
+        end = float(phrases[-1].get("end", start + 0.1))
+        total_duration = max(0.1, end - start)
+        word_counts = [max(1, len(sentence.split())) for sentence in sentences]
+        total_words = max(1, sum(word_counts))
+
+        events: List[str] = []
+        cursor = start
+        for index, sentence in enumerate(sentences):
+            if index == len(sentences) - 1:
+                sentence_end = end
+            else:
+                sentence_duration = total_duration * (word_counts[index] / total_words)
+                sentence_end = min(end, max(cursor + 0.35, cursor + sentence_duration))
+            safe_text = sentence.replace("{", "").replace("}", "")
+            events.append(
+                f"Comment: 0,{self.seconds_to_ass_format(cursor)},"
+                f"{self.seconds_to_ass_format(sentence_end)},Storyboard,,0,0,0,,{safe_text}\n"
+            )
+            cursor = sentence_end
+            if cursor >= end:
+                break
+        return events
+
+    def _generate_long_form_keyword_ass_events(self, phrases: List[Dict]) -> List[str]:
+        events: List[str] = []
+        for phrase_index, phrase in enumerate(phrases):
+            keywords = self._long_form_keyword_words(phrase, phrase_index)
+            for slot, word in enumerate(keywords):
+                start = float(word.get("start", phrase.get("start", 0.0)))
+                end = float(word.get("end", phrase.get("end", start + 0.45)))
+                if end <= start:
+                    end = start + 0.45
+                # Hold the keyword long enough to read, but keep it sparse.
+                end = min(float(phrase.get("end", end)) + 0.12, max(end, start + 0.55))
+                ass_text = self._style_long_form_keyword(word.get("word", ""), slot)
+                if not ass_text:
+                    continue
+                events.append(
+                    f"Dialogue: 0,{self.seconds_to_ass_format(start)},{self.seconds_to_ass_format(end)},Default,,0,0,0,,{ass_text}\n"
+                )
+        return events
+
     def generate_ass_file(self, phrases: List[Dict], output_path: str, resolution: str = '1080x1920') -> None:
         """
         Generate a visually rich, dynamically styled ASS subtitle file using NLTK.
@@ -740,7 +875,14 @@ class SubtitleGenerator:
         pro_mode = self.style == 'pro' and not keyword_mode
         has_devanagari = any(DEVANAGARI_RE.search(str(phrase.get('text', ''))) for phrase in phrases)
         default_font = (self._get_devanagari_font() if has_devanagari else None) or "DejaVu Sans"
-        if keyword_mode:
+        long_form_keyword_mode = self._is_horizontal_resolution(resolution)
+        if long_form_keyword_mode:
+            default_font_size = 54
+            outline = 3
+            shadow = 1
+            alignment = 2
+            margin_v = int(res_y * 0.10)
+        elif keyword_mode:
             default_font_size = 76
             outline = 4
             shadow = 2
@@ -781,6 +923,18 @@ class SubtitleGenerator:
 
         if not phrases:
             logger.warning("No phrases provided for subtitle generation")
+            return
+
+        if long_form_keyword_mode:
+            content.extend(self._generate_storyboard_ass_events(phrases))
+            content.extend(self._generate_long_form_keyword_ass_events(phrases))
+            with open(output_path, 'w', encoding='utf-8-sig') as f:
+                f.writelines(content)
+                logger.info(
+                    "Wrote sparse long-form keyword subtitles: %s events to %s",
+                    len(content) - 1,
+                    output_path,
+                )
             return
 
         last_end = -1

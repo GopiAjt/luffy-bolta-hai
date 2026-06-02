@@ -22,9 +22,12 @@ ENABLE_TRANSITION_SFX = os.getenv("ENABLE_TRANSITION_SFX", "true").lower() not i
     "false",
     "no",
 }
-TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.5"))
-# Extra weight on the SFX leg in amix (voice stays at 1.0; SFX is often short vs loud narration).
+TRANSITION_SFX_VOLUME = float(os.getenv("TRANSITION_SFX_VOLUME", "1.25"))
+# Legacy weight kept for env compatibility. The active mix now limits the SFX bed
+# before adding it to voice, so narration is not pulled down by a final limiter.
 TRANSITION_SFX_MIX_WEIGHT = float(os.getenv("TRANSITION_SFX_MIX_WEIGHT", "2.0"))
+TRANSITION_SFX_BED_LIMIT = float(os.getenv("TRANSITION_SFX_BED_LIMIT", "0.42"))
+TRANSITION_SFX_BED_GAIN = float(os.getenv("TRANSITION_SFX_BED_GAIN", "0.82"))
 # Human perception usually wants transition sounds to lead the visual by a frame or two.
 TRANSITION_SFX_SYNC_OFFSET = float(os.getenv("TRANSITION_SFX_SYNC_OFFSET", "-0.04"))
 # Trim long MP3 assets so a single cue does not play for 3–6 seconds
@@ -37,18 +40,18 @@ TRANSITION_SFX_IMPACT_COOLDOWN_SECONDS = float(
 
 # Per-file gain tweaks (stem without extension). Values multiply TRANSITION_SFX_VOLUME.
 SFX_VOLUME_SCALE: Dict[str, float] = {
-    "impact_hit": 1.05,
-    "sub_boom": 1.0,
-    "riser": 1.1,
+    "impact_hit": 0.95,
+    "sub_boom": 0.92,
+    "riser": 1.0,
     "stinger": 1.15,
     "heartbeat": 1.0,
     "electric_charge": 1.1,
     "sword_slash": 1.1,
-    "sparkle": 1.05,
+    "sparkle": 0.70,
     "whoosh": 1.1,
-    "soft_whoosh": 1.15,
-    "reverse_whoosh": 1.1,
-    "slide": 1.1,
+    "soft_whoosh": 1.0,
+    "reverse_whoosh": 1.0,
+    "slide": 1.0,
 }
 
 # Exact transition name -> sfx stem (app/data/sfx/{stem}.mp3)
@@ -406,9 +409,9 @@ def mix_transition_sfx(
     """
     Mix transition SFX into the narration track.
 
-    Uses sequential 2-input amix (voice + one SFX at a time) with normalize=0 so
-    the voice stays at full level. A single amix over N+1 inputs was ducking voice
-    and making SFX inaudible.
+    Builds a separate SFX bed, limits that bed, then adds it to the voice with
+    normalize=0. The final mix intentionally has no limiter, because a final
+    limiter reacts to SFX peaks by pulling down the narration.
     """
     if not ENABLE_TRANSITION_SFX or not events:
         return voice_audio_path
@@ -420,11 +423,11 @@ def mix_transition_sfx(
 
     inputs = ["-i", str(voice_path)]
     filter_parts = [
-        "[0:a]aresample=44100,asetpts=PTS-STARTPTS,alimiter=limit=0.99[voice]"
+        "[0:a]aresample=44100,asetpts=PTS-STARTPTS[voice]"
     ]
-    last_label = "[voice]"
     input_idx = 1
     used = 0
+    sfx_labels = []
     planned_cues = plan_transition_sfx_cues(events, visual_style=visual_style)
 
     for event in planned_cues:
@@ -435,16 +438,10 @@ def mix_transition_sfx(
         volume = sfx_volume_for_path(sfx_path)
         inputs.extend(["-i", str(sfx_path)])
         sfx_label = f"[sfx{input_idx}]"
-        mix_label = f"[mix{input_idx}]"
         filter_parts.append(
             _sfx_clip_filter(input_idx, delay_ms, volume, sfx_label)
         )
-        w = max(1.0, TRANSITION_SFX_MIX_WEIGHT)
-        filter_parts.append(
-            f"{last_label}{sfx_label}amix=inputs=2:duration=first:dropout_transition=0:"
-            f"normalize=0:weights=1 {w:.2f}{mix_label}"
-        )
-        last_label = mix_label
+        sfx_labels.append(sfx_label)
         input_idx += 1
         used += 1
         logger.info(
@@ -459,7 +456,22 @@ def mix_transition_sfx(
         logger.warning("No transition SFX resolved for %s events", len(events))
         return voice_audio_path
 
-    filter_parts.append(f"{last_label}alimiter=limit=0.98[aout]")
+    if len(sfx_labels) == 1:
+        filter_parts.append(
+            f"{sfx_labels[0]}alimiter=limit={TRANSITION_SFX_BED_LIMIT:.3f},"
+            f"volume={TRANSITION_SFX_BED_GAIN:.3f}[sfxbed]"
+        )
+    else:
+        filter_parts.append(
+            f"{''.join(sfx_labels)}amix=inputs={len(sfx_labels)}:duration=longest:"
+            f"dropout_transition=0:normalize=0,"
+            f"alimiter=limit={TRANSITION_SFX_BED_LIMIT:.3f},"
+            f"volume={TRANSITION_SFX_BED_GAIN:.3f}[sfxbed]"
+        )
+    filter_parts.append(
+        "[voice][sfxbed]amix=inputs=2:duration=first:dropout_transition=0:"
+        "normalize=0:weights=1 1[aout]"
+    )
     filter_complex = ";".join(filter_parts)
 
     out = Path(output_path)

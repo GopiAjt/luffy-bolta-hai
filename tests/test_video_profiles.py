@@ -5,6 +5,7 @@ from app.utils.audio.tts_generator import (
     _qwen_generation_kwargs,
     _split_text_for_tts,
 )
+from app.utils.text.subtitle_generator import SubtitleGenerator
 
 
 class VideoProfileTests(unittest.TestCase):
@@ -52,6 +53,28 @@ class VideoProfileTests(unittest.TestCase):
         self.assertEqual(kwargs["top_k"], 50)
         self.assertEqual(kwargs["top_p"], 0.95)
         self.assertEqual(kwargs["temperature"], 0.92)
+
+    def test_long_form_subtitles_select_sparse_word_keywords(self):
+        generator = object.__new__(SubtitleGenerator)
+        generator.style = "clean_pro"
+        phrase = {
+            "start": 0.0,
+            "end": 2.5,
+            "text": "Zoro chooses Luffy over glory forever",
+            "words": [
+                {"word": "Zoro", "start": 0.0, "end": 0.25},
+                {"word": "chooses", "start": 0.3, "end": 0.65},
+                {"word": "Luffy", "start": 0.7, "end": 1.0},
+                {"word": "over", "start": 1.05, "end": 1.2},
+                {"word": "glory", "start": 1.25, "end": 1.55},
+                {"word": "forever", "start": 1.6, "end": 2.0},
+            ],
+        }
+
+        keywords = generator._long_form_keyword_words(phrase, 0)
+
+        self.assertLess(len(keywords), len(phrase["words"]))
+        self.assertEqual([word["word"] for word in keywords], ["Zoro", "Luffy"])
 
 
 if __name__ == "__main__":

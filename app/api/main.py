@@ -12,6 +12,7 @@ from app.utils.text.subtitle_generator import SubtitleGenerator
 from app.utils.slides.image_slides import generate_image_slides
 from app.utils.slides.image_slides_upload import (
     apply_vivre_asset_to_slide,
+    auto_resolve_slide_assets,
     audio_stem,
     build_slides_response,
     load_slides,
@@ -402,6 +403,7 @@ def generate_slideshow():
             ass_path=str(ass_file),
             out_path=str(image_slides_json),
             total_duration=duration,
+            video_profile=video_profile,
         )
         
         # Generate the video from the slides
@@ -996,7 +998,12 @@ def generate_image_slides_endpoint():
             total_audio_duration,
         )
 
-        result_path = generate_image_slides(ass_path, out_path, total_audio_duration)
+        result_path = generate_image_slides(
+            ass_path,
+            out_path,
+            total_audio_duration,
+            video_profile=video_profile,
+        )
 
         logger.info(f"Image slides generated successfully at: {result_path}")
 
@@ -1513,16 +1520,22 @@ def generate_final_video_endpoint():
                 logger.error(error_msg)
                 return jsonify({'status': 'error', 'message': error_msg}), 400
 
-        slides = load_slides(slides_json)
+        auto_resolve_status = auto_resolve_slide_assets(audio_id, slides_json)
+        slides = auto_resolve_status["slides"]
         upload_status = slides_upload_status(slides)
         if not upload_status['complete']:
             return jsonify({
                 'status': 'error',
                 'message': (
-                    f"Upload an image for each slide before generating video "
-                    f"({upload_status['uploaded']}/{upload_status['total']} uploaded)."
+                    f"Upload or resolve an image for each slide before generating video "
+                    f"({upload_status['uploaded']}/{upload_status['total']} ready, "
+                    f"{auto_resolve_status.get('resolved', 0)} auto-resolved)."
                 ),
                 'upload_status': upload_status,
+                'auto_resolve_status': {
+                    'resolved': auto_resolve_status.get('resolved', 0),
+                    'unresolved': auto_resolve_status.get('unresolved', 0),
+                },
             }), 400
 
         images_dir = str(slides_images_dir(audio_id))

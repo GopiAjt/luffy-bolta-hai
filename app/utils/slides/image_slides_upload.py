@@ -14,7 +14,11 @@ from PIL import Image, ImageOps
 from werkzeug.datastructures import FileStorage
 
 from app.config import IMAGE_SLIDES_DIR
-from app.utils.expressions.expression_assets import suggest_vivre_assets, vivre_asset_path_from_relative
+from app.utils.expressions.expression_assets import (
+    resolve_vivre_asset_for_query,
+    suggest_vivre_assets,
+    vivre_asset_path_from_relative,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +179,83 @@ def apply_vivre_asset_to_slide(
     return slide
 
 
+def auto_resolve_slide_assets(
+    audio_id: str,
+    slides_json_path: str,
+    min_asset_confidence: float = 0.0,
+) -> Dict:
+    """
+    Fill missing slide images from the local Vivre Card pack when a confident
+    query match exists. This keeps the asset-search-only workflow but removes
+    the manual bottleneck for common characters, symbols, and locations.
+    """
+    slides = load_slides(slides_json_path)
+    resolved = 0
+    unresolved = 0
+
+    for index, slide in enumerate(slides):
+        existing = slide.get("image_path")
+        if existing and os.path.exists(existing):
+            continue
+
+        try:
+            confidence = float(slide.get("asset_confidence") or 1.0)
+        except (TypeError, ValueError):
+            confidence = 1.0
+        if confidence < min_asset_confidence:
+            unresolved += 1
+            continue
+
+        query_blob = " ".join(
+            part
+            for part in [
+                slide.get("image_search_query", ""),
+                slide.get("summary", ""),
+                slide.get("subtitle_text", ""),
+            ]
+            if part
+        ).strip()
+        if not query_blob:
+            unresolved += 1
+            continue
+
+        source = resolve_vivre_asset_for_query(query_blob)
+        if not source:
+            unresolved += 1
+            continue
+
+        dest_path = slide_image_path(audio_id, index)
+        temp_path = dest_path.with_suffix(".auto_vivre.png")
+        try:
+            shutil.copy2(source, temp_path)
+            _save_normalized_image(temp_path, dest_path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+        slide["image_path"] = str(dest_path.resolve())
+        slide["image_source"] = "auto_vivre_card"
+        slide["vivre_auto_source"] = str(source)
+        resolved += 1
+
+    save_slides(slides_json_path, slides)
+    status = slides_upload_status(slides)
+    logger.info(
+        "Auto-resolved slide assets for %s: resolved=%s unresolved=%s uploaded=%s/%s",
+        audio_id,
+        resolved,
+        unresolved,
+        status["uploaded"],
+        status["total"],
+    )
+    return {
+        **status,
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "slides": slides,
+    }
+
+
 def build_slides_response(
     audio_id: str,
     slides_json_path: str,
@@ -202,6 +283,15 @@ def build_slides_response(
             "image_search_query": slide.get("image_search_query"),
             "visual_source": visual_source,
             "ai_image_prompt": slide.get("ai_image_prompt") or "",
+            "beat_type": slide.get("beat_type"),
+            "visual_role": slide.get("visual_role"),
+            "layout_mode": slide.get("layout_mode"),
+            "motion_preset": slide.get("motion_preset"),
+            "text_overlay": slide.get("text_overlay") or "",
+            "emphasis_words": slide.get("emphasis_words") or [],
+            "transition_in": slide.get("transition_in"),
+            "sfx_cue": slide.get("sfx_cue"),
+            "asset_confidence": slide.get("asset_confidence"),
             "has_image": has_image,
             "image_path": image_path if has_image else None,
             "image_source": slide.get("image_source"),

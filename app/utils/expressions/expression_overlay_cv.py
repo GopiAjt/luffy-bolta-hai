@@ -133,6 +133,48 @@ def _composite_rgba(
     ).astype(np.uint8)
 
 
+def _position_xy(
+    position: str,
+    width: int,
+    height: int,
+    overlay_w: int,
+    overlay_h: int,
+    effect: str,
+    local_t: float,
+) -> Tuple[int, int]:
+    position = (position or "bottom_center").strip().lower()
+    margin_x = max(32, int(width * 0.045))
+    margin_y = max(28, int(height * 0.06))
+    bottom_y = height - overlay_h - max(84, int(height * 0.11))
+
+    if position == "bottom_left":
+        x = margin_x
+        y = bottom_y
+    elif position == "bottom_right":
+        x = width - overlay_w - margin_x
+        y = bottom_y
+    elif position == "mid_right":
+        x = width - overlay_w - margin_x
+        y = int(height * 0.40) - overlay_h // 2
+    elif position == "mid_left":
+        x = margin_x
+        y = int(height * 0.40) - overlay_h // 2
+    elif position == "top_right":
+        x = width - overlay_w - margin_x
+        y = margin_y
+    else:
+        y_bottom = _EFFECT_Y_FROM_BOTTOM.get(effect, 220)
+        x = (width - overlay_w) // 2
+        y = height - overlay_h - y_bottom
+
+    if effect == "slide_in":
+        x += int(round(18 * (1.0 - min(1.0, max(0.0, local_t * 4)))))
+    return (
+        max(0, min(width - overlay_w, x)),
+        max(0, min(height - overlay_h, y)),
+    )
+
+
 def _active_specs(specs: List[Dict[str, Any]], t: float) -> List[Dict[str, Any]]:
     return [spec for spec in specs if spec["start"] <= t <= spec["end"]]
 
@@ -224,12 +266,18 @@ def render_expression_overlays_opencv(
 
             overlay = resize_cache[cache_key]
             oh, ow = overlay.shape[:2]
-            y_bottom = _EFFECT_Y_FROM_BOTTOM.get(effect, 220)
-            x = (width - ow) // 2
+            x, y = _position_xy(
+                spec.get("position", "bottom_center"),
+                width,
+                height,
+                ow,
+                oh,
+                effect,
+                local_t,
+            )
             if effect == "shake_in":
                 x += int(6 * math.sin(local_t * 24.0))
             x += hold_x
-            y = height - oh - y_bottom
             y += hold_y
             _composite_rgba(frame, overlay, x, y, alpha)
 

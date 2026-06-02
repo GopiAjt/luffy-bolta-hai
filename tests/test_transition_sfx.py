@@ -1,4 +1,7 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.config import TRANSITION_SFX_DIR
 from app.utils.audio import transition_sfx
@@ -17,7 +20,8 @@ class TransitionSfxTests(unittest.TestCase):
     def test_default_sfx_gain_is_audible(self):
         resolved = transition_sfx.resolve_transition_sfx("fade")
         self.assertIsNotNone(resolved)
-        self.assertGreaterEqual(transition_sfx.sfx_volume_for_path(resolved), 1.5)
+        self.assertGreaterEqual(transition_sfx.sfx_volume_for_path(resolved), 1.2)
+        self.assertLessEqual(transition_sfx.sfx_volume_for_path(resolved), 1.3)
         self.assertGreaterEqual(transition_sfx.TRANSITION_SFX_MIX_WEIGHT, 2.0)
 
     def test_repeated_gentle_transitions_are_spaced_and_varied(self):
@@ -48,6 +52,40 @@ class TransitionSfxTests(unittest.TestCase):
         impact_times = [cue["time"] for cue in cues if cue["stem"] == "impact_hit"]
 
         self.assertEqual(impact_times, [10.0, 30.0])
+
+    def test_mix_builds_limited_sfx_bed_without_final_limiter(self):
+        with TemporaryDirectory() as tmp_dir:
+            voice_path = Path(tmp_dir) / "voice.wav"
+            output_path = Path(tmp_dir) / "mixed.wav"
+            voice_path.write_bytes(b"fake voice")
+            captured = {}
+
+            def fake_run(cmd, **_kwargs):
+                captured["cmd"] = cmd
+
+                class Result:
+                    stderr = ""
+
+                return Result()
+
+            with patch("app.utils.audio.transition_sfx.subprocess.run", side_effect=fake_run):
+                result = transition_sfx.mix_transition_sfx(
+                    str(voice_path),
+                    [
+                        {"time": 3.0, "transition": "crossfade"},
+                        {"time": 9.0, "transition": "fade_eased"},
+                    ],
+                    str(output_path),
+                    duration=12.0,
+                )
+
+        self.assertEqual(result, str(output_path))
+        filter_complex = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        self.assertIn("[sfxbed]", filter_complex)
+        self.assertIn("alimiter=limit=", filter_complex)
+        self.assertIn("[voice][sfxbed]amix=inputs=2", filter_complex)
+        self.assertNotIn("[mix", filter_complex)
+        self.assertNotIn("[aout]alimiter", filter_complex)
 
 
 if __name__ == "__main__":

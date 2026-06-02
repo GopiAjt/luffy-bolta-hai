@@ -16,9 +16,21 @@ def ass_time_to_seconds(ass_time):
     return int(h)*3600 + int(m)*60 + int(sec) + float('0.'+cs)
 
 
+def _clean_ass_text(text: str) -> str:
+    text = re.sub(r'\{.*?\}', '', text or '')
+    text = re.sub(r'\\[Nn]', ' ', text)
+    text = re.sub(r'\\[^ ]*', '', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 def parse_ass_file(ass_path):
     lines = Path(ass_path).read_text(encoding='utf-8').splitlines()
-    dialogue_lines = [l for l in lines if l.startswith('Dialogue:')]
+    storyboard_lines = [
+        l for l in lines
+        if l.startswith('Comment:') and len(l.split(',', 9)) >= 10
+        and l.split(',', 9)[3].strip().lower() == "storyboard"
+    ]
+    dialogue_lines = storyboard_lines or [l for l in lines if l.startswith('Dialogue:')]
     result = []
     for line in dialogue_lines:
         parts = line.split(',', 9)
@@ -26,16 +38,15 @@ def parse_ass_file(ass_path):
             continue
         start = parts[1].strip()
         end = parts[2].strip()
-        text = re.sub(r'{\\b\d}', '', parts[9]).replace(
-            '{\b1}', '').replace('{\b0}', '').strip()
-        text = re.sub(r'\\[Nn]', ' ', text)
-        text = re.sub(r'\s+', ' ', text)
+        text = _clean_ass_text(parts[9])
         result.append({
             'start': start,
             'end': end,
-            'text': text
+            'text': text,
+            'expression': _infer_expression_label(text, len(result)) if storyboard_lines else 'neutral',
+            'character': NARRATOR_CHARACTER,
         })
-    return result
+    return enrich_expression_mapping(result, result) if storyboard_lines else result
 
 
 def _time_distance(a: str, b: str) -> float:
@@ -100,6 +111,80 @@ def normalize_expression_mapping(expressions, sub_lines):
     return normalized
 
 
+def _infer_expression_label(text: str, index: int = 0) -> str:
+    lowered = (text or "").lower()
+    if re.search(r"\b(shocking|terrifying|danger|monster|consume|sacrifice|warning|evil)\b", lowered):
+        return "intense"
+    if re.search(r"\b(question|why|how|what if|twist|mystery|reveal)\b", lowered) or "?" in text:
+        return "surprised"
+    if re.search(r"\b(fear|weak|terrified|tragic|alone|sad|cry|vulnerable)\b", lowered):
+        return "worried"
+    if re.search(r"\b(proves|means|truth|because|therefore|clearly|exactly)\b", lowered):
+        return "confident"
+    if re.search(r"\b(hook|payoff|dream|freedom|ultimate|final)\b", lowered):
+        return "excited" if index < 3 else "serious"
+    return "serious"
+
+
+def enrich_expression_mapping(expressions, sub_lines):
+    """Add sparse deterministic cues when Gemini is too conservative."""
+    normalized = expressions or []
+    if not sub_lines:
+        return normalized
+
+    try:
+        total_duration = ass_time_to_seconds(sub_lines[-1]["end"]) - ass_time_to_seconds(sub_lines[0]["start"])
+    except Exception:
+        total_duration = 0.0
+    if total_duration < 120:
+        return normalized
+
+    expressive = [
+        item for item in normalized
+        if (item.get("expression") or "neutral").lower() not in {"neutral"}
+    ]
+    target_cues = max(8, min(28, int(total_duration / 22)))
+    if len(expressive) >= target_cues:
+        return normalized
+
+    existing_starts = {
+        round(ass_time_to_seconds(item.get("start", "0:00:00.00")), 1)
+        for item in normalized
+    }
+    added = []
+    last_added = -999.0
+    for index, line in enumerate(sub_lines):
+        try:
+            start = ass_time_to_seconds(line["start"])
+        except Exception:
+            continue
+        if start - last_added < 14.0:
+            continue
+        if round(start, 1) in existing_starts:
+            continue
+        text = line.get("text", "")
+        if len(text.split()) < 5:
+            continue
+        label = _infer_expression_label(text, index)
+        added.append({
+            "start": line["start"],
+            "end": line["end"],
+            "text": text,
+            "expression": label,
+            "character": NARRATOR_CHARACTER,
+            "source": "heuristic_enrichment",
+        })
+        last_added = start
+        if len(expressive) + len(added) >= target_cues:
+            break
+
+    if added:
+        logger.info("Added %s heuristic expression cues for long-form density", len(added))
+    combined = [*normalized, *added]
+    combined.sort(key=lambda item: ass_time_to_seconds(item.get("start", "0:00:00.00")))
+    return combined
+
+
 def build_gemini_prompt(sub_lines):
     """
     Build a Gemini-compatible prompt for expression mapping from subtitle lines.
@@ -116,8 +201,9 @@ def build_gemini_prompt(sub_lines):
     - "text": the spoken line\n
     - "expression": the facial expression label best suited for this line\n
     - "character": the speaking or focal character when obvious (e.g. "luffy", "zoro", "sanji"); otherwise "luffy" for narrator-style videos\n\n
-    Use only these labels: "neutral", "happy", "angry", "surprised", "sad", "smirking", "confident", "serious", "worried", "intense", "excited", "embarrassed" etc.\n\n
-    Use tone, punctuation, emphasis, and keywords to infer emotion. Humor, sarcasm, or rhetorical questions should also influence the expression choice. You may also infer if the narrator is hyped or calm, authoritative or playful.\n\n
+    Use only these labels: "neutral", "happy", "angry", "surprised", "sad", "smirking", "confident", "serious", "worried", "intense", "excited", "embarrassed".\n\n
+    Use tone, punctuation, emphasis, and keywords to infer emotion. Humor, sarcasm, or rhetorical questions should also influence the expression choice. You may also infer if the narrator is hyped or calm, authoritative or playful.\n
+    For long-form narration, do not mark everything neutral. Use "serious" for thesis/evidence beats, "confident" for clear claims, "intense" for danger/reveal beats, "worried" or "sad" for tragic psychology, "surprised" for questions/twists, and "excited" for hook/payoff. Aim for a meaningful expression cue roughly every 15-30 seconds while still skipping filler lines.\n\n
     Example Input:\n[\n  { "start": "0:00:01.00", "end": "0:00:04.00", "text": "Okay, here we go!" },\n  
     { "start": "0:00:04.00", "end": "0:00:12.00", "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!" }\n]\n\n
     Expected Output Format:\n[\n  {\n    "start": "0:00:01.00",\n    "end": "0:00:04.00",\n    "text": "Okay, here we go!",\n    "expression": "excited"\n  },\n  {\n    "start": "0:00:04.00",\n    "end": "0:00:12.00",\n    "text": "One Piece power levels! Let’s BREAK ‘EM DOWN!",\n    "expression": "intense"\n  }\n]\n\nNow here are the actual subtitle lines to analyze:\n'''
@@ -146,7 +232,10 @@ def generate_expression_mapping_with_gemini(model, sub_lines):
             text = text[7:]
         if text.endswith('```'):
             text = text[:-3]
-        return normalize_expression_mapping(json.loads(text), sub_lines)
+        return enrich_expression_mapping(
+            normalize_expression_mapping(json.loads(text), sub_lines),
+            sub_lines,
+        )
     except Exception as e:
         print("Failed to parse Gemini response as JSON:", e)
         print("Raw response:\n", response.text)

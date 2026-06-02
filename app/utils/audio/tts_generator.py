@@ -42,9 +42,9 @@ def _qwen_generation_kwargs() -> dict:
     """Expose conservative sampling knobs for more expressive Qwen delivery."""
     kwargs = {
         "do_sample": _env_bool("QWEN_TTS_DO_SAMPLE", True),
-        "top_k": int(os.getenv("QWEN_TTS_TOP_K", "80")),
-        "top_p": float(os.getenv("QWEN_TTS_TOP_P", "0.98")),
-        "temperature": float(os.getenv("QWEN_TTS_TEMPERATURE", "1.05")),
+        "top_k": int(os.getenv("QWEN_TTS_TOP_K", "50")),
+        "top_p": float(os.getenv("QWEN_TTS_TOP_P", "0.95")),
+        "temperature": float(os.getenv("QWEN_TTS_TEMPERATURE", "0.92")),
         "repetition_penalty": float(os.getenv("QWEN_TTS_REPETITION_PENALTY", "1.01")),
         "subtalker_dosample": _env_bool("QWEN_TTS_SUBTALKER_DO_SAMPLE", True),
         "subtalker_top_k": int(os.getenv("QWEN_TTS_SUBTALKER_TOP_K", "50")),

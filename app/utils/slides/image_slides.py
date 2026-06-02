@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 import logging
 
+from app.config import normalize_video_profile
 from app.utils.slides.image_slides_llm import call_image_slides_llm
 
 # Set up logging
@@ -72,6 +73,22 @@ for _extra_entity in ("Caribou", "Shirahoshi", "Pluton", "Poseidon", "Fishman Is
 IMAGE_SLIDE_MAX_SECONDS = float(os.getenv("IMAGE_SLIDE_MAX_SECONDS", "5.5"))
 IMAGE_SLIDE_MIN_SECONDS = float(os.getenv("IMAGE_SLIDE_MIN_SECONDS", "1.6"))
 
+PRODUCTION_BEAT_TYPES = {"hook", "setup", "evidence", "reveal", "payoff", "cta"}
+VISUAL_ROLES = {"title_card", "scene_broll", "evidence_card", "quote_card", "lower_third", "cta_card"}
+LAYOUT_MODES = {
+    "short_vertical": {"safe_subject", "title_card", "quote_card", "evidence_card", "full_bleed"},
+    "long_youtube": {"horizontal_feature", "split_context", "section_card", "quote_card", "evidence_card", "full_bleed"},
+}
+MOTION_PRESETS = {"subject_push", "evidence_hold", "reveal_zoom", "wide_pan", "title_card_hold", "slow_push", "hold_still", "static_hold"}
+TRANSITION_BY_BEAT = {
+    "hook": "crossfade",
+    "setup": "fade_eased",
+    "evidence": "crossfade",
+    "reveal": "zoom_dissolve",
+    "payoff": "fade_eased",
+    "cta": "fade_eased",
+}
+
 
 def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
     """Parse .ass file and extract dialogues with timestamps.
@@ -81,6 +98,7 @@ def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
         min_words: Minimum number of words to consider a line complete (lines with fewer words will be grouped)
     """
     raw_dialogues = []
+    storyboard_dialogues = []
     
     with open(ass_path, 'r', encoding='utf-8-sig') as f:
         lines = f.readlines()
@@ -95,10 +113,19 @@ def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
         if not events_start:
             continue
             
-        # Parse dialogue lines (format: Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text)
-        if line.lower().startswith('dialogue:'):
+        # Parse visible subtitles and hidden Storyboard comment lines. Long-form
+        # videos burn only sparse keyword callouts, so the storyboard comments
+        # carry the full narration for slide planning.
+        lower_line = line.lower()
+        if lower_line.startswith(('dialogue:', 'comment:')):
             parts = line.split(',', 9)  # Split into max 10 parts
             if len(parts) >= 10:
+                event_type = parts[0].split(':', 1)[0].strip().lower()
+                style_name = parts[3].strip().lower()
+                if event_type == "comment" and style_name != "storyboard":
+                    continue
+                if event_type == "dialogue" and style_name == "storyboard":
+                    continue
                 start_time = parts[1].strip()
                 end_time = parts[2].strip()
                 text = parts[9].strip()
@@ -112,12 +139,16 @@ def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
                 text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
                 
                 if text:  # Only add non-empty dialogues
-                    raw_dialogues.append({
+                    target = storyboard_dialogues if event_type == "comment" else raw_dialogues
+                    target.append({
                         'start': start_time,
                         'end': end_time,
                         'text': text,
                         'word_count': len(text.split())
                     })
+
+    if storyboard_dialogues:
+        raw_dialogues = storyboard_dialogues
     
     # Group short lines with adjacent lines
     grouped_dialogues = []
@@ -262,6 +293,143 @@ def _extract_context_entities(text: str, limit: int = 8) -> List[str]:
             entities.append(entity)
 
     return entities[:limit]
+
+
+def _classify_production_beat(text: str, index: int, total: int) -> str:
+    lowered = (text or "").lower()
+    if index == 0:
+        return "hook"
+    if index >= max(0, total - 1) or re.search(r"\bfollow|comment|subscribe|tell me|like\b", lowered):
+        return "cta"
+    if re.search(r"\breveal|truth|secret|hidden|clue|twist|impossible|danger|reason\b", lowered):
+        return "reveal"
+    if re.search(r"\bpayoff|means|proves|changes|therefore|because|so this\b", lowered):
+        return "payoff"
+    if index <= 2:
+        return "setup"
+    return "evidence"
+
+
+def _default_visual_role(beat_type: str, text: str) -> str:
+    lowered = (text or "").lower()
+    if beat_type == "hook":
+        return "title_card"
+    if beat_type == "cta":
+        return "cta_card"
+    if re.search(r"\bchapter|episode|sbs|quote|said|says\b", lowered):
+        return "evidence_card"
+    if '"' in text or "'" in text and len(text) < 140:
+        return "quote_card"
+    return "scene_broll"
+
+
+def _default_layout_mode(video_profile: str, beat_type: str, visual_role: str) -> str:
+    video_profile = normalize_video_profile(video_profile)
+    if video_profile == "long_youtube":
+        if visual_role in {"title_card", "cta_card"} or beat_type in {"hook", "payoff"}:
+            return "section_card"
+        if visual_role in {"evidence_card", "quote_card"}:
+            return visual_role
+        return "horizontal_feature"
+    if visual_role in {"title_card", "cta_card"}:
+        return "title_card"
+    if visual_role in {"evidence_card", "quote_card"}:
+        return visual_role
+    return "safe_subject"
+
+
+def _default_motion_preset(video_profile: str, beat_type: str, layout_mode: str) -> str:
+    video_profile = normalize_video_profile(video_profile)
+    if layout_mode in {"title_card", "section_card"} or beat_type == "cta":
+        return "title_card_hold"
+    if beat_type == "reveal":
+        return "reveal_zoom"
+    if video_profile == "long_youtube" and layout_mode == "horizontal_feature":
+        return "wide_pan"
+    if beat_type in {"evidence", "setup"}:
+        return "evidence_hold"
+    return "subject_push"
+
+
+def _text_overlay_for_slide(summary: str, beat_type: str, visual_role: str) -> str:
+    if visual_role not in {"title_card", "cta_card", "evidence_card", "quote_card"}:
+        return ""
+    cleaned = _clean_prompt_text(summary, max_len=82)
+    if not cleaned:
+        return ""
+    if beat_type == "cta":
+        return "Comment your theory"
+    return cleaned
+
+
+def _emphasis_words(text: str, context_entities: List[str], limit: int = 4) -> List[str]:
+    words = []
+    for entity in context_entities:
+        if entity and entity not in words:
+            words.append(entity)
+    for match in re.finditer(r"\b(chapter\s+\w+|void century|world government|pirate king|devil fruit|elbaf|loki|zoro|luffy)\b", text or "", re.I):
+        value = match.group(0).strip()
+        if value and value not in words:
+            words.append(value)
+    return words[:limit]
+
+
+def _asset_confidence(query: str, subtitle_text: str, context_entities: List[str], duplicate_count: int = 0) -> float:
+    score = 0.35
+    if query and len(query.split()) >= 2:
+        score += 0.22
+    if any(entity.lower() in (query or "").lower() for entity in context_entities):
+        score += 0.20
+    if re.search(r"\bchapter|arc|island|village|bark|lobby|garden|elbaf|ohara|wano|marineford\b", f"{query} {subtitle_text}", re.I):
+        score += 0.15
+    score -= min(0.20, duplicate_count * 0.08)
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+def _apply_production_edit_defaults(
+    slide: Dict,
+    index: int,
+    total: int,
+    video_profile: str,
+    context_entities: List[str],
+) -> Dict:
+    slide = dict(slide)
+    video_profile = normalize_video_profile(video_profile)
+    text = " ".join(
+        part for part in [slide.get("subtitle_text", ""), slide.get("summary", "")] if part
+    )
+    beat_type = (slide.get("beat_type") or "").strip().lower()
+    if beat_type not in PRODUCTION_BEAT_TYPES:
+        beat_type = _classify_production_beat(text, index, total)
+    visual_role = (slide.get("visual_role") or "").strip().lower()
+    if visual_role not in VISUAL_ROLES:
+        visual_role = _default_visual_role(beat_type, text)
+    layout_mode = (slide.get("layout_mode") or "").strip().lower()
+    if layout_mode not in LAYOUT_MODES[video_profile]:
+        layout_mode = _default_layout_mode(video_profile, beat_type, visual_role)
+    motion_preset = (slide.get("motion_preset") or "").strip().lower()
+    if motion_preset not in MOTION_PRESETS:
+        motion_preset = _default_motion_preset(video_profile, beat_type, layout_mode)
+
+    slide["beat_type"] = beat_type
+    slide["visual_role"] = visual_role
+    slide["layout_mode"] = layout_mode
+    slide["motion_preset"] = motion_preset
+    slide["text_overlay"] = _clean_prompt_text(
+        slide.get("text_overlay") or _text_overlay_for_slide(slide.get("summary", ""), beat_type, visual_role),
+        max_len=90,
+    )
+    if not isinstance(slide.get("emphasis_words"), list):
+        slide["emphasis_words"] = _emphasis_words(text, context_entities)
+    slide["transition_in"] = slide.get("transition_in") or TRANSITION_BY_BEAT.get(beat_type, "crossfade")
+    slide["sfx_cue"] = slide.get("sfx_cue") or slide["transition_in"]
+    if "asset_confidence" not in slide:
+        slide["asset_confidence"] = _asset_confidence(
+            slide.get("image_search_query", ""),
+            text,
+            context_entities,
+        )
+    return slide
 
 
 def _dedupe_query_words(query: str) -> str:
@@ -485,15 +653,48 @@ def parse_image_slides_llm_response(response_text: str) -> List[Dict]:
     raise ValueError(f"Could not parse image slides JSON from LLM response: {detail}")
 
 
-def _image_slides_rules_block(context_entities: List[str]) -> str:
+def _image_slides_rules_block(context_entities: List[str], video_profile: str = "short_vertical") -> str:
+    video_profile = normalize_video_profile(video_profile)
     entities_line = (
         ", ".join(context_entities)
         if context_entities
         else "None detected; use One Piece Logo or Grand Line Map for transitions"
     )
+    profile_line = (
+        "SHORTS PROFILE: 9:16 vertical, punchy 2-4 second beats, strong hook/reveal cards, large safe-centered subjects, subtitles have high priority.\n"
+        if video_profile == "short_vertical"
+        else (
+            "LONG-FORM PROFILE: 16:9 horizontal, calmer 5-9 second beats, section/chapter cards, "
+            "lower-third context, sparse keyword subtitles only, and each slide must tell the editor "
+            "exactly what the viewer should inspect during the narration.\n"
+        )
+    )
+    long_form_storyboard_rules = ""
+    if video_profile == "long_youtube":
+        long_form_storyboard_rules = (
+            "LONG-FORM STORYBOARD RULES:\n"
+            "- Think like an editor making a 6 minute anime essay, not a search engine.\n"
+            "- Each slide summary must answer: what should the viewer be looking at right now, and why does it support the claim?\n"
+            "- Do not make 80 near-identical Blackbeard portrait beats. Rotate visual functions: character portrait, crew/group, devil fruit/object, opposing character, location/arc, evidence card, quote card, section card.\n"
+            "- Use section_card for major argument turns: hook, psychology setup, evidence block, Luffy contrast, final warning, CTA.\n"
+            "- Use evidence_card when the narration cites behavior, choices, psychology, power, crew, institutions, or consequences.\n"
+            "- Use quote_card only for memorable thesis/payoff lines.\n"
+            "- image_search_query should be the exact manual storyboard target. Avoid numbered duplicates like 'Blackbeard 12'. If the same character repeats, change the scene/object: 'Blackbeard Jaya cherry pie', 'Blackbeard Yami Yami no Mi', 'Blackbeard Pirates Jaya', 'Whitebeard Marineford Blackbeard', 'Luffy Blackbeard Mock Town'.\n"
+            "- For abstract psychology, choose concrete visual evidence: fear -> child Teach moon image if mentioned, power hunger -> Yami Yami fruit, manipulation -> Blackbeard Pirates or Impel Down/Marineford, contrast -> Luffy vs Blackbeard.\n\n"
+        )
     return (
         "CRITICAL — each slide matches the SPOKEN lines in [start_time, end_time]. Faceless theory video (voiceover + B-roll).\n"
         "Before making slides, read ALL subtitles as one complete script. Infer the main topic, arc, characters, and argument, then choose each slide's search query from that whole-script understanding plus the local spoken beat.\n\n"
+        f"{profile_line}\n"
+        f"{long_form_storyboard_rules}"
+        "PRODUCTION EDIT STRUCTURE:\n"
+        "- First identify the full-script structure: hook, setup, evidence, reveal, payoff, CTA.\n"
+        "- Every slide must include production edit metadata: beat_type, visual_role, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence.\n"
+        "- beat_type values: hook, setup, evidence, reveal, payoff, cta.\n"
+        "- visual_role values: title_card, scene_broll, evidence_card, quote_card, lower_third, cta_card.\n"
+        "- short_vertical layout_mode values: safe_subject, title_card, quote_card, evidence_card, full_bleed.\n"
+        "- long_youtube layout_mode values: horizontal_feature, split_context, section_card, quote_card, evidence_card, full_bleed.\n"
+        "- motion_preset values: subject_push, evidence_hold, reveal_zoom, wide_pan, title_card_hold.\n\n"
         "CONTEXT-AWARE PACING:\n"
         "- Cut on idea changes, not only character names: hook, cause, consequence, example, rebuttal, payoff.\n"
         "- Prefer 2-5 seconds per slide. Never hold one visual across a new canon event, new character, or new emotional turn.\n"
@@ -523,42 +724,55 @@ def _image_slides_rules_block(context_entities: List[str]) -> str:
         "TIMING: merge short fragments; max ~3.5s per slide; continuous timestamps with no gaps. "
         "Each slide's end_time must equal the next slide's start_time.\n\n"
         "OUTPUT: ONLY a JSON array. Each object MUST include:\n"
-        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt\n"
+        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt, beat_type, visual_role, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence\n"
     )
 
 
 def _build_image_slides_full_prompt(
     timestamped_dialogues: List[Dict],
     context_entities: List[str],
+    video_profile: str = "short_vertical",
 ) -> str:
     raw_subtitles = "\n".join(
         f"{d['start']} - {d['end']}: {d['text']}" for d in timestamped_dialogues
     )
     return (
         "You are an expert video content designer specializing in One Piece. "
-        "Map timestamped subtitles to image search queries as a JSON array.\n\n"
-        f"{_image_slides_rules_block(context_entities)}\n"
+        "Map timestamped subtitles to a production edit plan and image search queries as a JSON array.\n\n"
+        f"{_image_slides_rules_block(context_entities, video_profile)}\n"
         "GOOD EXAMPLE (whole-script context, asset-search-only):\n"
         '[{"start_time":"0:00:00.03","end_time":"0:00:03.08",'
         '"summary":"Zoro trains from fear of weakness",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Roronoa Zoro training dojo",'
-        '"ai_image_prompt":""},'
+        '"ai_image_prompt":"",'
+        '"beat_type":"hook","visual_role":"title_card","layout_mode":"title_card",'
+        '"motion_preset":"subject_push","text_overlay":"Zoro trains from fear",'
+        '"emphasis_words":["Zoro"],"transition_in":"crossfade","sfx_cue":"crossfade","asset_confidence":0.82},'
         '{"start_time":"0:00:03.60","end_time":"0:00:07.80",'
         '"summary":"Kuina death creates Zoro fear",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Zoro Kuina Shimotsuki stairs",'
-        '"ai_image_prompt":""},'
+        '"ai_image_prompt":"",'
+        '"beat_type":"setup","visual_role":"evidence_card","layout_mode":"evidence_card",'
+        '"motion_preset":"evidence_hold","text_overlay":"Chapter five changed Zoro",'
+        '"emphasis_words":["Zoro","Kuina"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.92},'
         '{"start_time":"0:00:09.00","end_time":"0:00:11.84",'
         '"summary":"Mihawk humiliates Zoro at Baratie",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Zoro Mihawk Baratie cross knife",'
-        '"ai_image_prompt":""},'
+        '"ai_image_prompt":"",'
+        '"beat_type":"reveal","visual_role":"scene_broll","layout_mode":"safe_subject",'
+        '"motion_preset":"reveal_zoom","text_overlay":"",'
+        '"emphasis_words":["Zoro","Mihawk"],"transition_in":"zoom_dissolve","sfx_cue":"zoom_dissolve","asset_confidence":0.95},'
         '{"start_time":"0:00:31.49","end_time":"0:00:32.43",'
         '"summary":"Follow CTA",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"One Piece Logo",'
-        '"ai_image_prompt":""}]\n\n'
+        '"ai_image_prompt":"",'
+        '"beat_type":"cta","visual_role":"cta_card","layout_mode":"title_card",'
+        '"motion_preset":"title_card_hold","text_overlay":"Comment your theory",'
+        '"emphasis_words":["One Piece"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.75}]\n\n'
         "BAD: abstract emotion queries like 'Zoro trauma'; any ai_image_prompt text; five generic Zoro asset slides in a row.\n\n"
         "Subtitles:\n"
         f"{raw_subtitles}\n"
@@ -985,10 +1199,36 @@ def _infer_query_from_subtitle_text(text: str, context_entities: List[str]) -> O
     return None
 
 
+def _query_variant_hint(text: str) -> str:
+    lowered = (text or "").lower()
+    variants = [
+        (r"\bcrew|member|loyalty|followers|people\b", "crew"),
+        (r"\bfruit|devil fruit|darkness|yami|gura|power\b", "devil fruit"),
+        (r"\bwhitebeard|marineford|edward newgate\b", "Whitebeard Marineford"),
+        (r"\bluffy|roger|dream|freedom|contrast\b", "Luffy contrast"),
+        (r"\bworld government|impel down|institution|marine\b", "World Government"),
+        (r"\bfear|weak|child|moon|vulnerable\b", "child moon"),
+        (r"\bjaya|mock town|cherry pie\b", "Jaya"),
+        (r"\bmanipulat|leverage|exploit|transaction\b", "manipulation"),
+        (r"\bidentity|obsession|devotion|tragedy\b", "obsession"),
+        (r"\bwarning|monster|evil|humanity\b", "warning"),
+    ]
+    for pattern, hint in variants:
+        if re.search(pattern, lowered):
+            return hint
+    words = [
+        word
+        for word in re.findall(r"\b[A-Za-z][A-Za-z'-]{3,}\b", text or "")
+        if word.lower() not in {"this", "that", "there", "their", "because", "between", "dreams", "blackbeard"}
+    ]
+    return " ".join(words[:2])
+
+
 def _refine_slides_from_subtitles(
     slides: List[Dict],
     dialogues: List[Dict],
     context_entities: List[str],
+    video_profile: str = "short_vertical",
 ) -> List[Dict]:
     """
     Attach subtitle_text per slide, align queries to spoken content, dedupe repeats.
@@ -997,7 +1237,8 @@ def _refine_slides_from_subtitles(
     luffy_asset_count = 0
     refined: List[Dict] = []
 
-    for slide in slides:
+    total = len(slides)
+    for index, slide in enumerate(slides):
         start = slide["start_time"]
         end = slide["end_time"]
         subtitle_text = _collect_subtitle_text_in_range(dialogues, start, end)
@@ -1051,7 +1292,8 @@ def _refine_slides_from_subtitles(
                 query = "Marshall D. Teach Blackbeard Pirates"
             else:
                 used_queries[base_key] += 1
-                query = f"{query} {used_queries[base_key]}"
+                hint = _query_variant_hint(f"{subtitle_text} {summary}")
+                query = f"{query} {hint}".strip() if hint and hint.lower() not in base_key else f"{query} alternate scene"
 
         if not preserve_ai:
             used_queries[base_key] = used_queries.get(base_key, 0) + 1
@@ -1069,6 +1311,20 @@ def _refine_slides_from_subtitles(
             q_lower = (slide.get("image_search_query") or "").lower()
             if "luffy" in q_lower:
                 luffy_asset_count += 1
+        duplicate_count = used_queries.get((slide.get("image_search_query") or "").lower(), 1) - 1
+        slide["asset_confidence"] = _asset_confidence(
+            slide.get("image_search_query", ""),
+            subtitle_text,
+            slide.get("context_entities") or context_entities,
+            duplicate_count=max(0, duplicate_count),
+        )
+        slide = _apply_production_edit_defaults(
+            slide,
+            index,
+            total,
+            video_profile,
+            slide.get("context_entities") or context_entities,
+        )
         refined.append(slide)
 
     return refined
@@ -1084,7 +1340,13 @@ def _script_context_summary(dialogues: List[Dict]) -> Dict:
     }
 
 
-def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: float) -> str:
+def generate_gemini_image_slides(
+    ass_path: str,
+    out_path: str,
+    total_duration: float,
+    video_profile: str = "short_vertical",
+) -> str:
+    video_profile = normalize_video_profile(video_profile)
     # Read and group all dialogues as before
     dialogues = parse_ass_dialogues(ass_path)
     grouped_dialogues = group_dialogues(dialogues)
@@ -1106,7 +1368,7 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     try:
-        prompt = _build_image_slides_full_prompt(timestamped_dialogues, context_entities)
+        prompt = _build_image_slides_full_prompt(timestamped_dialogues, context_entities, video_profile)
         response_text = call_image_slides_llm(prompt)
         if not response_text:
             raise ValueError("Empty LLM response for image slides")
@@ -1144,6 +1406,19 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
                 "ai_image_prompt": (gemini_slide.get("ai_image_prompt") or "").strip(),
                 "context_entities": slide_entities or context_entities,
             }
+            for key in (
+                "beat_type",
+                "visual_role",
+                "layout_mode",
+                "motion_preset",
+                "text_overlay",
+                "emphasis_words",
+                "transition_in",
+                "sfx_cue",
+                "asset_confidence",
+            ):
+                if key in gemini_slide:
+                    slide[key] = gemini_slide[key]
             final_slides.append(slide)
 
         final_slides = _split_long_slides_by_dialogues(
@@ -1155,6 +1430,7 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
             final_slides,
             timestamped_dialogues,
             context_entities,
+            video_profile,
         )
         final_slides = _repair_slide_timing_continuity(
             final_slides,
@@ -1176,6 +1452,11 @@ def generate_gemini_image_slides(ass_path: str, out_path: str, total_duration: f
         raise
 
 
-def generate_image_slides(ass_path: str, out_path: str, total_duration: float) -> str:
+def generate_image_slides(
+    ass_path: str,
+    out_path: str,
+    total_duration: float,
+    video_profile: str = "short_vertical",
+) -> str:
     """Generate slide timing + search terms JSON (images uploaded separately)."""
-    return generate_gemini_image_slides(ass_path, out_path, total_duration)
+    return generate_gemini_image_slides(ass_path, out_path, total_duration, video_profile)

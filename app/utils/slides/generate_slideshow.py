@@ -383,6 +383,134 @@ def crop_static_frame(scaled, resolution):
     return frame
 
 
+def _wrap_overlay_text(text: str, max_chars: int) -> List[str]:
+    words = (text or "").strip().split()
+    lines: List[str] = []
+    current: List[str] = []
+    for word in words:
+        candidate = " ".join([*current, word])
+        if current and len(candidate) > max_chars:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return lines[:3]
+
+
+def _draw_label(
+    out: np.ndarray,
+    text: str,
+    x: int,
+    y: int,
+    font_scale: float,
+    color=(238, 198, 88),
+    thickness: int = 2,
+) -> None:
+    if not text:
+        return
+    cv2.putText(
+        out,
+        text.upper(),
+        (x, y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def _draw_text_panel(frame: np.ndarray, text: str, resolution, mode: str) -> np.ndarray:
+    """Draw production-grade title/evidence/quote overlays within safe bounds."""
+    if not text:
+        return frame
+    res_w, res_h = resolution
+    out = frame.copy()
+    is_horizontal = res_w > res_h
+    mode = (mode or "title_card").strip().lower()
+
+    if is_horizontal and mode in {"horizontal_feature", "split_context"}:
+        panel_w = int(res_w * 0.36)
+        x0 = int(res_w * 0.055)
+        y0 = int(res_h * 0.14)
+        max_chars = 26
+    elif is_horizontal and mode in {"evidence_card", "quote_card", "lower_third"}:
+        panel_w = int(res_w * 0.44)
+        x0 = int(res_w * 0.055)
+        y0 = int(res_h * 0.60)
+        max_chars = 30
+    else:
+        panel_w = int(res_w * (0.62 if is_horizontal else 0.86))
+        x0 = (res_w - panel_w) // 2
+        y0 = int(res_h * (0.06 if is_horizontal else 0.08))
+        max_chars = 32 if is_horizontal else 24
+
+    is_title = mode in {"title_card", "section_card"}
+    is_quote = mode == "quote_card"
+    display_text = text.upper() if is_title else f'"{text}"' if is_quote else text
+    lines = _wrap_overlay_text(display_text, max_chars)
+    if not lines:
+        return out
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.76 if is_horizontal else 0.92
+    if is_title:
+        font_scale = 0.90 if is_horizontal else 1.04
+    thickness = 2
+    line_h = int(42 * font_scale) + 16
+    panel_h = max(92, line_h * len(lines) + (58 if is_horizontal else 40))
+    y0 = max(24, min(y0, res_h - panel_h - 32))
+
+    overlay = out.copy()
+    if is_title:
+        cv2.rectangle(overlay, (0, 0), (res_w, int(res_h * (0.25 if is_horizontal else 0.19))), (8, 10, 16), -1)
+        out = cv2.addWeighted(overlay, 0.48, out, 0.52, 0)
+    else:
+        cv2.rectangle(overlay, (x0, y0), (x0 + panel_w, y0 + panel_h), (10, 12, 18), -1)
+        out = cv2.addWeighted(overlay, 0.66, out, 0.34, 0)
+
+    accent = (238, 198, 88)
+    if mode == "evidence_card":
+        accent = (96, 185, 255)
+    elif mode == "quote_card":
+        accent = (230, 230, 230)
+    elif mode in {"horizontal_feature", "split_context"}:
+        accent = (142, 220, 168)
+
+    cv2.rectangle(out, (x0, y0), (x0 + panel_w, y0 + panel_h), accent, 2)
+    if mode == "evidence_card":
+        _draw_label(out, "Evidence", x0 + 22, y0 + 30, 0.54 if is_horizontal else 0.62, accent, 2)
+    elif mode in {"section_card", "title_card"}:
+        cv2.line(out, (x0 + 24, y0 + panel_h - 16), (x0 + panel_w - 24, y0 + panel_h - 16), accent, 3)
+    elif mode == "quote_card":
+        _draw_label(out, "Quote", x0 + 22, y0 + 30, 0.54 if is_horizontal else 0.62, accent, 2)
+
+    y = y0 + (48 if mode in {"evidence_card", "quote_card"} else 36)
+    for line in lines:
+        (tw, th), _ = cv2.getTextSize(line, font, font_scale, thickness)
+        if mode in {"horizontal_feature", "split_context", "evidence_card", "quote_card"}:
+            tx = x0 + 24
+        else:
+            tx = x0 + max(22, (panel_w - tw) // 2)
+        cv2.putText(out, line, (tx, y + th), font, font_scale, (245, 245, 245), thickness, cv2.LINE_AA)
+        y += line_h
+    return out
+
+
+def apply_production_overlay(frame: np.ndarray, slide_meta: Optional[Dict], resolution) -> np.ndarray:
+    if not slide_meta:
+        return frame
+    text = (slide_meta.get("text_overlay") or "").strip()
+    layout = (slide_meta.get("layout_mode") or "").strip().lower()
+    role = (slide_meta.get("visual_role") or "").strip().lower()
+    if not text:
+        return frame
+    mode = layout if layout else role
+    return _draw_text_panel(frame, text, resolution, mode)
+
+
 KEN_BURNS_ZOOM = {
     "slow_push": (1.0, 1.14),
     "impact_zoom": (1.06, 1.22),
@@ -390,10 +518,24 @@ KEN_BURNS_ZOOM = {
     "pull_out": (1.16, 1.0),
     "stable_pan": (1.0, 1.10),
     "diagonal_pan": (1.0, 1.12),
+    "subject_push": (1.0, 1.10),
+    "evidence_hold": (1.0, 1.035),
+    "reveal_zoom": (1.04, 1.18),
+    "wide_pan": (1.0, 1.08),
+    "title_card_hold": (1.0, 1.0),
 }
 
-KEN_BURNS_CENTER_LOCKED = {"slow_push", "impact_zoom", "hold_still", "pull_out"}
-STATIC_HOLD_MOTIONS = {"static_hold", "still_frame", "no_ken_burns"}
+KEN_BURNS_CENTER_LOCKED = {
+    "slow_push",
+    "impact_zoom",
+    "hold_still",
+    "pull_out",
+    "subject_push",
+    "evidence_hold",
+    "reveal_zoom",
+    "title_card_hold",
+}
+STATIC_HOLD_MOTIONS = {"static_hold", "still_frame", "no_ken_burns", "title_card_hold"}
 FRAME_SAFE_TRANSITIONS = {
     "fade",
     "fade_eased",
@@ -810,6 +952,7 @@ def emit_panoramic_pan(
     start_frame=0,
     pan_strength=1.0,
     motion: str = "slow_push",
+    slide_meta: Optional[Dict] = None,
 ):
     """Render slide frames with Ken Burns (default) or legacy horizontal pan."""
     num_frames = int(duration * fps)
@@ -859,6 +1002,7 @@ def emit_panoramic_pan(
             frame = crop_static_frame(scaled, resolution)
         else:
             frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
+        frame = apply_production_overlay(frame, slide_meta, resolution)
         frame_writer.write(frame)
         frame_counter += 1
         last_frame = frame
@@ -874,6 +1018,7 @@ def render_panned_frame(
     blur_amount=0,
     pan_strength=1.0,
     motion: str = "slow_push",
+    slide_meta: Optional[Dict] = None,
 ):
     """Render a single frame at pan progress t (matches emit_panoramic_pan)."""
     res_w, res_h = resolution
@@ -884,17 +1029,20 @@ def render_panned_frame(
         if scaled is None:
             logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
             return np.zeros((res_h, res_w, 3), dtype=np.uint8)
-        return crop_ken_burns_frame(
+        frame = crop_ken_burns_frame(
             scaled, scaled_w, scaled_h, resolution, idx, t, motion=motion, pan_strength=pan_strength
         )
+        return apply_production_overlay(frame, slide_meta, resolution)
 
     scaled, scaled_w = prepare_slide_canvas(img_path, resolution, blur_amount)
     if scaled is None:
         logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
         return np.zeros((res_h, res_w, 3), dtype=np.uint8)
     if (motion or "") in STATIC_HOLD_MOTIONS:
-        return crop_static_frame(scaled, resolution)
-    return crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
+        frame = crop_static_frame(scaled, resolution)
+    else:
+        frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
+    return apply_production_overlay(frame, slide_meta, resolution)
 
 
 def weighted_choice(weighted_items):
@@ -1446,6 +1594,81 @@ def create_placeholder_slide(image_dir, resolution, label="One Piece"):
     return output_path
 
 
+def build_visual_quality_report(
+    slides: List[Dict],
+    resolution,
+    frames_written: int,
+    expected_frames: int,
+    transition_events: List[Dict],
+    output_path: str,
+) -> Dict:
+    """Summarize visual quality risks for generated slideshow artifacts."""
+    res_w, res_h = sanitize_size(resolution)
+    warnings: List[str] = []
+    duplicate_runs = 0
+    previous_query = None
+    current_run = 1
+    overlong_holds = 0
+    missing_assets = 0
+    low_confidence = 0
+
+    for slide in slides:
+        query = (slide.get("image_search_query") or "").strip().lower()
+        if query and query == previous_query:
+            current_run += 1
+            if current_run > 2:
+                duplicate_runs += 1
+        else:
+            current_run = 1
+        previous_query = query
+
+        try:
+            duration = parse_time(slide["end_time"]) - parse_time(slide["start_time"])
+        except Exception:
+            duration = 0
+        if duration > (8.0 if res_w > res_h else 5.5):
+            overlong_holds += 1
+        if not slide.get("image_path") and not slide.get("image_search_query"):
+            missing_assets += 1
+        if float(slide.get("asset_confidence") or 1.0) < 0.55:
+            low_confidence += 1
+
+    if frames_written != expected_frames:
+        warnings.append(f"Frame count mismatch: wrote {frames_written}, expected {expected_frames}")
+    if duplicate_runs:
+        warnings.append(f"Repeated visual query runs over limit: {duplicate_runs}")
+    if overlong_holds:
+        warnings.append(f"Overlong slide holds detected: {overlong_holds}")
+    if missing_assets:
+        warnings.append(f"Slides missing image query/path: {missing_assets}")
+    if low_confidence:
+        warnings.append(f"Low-confidence visual matches: {low_confidence}")
+    if len(transition_events) > max(2, len(slides) * 0.85):
+        warnings.append("Transition density is high; consider calmer pacing")
+
+    return {
+        "output_path": output_path,
+        "resolution": {"width": res_w, "height": res_h},
+        "frames_written": frames_written,
+        "expected_frames": expected_frames,
+        "slides": len(slides),
+        "transitions": len(transition_events),
+        "duplicate_query_runs_over_limit": duplicate_runs,
+        "overlong_holds": overlong_holds,
+        "missing_asset_references": missing_assets,
+        "low_confidence_assets": low_confidence,
+        "warnings": warnings,
+        "status": "ok" if not warnings else "review",
+    }
+
+
+def write_visual_quality_report(report: Dict, output_path: str) -> str:
+    report_path = os.path.splitext(output_path)[0] + ".visual_quality.json"
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+    return report_path
+
+
 def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDEO_RESOLUTION, fps=30, blur_amount=5, transition_type='auto', transition_duration=0.5, flip_horizontal_once=False, avoid_same_direction_horizontal=True, slide_blur_amount=0, quality_mode='standard', pan_strength=1.0, visual_style=None):
     """
     Generates the final slideshow video using OpenCV.
@@ -1522,7 +1745,10 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
         # Decide transition type into THIS slide (except first)
         selected_transition_type = 'none'
         if idx > 0 and transition_duration > 0:
-            if isinstance(transition_type, str):
+            explicit_transition = (slide.get("transition_in") or slide.get("transition_type") or "").strip().lower()
+            if explicit_transition:
+                selected_transition_type = explicit_transition
+            elif isinstance(transition_type, str):
                 tt = transition_type.lower()
                 if tt == 'pro':
                     if visual_style:
@@ -1632,6 +1858,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
     last_output_frame = None
     prev_img_path = None
     prev_motion = "slow_push"
+    prev_slide_meta = None
     prev_slide_idx = 0
     frame_writer = RawVideoFFmpegWriter(output_path, resolution, fps, quality_mode, total_frames=total_output_frames)
 
@@ -1731,8 +1958,9 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     logger.info(f"Using converted JPG: {jpg_path}")
                     img_path = jpg_path
 
-            beat = classify_beat(slide.get("summary", ""), idx, len(slides))
-            slide_motion = choose_slide_motion(
+            beat = (slide.get("beat_type") or classify_beat(slide.get("summary", ""), idx, len(slides))).strip().lower()
+            requested_motion = (slide.get("motion_preset") or "").strip().lower()
+            slide_motion = requested_motion or choose_slide_motion(
                 visual_style,
                 beat,
                 idx,
@@ -1794,6 +2022,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     blur_amount=slide_blur_amount,
                     pan_strength=pan_strength,
                     motion=slide_motion,
+                    slide_meta=slide,
                 )
                 logger.debug(
                     "Next transition endpoint: %s t=0.0 motion=%s idx=%s",
@@ -1813,6 +2042,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         blur_amount=slide_blur_amount,
                         pan_strength=pan_strength,
                         motion=prev_motion,
+                        slide_meta=prev_slide_meta,
                     )
                     logger.debug(
                         "Current transition endpoint: %s t=1.0 motion=%s idx=%s",
@@ -1840,10 +2070,12 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                 )
 
                 visual_transition_time = frames_written / max(1, fps)
+                sfx_cue = (slide.get("sfx_cue") or selected_transition_type or "default").strip().lower()
                 transition_events.append(
                     {
                         "time": visual_transition_time,
-                        "transition": selected_transition_type,
+                        "transition": sfx_cue,
+                        "visual_transition": selected_transition_type,
                         "slide_index": idx + 1,
                         "duration": transition_frames / max(1, fps),
                         "frame": frames_written,
@@ -1854,7 +2086,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     "Transition SFX cue aligned to video frame %s (%.3fs): %s",
                     frames_written,
                     visual_transition_time,
-                    selected_transition_type,
+                    sfx_cue,
                 )
                 
                 current_frame = fit_frame_to_resolution(current_frame, resolution)
@@ -2044,6 +2276,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                         start_frame=start_frame,
                         pan_strength=pan_strength,
                         motion=slide_motion,
+                        slide_meta=slide,
                     )
                     if last_pan_frame is not None:
                         last_output_frame = last_pan_frame
@@ -2063,6 +2296,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
 
                 prev_img_path = img_path
                 prev_motion = slide_motion
+                prev_slide_meta = slide
                 prev_slide_idx = slides_processed
                 slides_processed += 1
                 
@@ -2086,6 +2320,16 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
 
     try:
         frame_writer.close()
+        report = build_visual_quality_report(
+            slides,
+            resolution,
+            frames_written,
+            total_output_frames,
+            transition_events,
+            output_path,
+        )
+        report_path = write_visual_quality_report(report, output_path)
+        logger.info("Visual quality report written to %s (status=%s)", report_path, report["status"])
         logger.info(f"Video successfully generated at {output_path}")
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg raw frame writer failed: {e}")

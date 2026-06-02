@@ -3,12 +3,14 @@ import unittest
 from app.utils.slides.image_slides import (
     _anchor_ai_image_prompt,
     _apply_visual_source_plan,
+    _apply_production_edit_defaults,
     _build_ai_image_prompt,
     _build_image_slides_full_prompt,
     _infer_query_from_subtitle_text,
     _needs_ai_visual,
     _repair_slide_timing_continuity,
     _split_long_slides_by_dialogues,
+    parse_ass_dialogues,
 )
 
 
@@ -23,13 +25,67 @@ class ImageSlidesPromptTests(unittest.TestCase):
                 }
             ],
             ["Loki", "Elbaf"],
+            video_profile="short_vertical",
         )
 
         self.assertIn('visual_source to "asset_search"', prompt)
         self.assertIn('ai_image_prompt to empty string ""', prompt)
         self.assertIn("read ALL subtitles as one complete script", prompt)
+        self.assertIn("PRODUCTION EDIT STRUCTURE", prompt)
+        self.assertIn("beat_type, visual_role, layout_mode", prompt)
+        self.assertIn("SHORTS PROFILE", prompt)
         self.assertIn("Loki Elbaf chains", prompt)
         self.assertNotIn("USE ai_generate", prompt)
+
+    def test_full_prompt_includes_long_form_profile_rules(self):
+        prompt = _build_image_slides_full_prompt(
+            [{"start": "0:00:00.00", "end": "0:00:05.00", "text": "Elbaf changes the entire timeline."}],
+            ["Elbaf"],
+            video_profile="long_youtube",
+        )
+
+        self.assertIn("LONG-FORM PROFILE", prompt)
+        self.assertIn("section/chapter cards", prompt)
+        self.assertIn("horizontal_feature", prompt)
+        self.assertIn("what the viewer should inspect", prompt)
+
+    def test_parse_ass_prefers_hidden_storyboard_lines_for_long_form(self):
+        import tempfile
+        from pathlib import Path
+
+        ass = """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Comment: 0,0:00:00.00,0:00:04.00,Storyboard,,0,0,0,,Blackbeard treats dreams like survival.
+Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.ass"
+            path.write_text(ass, encoding="utf-8")
+            lines = parse_ass_dialogues(str(path))
+
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["text"], "Blackbeard treats dreams like survival.")
+
+    def test_production_defaults_differ_by_profile(self):
+        short = _apply_production_edit_defaults(
+            {"summary": "The hidden truth about Elbaf", "subtitle_text": "The hidden truth about Elbaf"},
+            0,
+            3,
+            "short_vertical",
+            ["Elbaf"],
+        )
+        long = _apply_production_edit_defaults(
+            {"summary": "The hidden truth about Elbaf", "subtitle_text": "The hidden truth about Elbaf"},
+            0,
+            3,
+            "long_youtube",
+            ["Elbaf"],
+        )
+
+        self.assertEqual(short["layout_mode"], "title_card")
+        self.assertEqual(long["layout_mode"], "section_card")
+        self.assertIn("motion_preset", short)
+        self.assertIn("asset_confidence", short)
 
     def test_build_ai_prompt_anchors_to_spoken_line_and_context(self):
         prompt = _build_ai_image_prompt(

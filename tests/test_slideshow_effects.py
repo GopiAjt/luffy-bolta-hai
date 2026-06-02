@@ -3,6 +3,8 @@ import unittest
 import numpy as np
 
 from app.utils.slides.generate_slideshow import (
+    apply_production_overlay,
+    build_visual_quality_report,
     choose_slide_motion,
     choose_transition,
     cube_rotation_effect,
@@ -137,6 +139,33 @@ class SlideshowEffectsTests(unittest.TestCase):
         for idx in range(24):
             transition = choose_transition(idx, 4.5, None)
             self.assertIn(transition, allowed)
+
+    def test_production_overlay_preserves_frame_size_and_changes_pixels(self):
+        frame = np.zeros((192, 108, 3), dtype=np.uint8)
+        result = apply_production_overlay(
+            frame,
+            {"text_overlay": "The truth about Elbaf", "layout_mode": "title_card", "visual_role": "title_card"},
+            (108, 192),
+        )
+
+        self.assertEqual(result.shape, frame.shape)
+        self.assertFalse(np.array_equal(result, frame))
+        self.assertFalse(np.array_equal(result[:110], frame[:110]))
+        self.assertTrue(np.array_equal(result[130:], frame[130:]))
+
+    def test_visual_quality_report_flags_duplicate_runs_and_frame_mismatch(self):
+        slides = [
+            {"start_time": "0:00:00.00", "end_time": "0:00:02.00", "image_search_query": "Loki Elbaf", "asset_confidence": 0.8},
+            {"start_time": "0:00:02.00", "end_time": "0:00:04.00", "image_search_query": "Loki Elbaf", "asset_confidence": 0.8},
+            {"start_time": "0:00:04.00", "end_time": "0:00:12.50", "image_search_query": "Loki Elbaf", "asset_confidence": 0.4},
+        ]
+
+        report = build_visual_quality_report(slides, (1080, 1920), 100, 120, [], "out.mp4")
+
+        self.assertEqual(report["status"], "review")
+        self.assertGreater(report["duplicate_query_runs_over_limit"], 0)
+        self.assertGreater(report["overlong_holds"], 0)
+        self.assertGreater(report["low_confidence_assets"], 0)
 
     def test_slide_motion_can_choose_static_hold_for_cta(self):
         original_uniform = __import__("random").uniform

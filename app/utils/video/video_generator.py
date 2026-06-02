@@ -41,6 +41,20 @@ EXPRESSION_OVERLAY_CHUNK_SIZE = max(
 # opencv = single-pass (fast); ffmpeg = chunked filter_complex (legacy)
 EXPRESSION_RENDERER = os.getenv("EXPRESSION_RENDERER", "opencv").strip().lower()
 EXPRESSION_MERGE_GAP_SECONDS = float(os.getenv("EXPRESSION_MERGE_GAP_SECONDS", "0.15"))
+LONG_FORM_EXPRESSION_LABELS = {
+    "serious",
+    "happy",
+    "excited",
+    "angry",
+    "surprised",
+    "sad",
+    "worried",
+    "smirking",
+    "confident",
+    "intense",
+    "embarrassed",
+}
+LONG_FORM_EXPRESSION_POSITIONS = ("bottom_right", "mid_right", "bottom_left", "mid_left", "top_right")
 
 
 def _x264_speed_settings(quality_mode: str) -> Tuple[str, str]:
@@ -769,6 +783,19 @@ class VideoGenerator:
 
         return sanitized
 
+    def _parse_resolution(self, resolution: str, fallback: Tuple[int, int] = (1080, 1920)) -> Tuple[int, int]:
+        try:
+            res_x, res_y = map(int, (resolution or "").lower().split("x"))
+            return res_x, res_y
+        except Exception:
+            return fallback
+
+    def _expression_position(self, label: str, index: int, horizontal: bool) -> str:
+        if not horizontal:
+            return "bottom_center"
+        digest_seed = sum(ord(ch) for ch in (label or "")) + index
+        return LONG_FORM_EXPRESSION_POSITIONS[digest_seed % len(LONG_FORM_EXPRESSION_POSITIONS)]
+
     def generate_video_with_expressions(
         self,
         audio_path: str,
@@ -808,6 +835,8 @@ class VideoGenerator:
         try:
             quality_mode = (quality_mode or 'standard').lower()
             pro_mode = quality_mode == 'pro'
+            res_x, res_y = self._parse_resolution(resolution)
+            horizontal_video = res_x > res_y
             logger.info(
                 f"generate_video_with_expressions called with background_video_path: {background_video_path}")
             logger.info(f"Video quality mode: {quality_mode}")
@@ -826,6 +855,8 @@ class VideoGenerator:
             overlay_groups: Dict[str, Dict] = {}
             for expr in expressions:
                 label = expr['expression'].lower()
+                if horizontal_video and label not in LONG_FORM_EXPRESSION_LABELS:
+                    continue
                 character = (expr.get('character') or NARRATOR_CHARACTER).lower()
                 group_key = f"{character}::{label}"
                 if group_key not in overlay_groups:
@@ -839,8 +870,13 @@ class VideoGenerator:
                 overlay_groups[group_key]["intervals"].append((start_time, end_time))
 
             for group in overlay_groups.values():
+                max_interval = 4.2 if horizontal_video else 8.0
                 group["intervals"] = self._merge_expression_intervals(
-                    self._sanitize_expression_intervals(group["intervals"])
+                    self._sanitize_expression_intervals(
+                        group["intervals"],
+                        max_interval_seconds=max_interval,
+                    ),
+                    gap_tolerance=0.05 if horizontal_video else EXPRESSION_MERGE_GAP_SECONDS,
                 )
 
             logger.info(
@@ -885,7 +921,7 @@ class VideoGenerator:
                 )
 
                 abs_img_path = os.path.abspath(img_path)
-                for interval in intervals:
+                for interval_index, interval in enumerate(intervals):
                     start = interval["start"]
                     end = interval["end"]
                     if end <= start:
@@ -894,6 +930,9 @@ class VideoGenerator:
                         )
                         continue
                     interval_duration = end - start
+                    if horizontal_video and interval_duration < 1.2:
+                        end = min(duration, start + 1.2)
+                        interval_duration = end - start
                     fade_duration = max(0.05, min(0.28, interval_duration / 3))
                     overlay_specs.append(
                         {
@@ -906,7 +945,8 @@ class VideoGenerator:
                             "interval_duration": interval_duration,
                             "effect": resolve_expression_effect(label, visual_style),
                             "source_count": interval["source_count"],
-                            "continuous_hold": interval["source_count"] > 1,
+                            "continuous_hold": (interval["source_count"] > 1 and not horizontal_video),
+                            "position": self._expression_position(label, interval_index, horizontal_video),
                         }
                     )
                     logger.info(

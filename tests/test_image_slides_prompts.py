@@ -1,13 +1,11 @@
 import unittest
 
 from app.utils.slides.image_slides import (
-    _anchor_ai_image_prompt,
     _apply_visual_source_plan,
     _apply_production_edit_defaults,
-    _build_ai_image_prompt,
+    _apply_visual_architecture_pass,
     _build_image_slides_full_prompt,
     _infer_query_from_subtitle_text,
-    _needs_ai_visual,
     _repair_slide_timing_continuity,
     _split_long_slides_by_dialogues,
     parse_ass_dialogues,
@@ -33,7 +31,22 @@ class ImageSlidesPromptTests(unittest.TestCase):
         self.assertIn("read ALL subtitles as one complete script", prompt)
         self.assertIn("PRODUCTION EDIT STRUCTURE", prompt)
         self.assertIn("beat_type, visual_role, layout_mode", prompt)
+        self.assertIn("viewer_focus", prompt)
+        self.assertIn("manual_upload_brief", prompt)
+        self.assertIn("avoid_visual_reuse", prompt)
+        self.assertIn("visual_purpose", prompt)
+        self.assertIn("narration -> visual_purpose -> visual_role -> visual", prompt)
+        self.assertIn("character -> object -> crew/group/evidence -> location -> symbol -> comparison -> timeline", prompt)
         self.assertIn("SHORTS PROFILE", prompt)
+        self.assertIn("HOOK RETENTION PASS", prompt)
+        self.assertIn("VISUAL ARCHITECTURE", prompt)
+        self.assertIn("Emotional Curve Builder -> Visual Intent Classifier -> Asset Selector", prompt)
+        self.assertIn("asset_metadata, visual_intent, emotion_state", prompt)
+        self.assertIn("composition_layers", prompt)
+        self.assertIn("motion_plan", prompt)
+        self.assertIn("split it into 2-4 smaller visual cues", prompt)
+        self.assertIn("Do not hold only a logo during the hook", prompt)
+        self.assertIn("curiosity gap", prompt)
         self.assertIn("Loki Elbaf chains", prompt)
         self.assertNotIn("USE ai_generate", prompt)
 
@@ -48,6 +61,7 @@ class ImageSlidesPromptTests(unittest.TestCase):
         self.assertIn("section/chapter cards", prompt)
         self.assertIn("horizontal_feature", prompt)
         self.assertIn("what the viewer should inspect", prompt)
+        self.assertIn("what should be inspected on screen", prompt)
 
     def test_parse_ass_prefers_hidden_storyboard_lines_for_long_form(self):
         import tempfile
@@ -86,47 +100,37 @@ Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
         self.assertEqual(long["layout_mode"], "section_card")
         self.assertIn("motion_preset", short)
         self.assertIn("asset_confidence", short)
+        self.assertIn("visual_purpose", long)
+        self.assertIn("viewer_focus", long)
+        self.assertIn("manual_upload_brief", long)
+        self.assertIn("avoid_visual_reuse", long)
 
-    def test_build_ai_prompt_anchors_to_spoken_line_and_context(self):
-        prompt = _build_ai_image_prompt(
-            "Dragon leaves the Marines due to corruption",
-            "He was a Marine . He abandoned his military post after witnessing the horrific corruption",
-            ["Dragon", "World Government"],
+    def test_editor_visual_roles_are_inferred_from_story_purpose(self):
+        fruit = _apply_production_edit_defaults(
+            {"summary": "Blackbeard reaches for the Yami Yami no Mi fruit", "subtitle_text": "The fruit becomes his obsession."},
+            3,
+            8,
+            "short_vertical",
+            ["Blackbeard"],
+        )
+        place = _apply_production_edit_defaults(
+            {"summary": "Everything begins in Jaya", "subtitle_text": "Jaya is where his dream becomes visible."},
+            4,
+            8,
+            "long_youtube",
+            ["Blackbeard"],
+        )
+        contrast = _apply_production_edit_defaults(
+            {"summary": "Unlike Luffy, Blackbeard consumes his own identity", "subtitle_text": "Unlike Luffy, Blackbeard consumes his own identity."},
+            5,
+            8,
+            "long_youtube",
+            ["Blackbeard", "Luffy"],
         )
 
-        self.assertIn("Visualize this narration beat", prompt)
-        self.assertIn("He was a Marine", prompt)
-        self.assertIn("Main context: Dragon", prompt)
-        self.assertTrue(prompt.startswith("Vertical 9:16 One Piece anime style illustration"))
-
-    def test_anchor_ai_prompt_preserves_scene_but_adds_line_context(self):
-        prompt = _anchor_ai_image_prompt(
-            "Vertical 9:16 One Piece anime style illustration, no text, no watermark. "
-            "A desk covered in complex tactical maps, stolen Navy documents with red wax seals, "
-            "and a compass, dimly lit by a single candle.",
-            "Revolutionary strategy based on stolen Navy secrets",
-            "This means the Revolutionary Army 's entire global strategy is actually built on classified Navy secrets Dragon stole from the inside ,",
-            ["Dragon", "Revolutionary Army"],
-        )
-
-        self.assertIn("Visualize this narration beat", prompt)
-        self.assertIn("classified Navy secrets Dragon stole", prompt)
-        self.assertIn("Main context: Dragon, Revolutionary Army", prompt)
-        self.assertIn("A desk covered in complex tactical maps", prompt)
-
-    def test_anchor_ai_prompt_does_not_duplicate_existing_spoken_anchor(self):
-        prompt = _anchor_ai_image_prompt(
-            "Vertical 9:16 One Piece anime style illustration, no text, no watermark. "
-            "Visualize this narration beat, without showing words: 'Roger realized Poseidon would not be born for ten more years.' "
-            "A pirate silhouette drops a useless ancient weapon blueprint beside a glowing mermaid crown.",
-            "Poseidon is not born yet",
-            "Roger realized Poseidon would not be born for ten more years",
-            ["Poseidon", "Gol D. Roger"],
-        )
-
-        self.assertEqual(prompt.count("Visualize this narration beat"), 1)
-        self.assertIn("Main context: Poseidon, Gol D. Roger", prompt)
-        self.assertIn("drops a useless ancient weapon blueprint", prompt)
+        self.assertEqual(fruit["visual_role"], "object")
+        self.assertEqual(place["visual_role"], "location")
+        self.assertEqual(contrast["visual_role"], "comparison")
 
     def test_zoro_specific_queries_are_inferred_from_spoken_context(self):
         self.assertEqual(
@@ -142,16 +146,6 @@ Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
                 ["Zoro"],
             ),
             "Zoro Mihawk Baratie cross knife",
-        )
-
-    def test_psychological_beats_stay_on_searchable_canon_scenes(self):
-        self.assertFalse(
-            _needs_ai_visual(
-                "He is haunted by the randomness of mortality and powerlessness.",
-                "Zoro's fear of weakness becomes a shield",
-                "Zoro Kuina Shimotsuki stairs",
-                0,
-            )
         )
 
     def test_long_slides_split_into_subtitle_grounded_beats(self):
@@ -248,6 +242,55 @@ Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
         self.assertEqual(repaired[0]["end_time"], repaired[1]["start_time"])
         self.assertEqual(repaired[1]["end_time"], repaired[2]["start_time"])
         self.assertEqual(repaired[-1]["end_time"], "0:00:09.50")
+
+    def test_visual_architecture_pass_adds_editorial_engines(self):
+        slides = [
+            _apply_production_edit_defaults(
+                {
+                    "start_time": "0:00:00.00",
+                    "end_time": "0:00:02.00",
+                    "summary": "The hidden truth about Zoro starts with Kuina",
+                    "subtitle_text": "The hidden truth about Zoro starts with Kuina.",
+                    "image_search_query": "Zoro Kuina Shimotsuki stairs",
+                    "context_entities": ["Zoro", "Kuina"],
+                },
+                0,
+                2,
+                "short_vertical",
+                ["Zoro", "Kuina"],
+            ),
+            _apply_production_edit_defaults(
+                {
+                    "start_time": "0:00:02.00",
+                    "end_time": "0:00:04.00",
+                    "summary": "Mihawk exposes Zoro at Baratie",
+                    "subtitle_text": "Mihawk exposes Zoro at Baratie with a tiny cross knife.",
+                    "image_search_query": "Zoro Mihawk Baratie cross knife",
+                    "context_entities": ["Zoro", "Mihawk", "Baratie"],
+                },
+                1,
+                2,
+                "short_vertical",
+                ["Zoro", "Mihawk"],
+            ),
+        ]
+
+        enriched = _apply_visual_architecture_pass(
+            slides,
+            {"entities": ["Zoro", "Kuina", "Mihawk", "Baratie"]},
+            "short_vertical",
+        )
+
+        first = enriched[0]
+        self.assertEqual(first["architecture_stage"], "Final Slides")
+        self.assertIn("Subtitles", first["architecture_path"])
+        self.assertEqual(first["asset_metadata"]["asset_type"], "object")
+        self.assertEqual(first["visual_intent"]["primary_intent"], "curiosity_gap")
+        self.assertIn("emotion", first["emotion_state"])
+        self.assertGreaterEqual(first["retention_score"], 0.0)
+        self.assertTrue(first["composition_layers"])
+        self.assertEqual(first["motion_plan"]["preset"], first["motion_preset"])
+        self.assertTrue(enriched[1]["character_relationships"])
 
 
 if __name__ == "__main__":

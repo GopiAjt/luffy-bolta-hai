@@ -126,6 +126,26 @@ def _infer_expression_label(text: str, index: int = 0) -> str:
     return "serious"
 
 
+def _non_repeating_label(label: str, previous_label: str) -> str:
+    """Avoid same-expression runs in generated cue plans."""
+    label = (label or "serious").lower()
+    previous_label = (previous_label or "").lower()
+    if label != previous_label:
+        return label
+    alternates = {
+        "serious": "confident",
+        "confident": "serious",
+        "intense": "surprised",
+        "surprised": "intense",
+        "worried": "serious",
+        "sad": "worried",
+        "excited": "confident",
+        "angry": "intense",
+        "smirking": "confident",
+    }
+    return alternates.get(label, "serious")
+
+
 def enrich_expression_mapping(expressions, sub_lines):
     """Add sparse deterministic cues when Gemini is too conservative."""
     normalized = expressions or []
@@ -136,36 +156,49 @@ def enrich_expression_mapping(expressions, sub_lines):
         total_duration = ass_time_to_seconds(sub_lines[-1]["end"]) - ass_time_to_seconds(sub_lines[0]["start"])
     except Exception:
         total_duration = 0.0
-    if total_duration < 120:
+    if total_duration <= 0:
         return normalized
 
     expressive = [
         item for item in normalized
         if (item.get("expression") or "neutral").lower() not in {"neutral"}
     ]
-    target_cues = max(8, min(28, int(total_duration / 22)))
-    if len(expressive) >= target_cues:
+    is_short = total_duration < 120
+    target_cues = (
+        max(3, min(9, int(total_duration / 7) + 1))
+        if is_short
+        else max(8, min(28, int(total_duration / 22)))
+    )
+    latest_expressive_start = max(
+        (ass_time_to_seconds(item.get("start", "0:00:00.00")) for item in expressive),
+        default=-1.0,
+    )
+    coverage_is_good = latest_expressive_start >= (total_duration * 0.72)
+    if len(expressive) >= target_cues and (coverage_is_good or not is_short):
         return normalized
 
     existing_starts = {
         round(ass_time_to_seconds(item.get("start", "0:00:00.00")), 1)
-        for item in normalized
+        for item in expressive
     }
     added = []
     last_added = -999.0
+    previous_label = (expressive[-1].get("expression") or "").lower() if expressive else ""
+    min_gap = 5.5 if is_short else 14.0
+    min_words = 3 if is_short else 5
     for index, line in enumerate(sub_lines):
         try:
             start = ass_time_to_seconds(line["start"])
         except Exception:
             continue
-        if start - last_added < 14.0:
+        if start - last_added < min_gap:
             continue
         if round(start, 1) in existing_starts:
             continue
         text = line.get("text", "")
-        if len(text.split()) < 5:
+        if len(text.split()) < min_words:
             continue
-        label = _infer_expression_label(text, index)
+        label = _non_repeating_label(_infer_expression_label(text, index), previous_label)
         added.append({
             "start": line["start"],
             "end": line["end"],
@@ -175,11 +208,16 @@ def enrich_expression_mapping(expressions, sub_lines):
             "source": "heuristic_enrichment",
         })
         last_added = start
+        previous_label = label
         if len(expressive) + len(added) >= target_cues:
             break
 
     if added:
-        logger.info("Added %s heuristic expression cues for long-form density", len(added))
+        logger.info(
+            "Added %s heuristic expression cues for %s density",
+            len(added),
+            "short-form" if is_short else "long-form",
+        )
     combined = [*normalized, *added]
     combined.sort(key=lambda item: ass_time_to_seconds(item.get("start", "0:00:00.00")))
     return combined

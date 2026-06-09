@@ -1959,7 +1959,12 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                     img_path = jpg_path
 
             beat = (slide.get("beat_type") or classify_beat(slide.get("summary", ""), idx, len(slides))).strip().lower()
-            requested_motion = (slide.get("motion_preset") or "").strip().lower()
+            motion_plan = slide.get("motion_plan") if isinstance(slide.get("motion_plan"), dict) else {}
+            requested_motion = (
+                slide.get("motion_preset")
+                or motion_plan.get("preset")
+                or ""
+            ).strip().lower()
             slide_motion = requested_motion or choose_slide_motion(
                 visual_style,
                 beat,

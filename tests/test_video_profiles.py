@@ -1,7 +1,11 @@
 import unittest
+import wave
+from tempfile import TemporaryDirectory
+from pathlib import Path
 
 from app.config import get_video_profile_config, normalize_video_profile
 from app.utils.audio.tts_generator import (
+    _concat_wav_files,
     _qwen_generation_kwargs,
     _split_text_for_tts,
 )
@@ -53,6 +57,28 @@ class VideoProfileTests(unittest.TestCase):
         self.assertEqual(kwargs["top_k"], 50)
         self.assertEqual(kwargs["top_p"], 0.95)
         self.assertEqual(kwargs["temperature"], 0.92)
+
+    def test_concat_wav_files_combines_chunks_without_ffmpeg(self):
+        with TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            first = tmp_path / "first.wav"
+            second = tmp_path / "second.wav"
+            output = tmp_path / "combined.wav"
+
+            for path, frames in ((first, b"\x01\x00" * 4), (second, b"\x02\x00" * 6)):
+                with wave.open(str(path), "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(24000)
+                    wav_file.writeframes(frames)
+
+            _concat_wav_files([first, second], output)
+
+            with wave.open(str(output), "rb") as wav_file:
+                self.assertEqual(wav_file.getnchannels(), 1)
+                self.assertEqual(wav_file.getsampwidth(), 2)
+                self.assertEqual(wav_file.getframerate(), 24000)
+                self.assertEqual(wav_file.getnframes(), 10)
 
     def test_long_form_subtitles_select_sparse_word_keywords(self):
         generator = object.__new__(SubtitleGenerator)

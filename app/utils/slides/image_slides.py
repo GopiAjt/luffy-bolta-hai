@@ -74,12 +74,41 @@ IMAGE_SLIDE_MAX_SECONDS = float(os.getenv("IMAGE_SLIDE_MAX_SECONDS", "5.5"))
 IMAGE_SLIDE_MIN_SECONDS = float(os.getenv("IMAGE_SLIDE_MIN_SECONDS", "1.6"))
 
 PRODUCTION_BEAT_TYPES = {"hook", "setup", "evidence", "reveal", "payoff", "cta"}
-VISUAL_ROLES = {"title_card", "scene_broll", "evidence_card", "quote_card", "lower_third", "cta_card"}
+EDITOR_VISUAL_ROLES = {
+    "character",
+    "evidence",
+    "location",
+    "object",
+    "symbol",
+    "comparison",
+    "section_card",
+    "quote_card",
+    "timeline",
+    "cta_card",
+}
+LEGACY_VISUAL_ROLES = {"title_card", "scene_broll", "evidence_card", "lower_third"}
+VISUAL_ROLES = EDITOR_VISUAL_ROLES | LEGACY_VISUAL_ROLES
 LAYOUT_MODES = {
     "short_vertical": {"safe_subject", "title_card", "quote_card", "evidence_card", "full_bleed"},
     "long_youtube": {"horizontal_feature", "split_context", "section_card", "quote_card", "evidence_card", "full_bleed"},
 }
 MOTION_PRESETS = {"subject_push", "evidence_hold", "reveal_zoom", "wide_pan", "title_card_hold", "slow_push", "hold_still", "static_hold"}
+STORYBOARD_FIELDS = (
+    "visual_purpose",
+    "viewer_focus",
+    "manual_upload_brief",
+    "avoid_visual_reuse",
+    "asset_metadata",
+    "visual_intent",
+    "emotion_state",
+    "visual_diversity_score",
+    "diversity_notes",
+    "character_relationships",
+    "retention_score",
+    "retention_actions",
+    "composition_layers",
+    "motion_plan",
+)
 TRANSITION_BY_BEAT = {
     "hook": "crossfade",
     "setup": "fade_eased",
@@ -88,6 +117,17 @@ TRANSITION_BY_BEAT = {
     "payoff": "fade_eased",
     "cta": "fade_eased",
 }
+VISUAL_ARCHITECTURE_STAGES = [
+    "Subtitles",
+    "Script Analyzer",
+    "Story Beat Detector",
+    "Emotional Curve Builder",
+    "Visual Intent Classifier",
+    "Asset Selector",
+    "Motion Planner",
+    "Retention Optimizer",
+    "Final Slides",
+]
 
 
 def parse_ass_dialogues(ass_path: str, min_words=3) -> List[Dict[str, str]]:
@@ -299,7 +339,7 @@ def _classify_production_beat(text: str, index: int, total: int) -> str:
     lowered = (text or "").lower()
     if index == 0:
         return "hook"
-    if index >= max(0, total - 1) or re.search(r"\bfollow|comment|subscribe|tell me|like\b", lowered):
+    if index >= max(0, total - 1) or re.search(r"\b(follow|comment|subscribe|tell me|like)\b", lowered):
         return "cta"
     if re.search(r"\breveal|truth|secret|hidden|clue|twist|impossible|danger|reason\b", lowered):
         return "reveal"
@@ -313,28 +353,46 @@ def _classify_production_beat(text: str, index: int, total: int) -> str:
 def _default_visual_role(beat_type: str, text: str) -> str:
     lowered = (text or "").lower()
     if beat_type == "hook":
-        return "title_card"
+        return "section_card"
     if beat_type == "cta":
         return "cta_card"
+    if re.search(r"\b(vs\.?|versus|opposite|unlike|contrast|compared|both|difference)\b", lowered):
+        return "comparison"
+    if re.search(r"\b(years?|decades?|century|timeline|chapter|episode|before|after|eventually|first|then|finally)\b", lowered):
+        return "timeline"
+    if re.search(r"\b(fruit|sword|weapon|poneglyph|flag|logo|symbol|crown|throne|ship|map|scar|chains?)\b", lowered):
+        return "object"
+    if re.search(r"\b(jaya|marineford|elbaf|wano|egghead|ohara|mary geoise|impel down|sabaody|baratie|thriller bark|island|village|kingdom|room)\b", lowered):
+        return "location"
+    if re.search(r"\b(world government|five elders|holy knights|nika|joy boy|will of d|straw hat|pirate flag)\b", lowered):
+        return "symbol"
     if re.search(r"\bchapter|episode|sbs|quote|said|says\b", lowered):
-        return "evidence_card"
+        return "evidence"
     if '"' in text or "'" in text and len(text) < 140:
         return "quote_card"
-    return "scene_broll"
+    if re.search(r"\b(proves|evidence|because|therefore|choice|decision|action|behavior|consequence|betrayal|sacrifice)\b", lowered):
+        return "evidence"
+    return "character"
 
 
 def _default_layout_mode(video_profile: str, beat_type: str, visual_role: str) -> str:
     video_profile = normalize_video_profile(video_profile)
     if video_profile == "long_youtube":
-        if visual_role in {"title_card", "cta_card"} or beat_type in {"hook", "payoff"}:
+        if visual_role in {"title_card", "section_card", "cta_card"} or beat_type in {"hook", "payoff"}:
             return "section_card"
-        if visual_role in {"evidence_card", "quote_card"}:
-            return visual_role
+        if visual_role in {"evidence", "evidence_card", "timeline", "object", "symbol"}:
+            return "evidence_card"
+        if visual_role == "quote_card":
+            return "quote_card"
+        if visual_role == "comparison":
+            return "split_context"
         return "horizontal_feature"
-    if visual_role in {"title_card", "cta_card"}:
+    if visual_role in {"title_card", "section_card", "cta_card"}:
         return "title_card"
-    if visual_role in {"evidence_card", "quote_card"}:
-        return visual_role
+    if visual_role in {"evidence", "evidence_card", "timeline", "object", "symbol"}:
+        return "evidence_card"
+    if visual_role == "quote_card":
+        return "quote_card"
     return "safe_subject"
 
 
@@ -352,7 +410,7 @@ def _default_motion_preset(video_profile: str, beat_type: str, layout_mode: str)
 
 
 def _text_overlay_for_slide(summary: str, beat_type: str, visual_role: str) -> str:
-    if visual_role not in {"title_card", "cta_card", "evidence_card", "quote_card"}:
+    if visual_role not in {"title_card", "section_card", "cta_card", "evidence", "evidence_card", "quote_card", "timeline", "comparison"}:
         return ""
     cleaned = _clean_prompt_text(summary, max_len=82)
     if not cleaned:
@@ -360,6 +418,67 @@ def _text_overlay_for_slide(summary: str, beat_type: str, visual_role: str) -> s
     if beat_type == "cta":
         return "Comment your theory"
     return cleaned
+
+
+def _viewer_focus_for_slide(summary: str, subtitle_text: str, beat_type: str, visual_role: str) -> str:
+    text = _clean_prompt_text(summary or subtitle_text, max_len=120)
+    if not text:
+        return "A clear canon visual that supports this narration beat."
+    if beat_type == "hook":
+        return f"The opening visual question: {text}"
+    if visual_role in {"evidence", "evidence_card"}:
+        return f"The specific evidence or canon behavior behind: {text}"
+    if visual_role == "quote_card":
+        return f"The key thesis line the viewer should remember: {text}"
+    if visual_role == "object":
+        return f"The object or power that makes this narration concrete: {text}"
+    if visual_role == "location":
+        return f"The place or arc that grounds this beat in canon: {text}"
+    if visual_role == "symbol":
+        return f"The symbol/institution that carries the meaning of this beat: {text}"
+    if visual_role == "comparison":
+        return f"The contrast the viewer should compare on screen: {text}"
+    if visual_role == "timeline":
+        return f"The sequence of time or escalation behind: {text}"
+    if beat_type == "cta":
+        return "A clean outro/CTA visual that leaves the topic in mind."
+    return f"The concrete scene, character, object, or location that makes this beat visible: {text}"
+
+
+def _visual_purpose_for_slide(summary: str, subtitle_text: str, beat_type: str, visual_role: str) -> str:
+    text = _clean_prompt_text(summary or subtitle_text, max_len=100)
+    if beat_type == "hook":
+        return f"Create curiosity and establish stakes: {text}" if text else "Create curiosity and establish stakes."
+    if beat_type == "setup":
+        return f"Set up the core idea the viewer must understand: {text}" if text else "Set up the core idea."
+    if beat_type == "reveal":
+        return f"Reveal the turn or hidden implication: {text}" if text else "Reveal the turn."
+    if beat_type == "payoff":
+        return f"Pay off the argument with a clear takeaway: {text}" if text else "Pay off the argument."
+    if beat_type == "cta":
+        return "Close the video and keep the topic/question memorable."
+    role_purpose = {
+        "character": "Identify the person driving the beat.",
+        "evidence": "Prove the claim with a concrete canon beat.",
+        "location": "Ground the argument in a recognizable arc or place.",
+        "object": "Make an abstract idea tangible through an object or power.",
+        "symbol": "Represent a faction, ideology, or larger theme.",
+        "comparison": "Show the contrast that makes the argument clear.",
+        "timeline": "Show escalation or change over time.",
+        "quote_card": "Make the thesis line stick.",
+        "section_card": "Signal a new argument section.",
+    }
+    return role_purpose.get(visual_role, "Support the narration with a concrete visual function.")
+
+
+def _manual_upload_brief_for_slide(query: str, viewer_focus: str) -> str:
+    query = _clean_prompt_text(query, max_len=80)
+    focus = _clean_prompt_text(viewer_focus, max_len=120)
+    if query and focus:
+        return f"Choose an image showing {query}. It should communicate: {focus}"
+    if query:
+        return f"Choose a clear image showing {query}."
+    return "Choose a clear One Piece image that directly supports this narration beat."
 
 
 def _emphasis_words(text: str, context_entities: List[str], limit: int = 4) -> List[str]:
@@ -384,6 +503,270 @@ def _asset_confidence(query: str, subtitle_text: str, context_entities: List[str
         score += 0.15
     score -= min(0.20, duplicate_count * 0.08)
     return round(max(0.0, min(1.0, score)), 2)
+
+
+def _asset_type_for_role(visual_role: str, query: str, text: str) -> str:
+    lowered = f"{query} {text}".lower()
+    if visual_role in {"object", "symbol", "location", "comparison", "timeline"}:
+        return visual_role
+    if re.search(r"\b(island|village|kingdom|jaya|baratie|elbaf|wano|egghead|ohara|marineford|sabaody)\b", lowered):
+        return "location"
+    if re.search(r"\b(fruit|sword|knife|ship|map|poneglyph|throne|chains?|stairs?|scar|flag|logo)\b", lowered):
+        return "object"
+    if re.search(r"\b(world government|nika|joy boy|jolly roger|sun god|void century)\b", lowered):
+        return "symbol"
+    return "character"
+
+
+def _build_asset_metadata(slide: Dict, context_entities: List[str], duplicate_count: int = 0) -> Dict:
+    text = " ".join(
+        part
+        for part in [slide.get("subtitle_text", ""), slide.get("summary", ""), slide.get("viewer_focus", "")]
+        if part
+    )
+    query = slide.get("image_search_query", "") or "One Piece Logo"
+    entities = slide.get("context_entities") or _extract_context_entities(f"{query} {text}", limit=6) or context_entities
+    asset_type = _asset_type_for_role(slide.get("visual_role", ""), query, text)
+    tags = _dedupe_query_words(f"{query} {' '.join(entities[:3])} {asset_type}").split()[:10]
+    confidence = slide.get("asset_confidence")
+    if confidence is None:
+        confidence = _asset_confidence(query, text, entities, duplicate_count)
+    return {
+        "query": query,
+        "asset_type": asset_type,
+        "entities": entities[:6],
+        "search_tags": tags,
+        "source_priority": ["upload", "vivre_card", "manual_asset_search"],
+        "confidence": confidence,
+    }
+
+
+def _classify_visual_intent(slide: Dict) -> Dict:
+    beat_type = slide.get("beat_type", "evidence")
+    visual_role = slide.get("visual_role", "character")
+    purpose = slide.get("visual_purpose", "")
+    intent_by_beat = {
+        "hook": "curiosity_gap",
+        "setup": "context_setup",
+        "evidence": "proof",
+        "reveal": "reversal",
+        "payoff": "takeaway",
+        "cta": "conversion",
+    }
+    return {
+        "primary_intent": intent_by_beat.get(beat_type, "support"),
+        "visual_role": visual_role,
+        "viewer_question": slide.get("viewer_focus") or purpose,
+        "intent_strength": round(
+            min(1.0, 0.45 + (0.18 if beat_type in {"hook", "reveal", "payoff"} else 0.08) + (0.10 if purpose else 0.0)),
+            2,
+        ),
+    }
+
+
+def _emotion_for_text(text: str, beat_type: str, index: int, total: int) -> Dict:
+    lowered = (text or "").lower()
+    emotion = "curious"
+    valence = 0.0
+    intensity = 0.35
+    if re.search(r"\b(death|died|pain|fear|trauma|loss|sacrifice|betrayal|cry|alone|weak)\b", lowered):
+        emotion, valence, intensity = "grief", -0.55, 0.78
+    elif re.search(r"\b(danger|threat|villain|war|fight|destroy|monster|evil)\b", lowered):
+        emotion, valence, intensity = "tension", -0.35, 0.72
+    elif re.search(r"\b(secret|hidden|truth|mystery|impossible|twist|reveal)\b", lowered):
+        emotion, valence, intensity = "intrigue", 0.1, 0.68
+    elif re.search(r"\b(dream|freedom|joy|hope|promise|future|win)\b", lowered):
+        emotion, valence, intensity = "hope", 0.45, 0.55
+    elif beat_type == "cta":
+        emotion, valence, intensity = "resolution", 0.25, 0.28
+    if beat_type == "hook":
+        intensity = max(intensity, 0.76)
+    if beat_type == "reveal":
+        intensity = max(intensity, 0.82)
+    curve_position = round(index / max(1, total - 1), 2)
+    return {
+        "emotion": emotion,
+        "intensity": round(intensity, 2),
+        "valence": round(valence, 2),
+        "curve_position": curve_position,
+    }
+
+
+RELATIONSHIP_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    (re.compile(r"\bvs\.?|versus|fight|defeat|humiliat|oppos", re.I), "opposes"),
+    (re.compile(r"\bcrew|protect|save|friend|ally|loyal", re.I), "allies_with"),
+    (re.compile(r"\btrain|teacher|student|mentor|learn", re.I), "mentor_link"),
+    (re.compile(r"\bfather|son|brother|family|lineage|inherited", re.I), "family_or_lineage"),
+    (re.compile(r"\bbetray|manipulat|use|exploit", re.I), "exploits"),
+    (re.compile(r"\bcontrast|unlike|opposite|mirror", re.I), "contrasts"),
+]
+
+
+def _character_relationships_for_slide(slide: Dict, script_entities: List[str]) -> List[Dict]:
+    text = " ".join(
+        part
+        for part in [slide.get("subtitle_text", ""), slide.get("summary", ""), slide.get("image_search_query", "")]
+        if part
+    )
+    entities = slide.get("context_entities") or _extract_context_entities(text, limit=4) or script_entities[:4]
+    characters = [entity for entity in entities if entity in CANONICAL_ENTITIES][:4]
+    if len(characters) < 2:
+        return []
+    relation_type = "associated_with"
+    for pattern, candidate in RELATIONSHIP_PATTERNS:
+        if pattern.search(text):
+            relation_type = candidate
+            break
+    return [
+        {
+            "source": characters[0],
+            "target": other,
+            "relationship": relation_type,
+            "evidence": _clean_prompt_text(text, max_len=110),
+        }
+        for other in characters[1:3]
+    ]
+
+
+def _composition_layers_for_slide(slide: Dict, video_profile: str) -> List[Dict]:
+    video_profile = normalize_video_profile(video_profile)
+    layout = slide.get("layout_mode") or _default_layout_mode(video_profile, slide.get("beat_type", ""), slide.get("visual_role", ""))
+    layers = [
+        {
+            "name": "background_asset",
+            "type": "image",
+            "source": slide.get("image_search_query", "One Piece Logo"),
+            "fit": "safe_contain" if layout in {"safe_subject", "horizontal_feature", "split_context"} else "cover",
+        }
+    ]
+    if layout in {"title_card", "section_card", "evidence_card", "quote_card", "split_context"}:
+        layers.append({"name": "editorial_panel", "type": "shape", "style": layout})
+    if slide.get("text_overlay"):
+        layers.append({"name": "headline", "type": "text", "text": slide["text_overlay"], "priority": "primary"})
+    if slide.get("emphasis_words"):
+        layers.append({"name": "emphasis_terms", "type": "text_tags", "terms": slide["emphasis_words"][:4]})
+    return layers
+
+
+def _advanced_motion_plan(slide: Dict, video_profile: str, previous_motion: str = "") -> Dict:
+    preset = slide.get("motion_preset") or _default_motion_preset(video_profile, slide.get("beat_type", ""), slide.get("layout_mode", ""))
+    emotion = slide.get("emotion_state", {})
+    intensity = float(emotion.get("intensity") or 0.45)
+    role = slide.get("visual_role", "character")
+    camera_goal = {
+        "character": "face_lock_push",
+        "evidence": "inspect_detail",
+        "object": "object_reveal",
+        "location": "wide_context_pan",
+        "symbol": "centered_icon_hold",
+        "comparison": "two_subject_scan",
+        "timeline": "left_to_right_progression",
+        "section_card": "readable_hold",
+        "quote_card": "readable_hold",
+        "cta_card": "readable_hold",
+    }.get(role, "support_narration")
+    if previous_motion and preset == previous_motion and preset not in {"title_card_hold", "static_hold"}:
+        camera_goal = f"{camera_goal}_alternate_framing"
+    return {
+        "preset": preset,
+        "camera_goal": camera_goal,
+        "motion_intensity": round(min(1.0, max(0.15, intensity)), 2),
+        "focus_target": (slide.get("asset_metadata") or {}).get("asset_type", role),
+        "transition_in": slide.get("transition_in") or TRANSITION_BY_BEAT.get(slide.get("beat_type"), "crossfade"),
+    }
+
+
+def _visual_diversity_score(slide: Dict, previous_slides: List[Dict]) -> Tuple[float, str]:
+    if not previous_slides:
+        return 1.0, "Opening visual establishes the palette."
+    query = (slide.get("image_search_query") or "").strip().lower()
+    role = (slide.get("visual_role") or "").strip().lower()
+    recent = previous_slides[-3:]
+    score = 1.0
+    reasons = []
+    if any(query and query == (prev.get("image_search_query") or "").strip().lower() for prev in recent):
+        score -= 0.35
+        reasons.append("query repeats nearby")
+    if recent and all(role and role == (prev.get("visual_role") or "").strip().lower() for prev in recent):
+        score -= 0.22
+        reasons.append("visual role is overused")
+    entity_set = set((slide.get("context_entities") or [])[:3])
+    previous_entities = set()
+    for prev in recent:
+        previous_entities.update((prev.get("context_entities") or [])[:3])
+    if entity_set and entity_set == previous_entities:
+        score -= 0.15
+        reasons.append("same entity cluster")
+    if not reasons:
+        reasons.append("role/query/entity mix changes from nearby slides")
+    return round(max(0.0, min(1.0, score)), 2), "; ".join(reasons)
+
+
+def _retention_optimizer_for_slide(slide: Dict, index: int, total: int, previous_slides: List[Dict]) -> Tuple[float, List[str], Dict]:
+    optimized = dict(slide)
+    actions: List[str] = []
+    beat = optimized.get("beat_type", "")
+    diversity = float(optimized.get("visual_diversity_score") or 0.7)
+    emotion = optimized.get("emotion_state", {})
+    intensity = float(emotion.get("intensity") or 0.4)
+    score = 0.45 + (0.18 if beat in {"hook", "reveal", "payoff"} else 0.08) + (0.14 * diversity) + (0.12 * intensity)
+
+    if index == 0 and not optimized.get("text_overlay"):
+        optimized["text_overlay"] = _clean_prompt_text(optimized.get("summary", ""), max_len=56)
+        actions.append("added hook overlay")
+    if beat == "hook" and optimized.get("layout_mode") == "safe_subject":
+        optimized["layout_mode"] = "title_card"
+        actions.append("converted hook to readable title_card")
+    if diversity < 0.55:
+        actions.append("flagged nearby visual repetition")
+        if optimized.get("motion_preset") not in {"title_card_hold", "reveal_zoom"}:
+            optimized["motion_preset"] = "reveal_zoom" if beat == "reveal" else "subject_push"
+    if total > 1 and index == total - 1 and beat != "cta":
+        actions.append("final slide should resolve or invite response")
+    return round(max(0.0, min(1.0, score)), 2), actions, optimized
+
+
+def _apply_visual_architecture_pass(
+    slides: List[Dict],
+    script_context: Dict,
+    video_profile: str,
+) -> List[Dict]:
+    """Subtitles -> analyzer -> beats -> emotion -> intent -> assets -> motion -> retention."""
+    enriched: List[Dict] = []
+    script_entities = script_context.get("entities", [])
+    used_queries: Dict[str, int] = {}
+    previous_motion = ""
+    total = len(slides)
+
+    for index, slide in enumerate(slides):
+        slide = dict(slide)
+        query_key = (slide.get("image_search_query") or "").strip().lower()
+        duplicate_count = used_queries.get(query_key, 0)
+        used_queries[query_key] = duplicate_count + 1
+
+        slide["architecture_stage"] = "Final Slides"
+        slide["architecture_path"] = VISUAL_ARCHITECTURE_STAGES
+        slide["asset_metadata"] = slide.get("asset_metadata") or _build_asset_metadata(slide, script_entities, duplicate_count)
+        slide["visual_intent"] = slide.get("visual_intent") or _classify_visual_intent(slide)
+        slide["emotion_state"] = slide.get("emotion_state") or _emotion_for_text(
+            f"{slide.get('subtitle_text', '')} {slide.get('summary', '')}",
+            slide.get("beat_type", ""),
+            index,
+            total,
+        )
+        diversity_score, diversity_notes = _visual_diversity_score(slide, enriched)
+        slide["visual_diversity_score"] = slide.get("visual_diversity_score", diversity_score)
+        slide["diversity_notes"] = slide.get("diversity_notes") or diversity_notes
+        slide["character_relationships"] = slide.get("character_relationships") or _character_relationships_for_slide(slide, script_entities)
+        retention_score, actions, slide = _retention_optimizer_for_slide(slide, index, total, enriched)
+        slide["retention_score"] = slide.get("retention_score", retention_score)
+        slide["retention_actions"] = slide.get("retention_actions") or actions
+        slide["composition_layers"] = slide.get("composition_layers") or _composition_layers_for_slide(slide, video_profile)
+        slide["motion_plan"] = slide.get("motion_plan") or _advanced_motion_plan(slide, video_profile, previous_motion)
+        previous_motion = slide.get("motion_preset") or previous_motion
+        enriched.append(slide)
+
+    return enriched
 
 
 def _apply_production_edit_defaults(
@@ -423,6 +806,27 @@ def _apply_production_edit_defaults(
         slide["emphasis_words"] = _emphasis_words(text, context_entities)
     slide["transition_in"] = slide.get("transition_in") or TRANSITION_BY_BEAT.get(beat_type, "crossfade")
     slide["sfx_cue"] = slide.get("sfx_cue") or slide["transition_in"]
+    slide["visual_purpose"] = _clean_prompt_text(
+        slide.get("visual_purpose")
+        or _visual_purpose_for_slide(slide.get("summary", ""), slide.get("subtitle_text", ""), beat_type, visual_role),
+        max_len=180,
+    )
+    viewer_focus = _clean_prompt_text(
+        slide.get("viewer_focus")
+        or _viewer_focus_for_slide(slide.get("summary", ""), slide.get("subtitle_text", ""), beat_type, visual_role),
+        max_len=160,
+    )
+    slide["viewer_focus"] = viewer_focus
+    slide["manual_upload_brief"] = _clean_prompt_text(
+        slide.get("manual_upload_brief")
+        or _manual_upload_brief_for_slide(slide.get("image_search_query", ""), viewer_focus),
+        max_len=220,
+    )
+    slide["avoid_visual_reuse"] = _clean_prompt_text(
+        slide.get("avoid_visual_reuse")
+        or "Do not reuse the same portrait/pose if the previous slide already used this character.",
+        max_len=180,
+    )
     if "asset_confidence" not in slide:
         slide["asset_confidence"] = _asset_confidence(
             slide.get("image_search_query", ""),
@@ -547,7 +951,6 @@ def _slide_context_entities(slide: Dict) -> List[str]:
 
 _SLIDE_REQUIRED_KEYS = ("start_time", "end_time", "summary")
 _VISUAL_SOURCE_ASSET = "asset_search"
-_VISUAL_SOURCE_AI = "ai_generate"
 
 # Queries that are usually poor manual-search terms; rewrite them to grounded assets.
 _BAD_ASSET_QUERY_RE = re.compile(
@@ -559,17 +962,12 @@ _BAD_ASSET_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
-_AI_VISUAL_HINTS_RE = re.compile(
+_NON_SEARCHABLE_QUERY_RE = re.compile(
     r"\b("
     r"thermodynamic|kinetic|friction|pressure|elastic|detonat|explosion|"
     r"internal\s+blast|diagram|infographic|two\s+devil\s+fruit\s+rule|"
     r"vs\s+normal|energy\s+expansion|mythical\s+zoan\s+property|abstract"
     r")\b",
-    re.IGNORECASE,
-)
-
-_ASSET_ONLY_HINTS_RE = re.compile(
-    r"\b(one piece logo|grand line map|follow|subscribe|outro)\b",
     re.IGNORECASE,
 )
 
@@ -682,19 +1080,59 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
             "- image_search_query should be the exact manual storyboard target. Avoid numbered duplicates like 'Blackbeard 12'. If the same character repeats, change the scene/object: 'Blackbeard Jaya cherry pie', 'Blackbeard Yami Yami no Mi', 'Blackbeard Pirates Jaya', 'Whitebeard Marineford Blackbeard', 'Luffy Blackbeard Mock Town'.\n"
             "- For abstract psychology, choose concrete visual evidence: fear -> child Teach moon image if mentioned, power hunger -> Yami Yami fruit, manipulation -> Blackbeard Pirates or Impel Down/Marineford, contrast -> Luffy vs Blackbeard.\n\n"
         )
+    hook_retention_rules = (
+        "HOOK RETENTION PASS:\n"
+        "- Think like a senior faceless anime editor trying to stop the first swipe/drop-off.\n"
+        "- Treat the first 3-8 seconds as a micro-storyboard, not one static intro card.\n"
+        "- If the opening sentence contains a question, accusation, twist, ranking, final-villain claim, betrayal, sacrifice, secret, or power reveal, split it into 2-4 smaller visual cues when timestamps allow.\n"
+        "- Hook visual cue order should usually be: curiosity image -> threat/evidence image -> thesis/title card. Example: 'Holy Knights final villains?' can become 'Holy Knights silhouettes', 'Imu Five Elders throne room', then a title_card asking the final-villain question.\n"
+        "- Each hook cue must change what the viewer inspects: face/silhouette, symbol/object, location/institution, then title/question. Do not hold only a logo during the hook unless it is the final CTA.\n"
+        "- Hook text_overlay should be short, punchy, and incomplete enough to create curiosity; avoid explaining the whole video in the overlay.\n"
+        "- Hook viewer_focus must tell the human editor the retention purpose: curiosity gap, proof of stakes, threat reveal, contradiction, or payoff setup.\n"
+        "- Hook manual_upload_brief must be practical for manual upload: name the exact character/group/symbol/scene to pick and the desired crop/framing.\n"
+        "- For short_vertical hooks, prefer 0.8-2.0 second visual cues, large centered subjects, and hard curiosity changes. For long_youtube hooks, prefer 2.0-4.0 second cues with calmer evidence/title pacing.\n\n"
+    )
     return (
         "CRITICAL — each slide matches the SPOKEN lines in [start_time, end_time]. Faceless theory video (voiceover + B-roll).\n"
         "Before making slides, read ALL subtitles as one complete script. Infer the main topic, arc, characters, and argument, then choose each slide's search query from that whole-script understanding plus the local spoken beat.\n\n"
         f"{profile_line}\n"
         f"{long_form_storyboard_rules}"
+        f"{hook_retention_rules}"
+        "EDITOR THINKING MODEL:\n"
+        "- Stop thinking in isolated images. Think: narration -> visual_purpose -> visual_role -> visual.\n"
+        "- For every slide, first decide what the narration is doing: introduce, prove, locate, symbolize, compare, escalate, reveal, pay off, or close.\n"
+        "- Then choose visual_role from an editor's role system, not a search-engine category.\n"
+        "- The image_search_query is only the final step. It should be the concrete canon asset that best performs the visual_purpose.\n"
+        "- Example: narration 'Blackbeard spent his entire life chasing a dream' should NOT default to only 'Marshall D. Teach'. Purpose: introduce obsession. Strong visual options: 'Blackbeard Yami Yami no Mi', 'Blackbeard Jaya speech', 'Whitebeard Pirates ship Blackbeard'.\n\n"
+        "VISUAL ROLE ROTATION:\n"
+        "- Use these visual_role values: character, evidence, location, object, symbol, comparison, section_card, quote_card, timeline, cta_card.\n"
+        "- If the same character remains the topic for several slides, rotate the role: character -> object -> crew/group/evidence -> location -> symbol -> comparison -> timeline.\n"
+        "- Avoid more than two consecutive character-role slides about the same person.\n"
+        "- character: introduce or re-anchor a person with a clear face/pose.\n"
+        "- evidence: prove the claim through a canon action, panel/scene, crew, institution, or consequence.\n"
+        "- location: ground the beat in an arc/place like Jaya, Marineford, Elbaf, Mary Geoise, Ohara, Wano.\n"
+        "- object: make the idea tangible through a fruit, sword, ship, throne, map, chains, scar, flag, or artifact.\n"
+        "- symbol: represent a faction, ideology, mystery, or theme: World Government symbol, Nika, Jolly Roger, Poneglyph, throne.\n"
+        "- comparison: show contrast like Luffy vs Blackbeard, old vs new, dream vs obsession, freedom vs control.\n"
+        "- timeline: show years, escalation, sequence, chapter history, or cause-and-effect.\n\n"
         "PRODUCTION EDIT STRUCTURE:\n"
         "- First identify the full-script structure: hook, setup, evidence, reveal, payoff, CTA.\n"
-        "- Every slide must include production edit metadata: beat_type, visual_role, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence.\n"
+        "- Every slide must include production edit metadata: beat_type, visual_role, layout_mode, visual_purpose, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence, viewer_focus, manual_upload_brief, avoid_visual_reuse.\n"
         "- beat_type values: hook, setup, evidence, reveal, payoff, cta.\n"
-        "- visual_role values: title_card, scene_broll, evidence_card, quote_card, lower_third, cta_card.\n"
+        "- visual_role values: character, evidence, location, object, symbol, comparison, section_card, quote_card, timeline, cta_card.\n"
         "- short_vertical layout_mode values: safe_subject, title_card, quote_card, evidence_card, full_bleed.\n"
         "- long_youtube layout_mode values: horizontal_feature, split_context, section_card, quote_card, evidence_card, full_bleed.\n"
         "- motion_preset values: subject_push, evidence_hold, reveal_zoom, wide_pan, title_card_hold.\n\n"
+        "VISUAL ARCHITECTURE:\n"
+        "- Follow this pipeline exactly: Subtitles -> Script Analyzer -> Story Beat Detector -> Emotional Curve Builder -> Visual Intent Classifier -> Asset Selector -> Motion Planner -> Retention Optimizer -> Final Slides.\n"
+        "- asset_metadata is the asset database row for the slide: query, asset_type, entities, search_tags, source_priority, confidence.\n"
+        "- visual_intent explains the viewer question and why this beat exists visually.\n"
+        "- emotion_state tracks emotion, intensity, valence, and curve_position across the whole script.\n"
+        "- visual_diversity_score should penalize repeated query/role/entity runs; diversity_notes explains the reason.\n"
+        "- character_relationships should name visible relationships when two or more characters/entities are involved.\n"
+        "- retention_score and retention_actions are the optimizer pass: hook clarity, curiosity gap, repetition risk, payoff strength.\n"
+        "- composition_layers describes multi-layer composition: background asset, editorial panel, headline, emphasis terms.\n"
+        "- motion_plan is the advanced motion planner output: preset, camera_goal, motion_intensity, focus_target, transition_in.\n\n"
         "CONTEXT-AWARE PACING:\n"
         "- Cut on idea changes, not only character names: hook, cause, consequence, example, rebuttal, payoff.\n"
         "- Prefer 2-5 seconds per slide. Never hold one visual across a new canon event, new character, or new emotional turn.\n"
@@ -716,6 +1154,11 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
         "- Bad: 'Zoro trauma', 'fear of weakness', 'emotional thesis', 'buried memory', 'giant prince sitting in darkness', 'dramatic silhouette'.\n\n"
         "FIELD RULES:\n"
         "- summary: short beat from subtitles (what the viewer should understand).\n"
+        "- visual_purpose: one sentence explaining the editor's reason for the visual: introduce, prove, locate, symbolize, compare, escalate, reveal, pay off, or close.\n"
+        "- viewer_focus: one concrete sentence telling the editor/viewer what should be inspected on screen and why it supports this narration beat.\n"
+        "- manual_upload_brief: one practical storyboard note for a human picking the image. Name the needed character, object, arc, expression, or scene.\n"
+        "- avoid_visual_reuse: short warning about what visual not to repeat from nearby beats, especially repeated portraits or the same generic crew shot.\n"
+        "- asset_metadata, visual_intent, emotion_state, visual_diversity_score, diversity_notes, character_relationships, retention_score, retention_actions, composition_layers, and motion_plan may be included; if uncertain, leave coherent simple values and the backend will repair them.\n"
         "- image_search_query: REQUIRED. 3–9 words, searchable canon scene/entity phrase. "
         "Never repeat the same query twice. No jargon filenames.\n"
         "- ai_image_prompt: ALWAYS empty string \"\". Do not write AI prompts, image-generation descriptions, or symbolic art instructions.\n\n"
@@ -724,7 +1167,7 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
         "TIMING: merge short fragments; max ~3.5s per slide; continuous timestamps with no gaps. "
         "Each slide's end_time must equal the next slide's start_time.\n\n"
         "OUTPUT: ONLY a JSON array. Each object MUST include:\n"
-        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt, beat_type, visual_role, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence\n"
+        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt, beat_type, visual_role, visual_purpose, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence, viewer_focus, manual_upload_brief, avoid_visual_reuse, asset_metadata, visual_intent, emotion_state, visual_diversity_score, diversity_notes, character_relationships, retention_score, retention_actions, composition_layers, motion_plan\n"
     )
 
 
@@ -746,33 +1189,49 @@ def _build_image_slides_full_prompt(
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Roronoa Zoro training dojo",'
         '"ai_image_prompt":"",'
-        '"beat_type":"hook","visual_role":"title_card","layout_mode":"title_card",'
+        '"beat_type":"hook","visual_role":"section_card","visual_purpose":"Create curiosity by showing the origin of Zoro ambition.",'
+        '"layout_mode":"title_card",'
         '"motion_preset":"subject_push","text_overlay":"Zoro trains from fear",'
-        '"emphasis_words":["Zoro"],"transition_in":"crossfade","sfx_cue":"crossfade","asset_confidence":0.82},'
+        '"emphasis_words":["Zoro"],"transition_in":"crossfade","sfx_cue":"crossfade","asset_confidence":0.82,'
+        '"viewer_focus":"Inspect Zoro as a driven child so the fear behind his ambition is clear.",'
+        '"manual_upload_brief":"Pick a dojo/training image with young Zoro or swords visible.",'
+        '"avoid_visual_reuse":"Avoid another generic adult Zoro portrait here."},'
         '{"start_time":"0:00:03.60","end_time":"0:00:07.80",'
         '"summary":"Kuina death creates Zoro fear",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Zoro Kuina Shimotsuki stairs",'
         '"ai_image_prompt":"",'
-        '"beat_type":"setup","visual_role":"evidence_card","layout_mode":"evidence_card",'
+        '"beat_type":"setup","visual_role":"evidence","visual_purpose":"Prove the fear by showing the canon event that created it.",'
+        '"layout_mode":"evidence_card",'
         '"motion_preset":"evidence_hold","text_overlay":"Chapter five changed Zoro",'
-        '"emphasis_words":["Zoro","Kuina"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.92},'
+        '"emphasis_words":["Zoro","Kuina"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.92,'
+        '"viewer_focus":"Show Kuina or the staircase because this is the evidence behind Zoro fear.",'
+        '"manual_upload_brief":"Pick a Kuina/Shimotsuki stairs or dojo image, not a random Zoro pose.",'
+        '"avoid_visual_reuse":"Do not repeat the previous training image."},'
         '{"start_time":"0:00:09.00","end_time":"0:00:11.84",'
         '"summary":"Mihawk humiliates Zoro at Baratie",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"Zoro Mihawk Baratie cross knife",'
         '"ai_image_prompt":"",'
-        '"beat_type":"reveal","visual_role":"scene_broll","layout_mode":"safe_subject",'
+        '"beat_type":"reveal","visual_role":"comparison","visual_purpose":"Show Zoro weakness by contrasting him with Mihawk power.",'
+        '"layout_mode":"safe_subject",'
         '"motion_preset":"reveal_zoom","text_overlay":"",'
-        '"emphasis_words":["Zoro","Mihawk"],"transition_in":"zoom_dissolve","sfx_cue":"zoom_dissolve","asset_confidence":0.95},'
+        '"emphasis_words":["Zoro","Mihawk"],"transition_in":"zoom_dissolve","sfx_cue":"zoom_dissolve","asset_confidence":0.95,'
+        '"viewer_focus":"Focus on Mihawk overpowering Zoro to make the humiliation visual.",'
+        '"manual_upload_brief":"Pick the Baratie cross-knife scene or a clear Zoro vs Mihawk frame.",'
+        '"avoid_visual_reuse":"Avoid a solo Mihawk portrait without Zoro."},'
         '{"start_time":"0:00:31.49","end_time":"0:00:32.43",'
         '"summary":"Follow CTA",'
         f'"visual_source":"{_VISUAL_SOURCE_ASSET}",'
         '"image_search_query":"One Piece Logo",'
         '"ai_image_prompt":"",'
-        '"beat_type":"cta","visual_role":"cta_card","layout_mode":"title_card",'
+        '"beat_type":"cta","visual_role":"cta_card","visual_purpose":"Close the video and make the comment prompt easy to read.",'
+        '"layout_mode":"title_card",'
         '"motion_preset":"title_card_hold","text_overlay":"Comment your theory",'
-        '"emphasis_words":["One Piece"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.75}]\n\n'
+        '"emphasis_words":["One Piece"],"transition_in":"fade_eased","sfx_cue":"fade_eased","asset_confidence":0.75,'
+        '"viewer_focus":"End on a clean One Piece identity card so the call to action reads clearly.",'
+        '"manual_upload_brief":"Use a clean One Piece logo or Straw Hat crew image with open space for text.",'
+        '"avoid_visual_reuse":"Avoid another dense battle image behind the CTA."}]\n\n'
         "BAD: abstract emotion queries like 'Zoro trauma'; any ai_image_prompt text; five generic Zoro asset slides in a row.\n\n"
         "Subtitles:\n"
         f"{raw_subtitles}\n"
@@ -961,11 +1420,10 @@ def _split_long_slides_by_dialogues(
             child["end_time"] = beat[-1]["end"]
             child["summary"] = summary
             child["subtitle_text"] = subtitle_text
-            child["context_entities"] = _ai_prompt_context_entities(
-                subtitle_text,
-                summary,
-                slide.get("context_entities") or context_entities,
-            )
+            child["context_entities"] = _extract_context_entities(
+                f"{subtitle_text} {summary}",
+                limit=3,
+            ) or slide.get("context_entities") or context_entities
             inferred_query = _infer_query_from_subtitle_text(subtitle_text, child["context_entities"])
             if inferred_query:
                 child["image_search_query"] = inferred_query
@@ -1042,107 +1500,6 @@ def _clean_prompt_text(value: str, max_len: int = 260) -> str:
     return text[:max_len].rstrip(" ,.;")
 
 
-def _ai_prompt_context_entities(subtitle_text: str, summary: str, context_entities: List[str]) -> List[str]:
-    """Prefer entities from the spoken beat, then fall back to slide/script context."""
-    beat_entities = _extract_context_entities(f"{subtitle_text} {summary}", limit=3)
-    merged = []
-    for entity in [*beat_entities, *(context_entities or [])]:
-        if entity and entity not in merged:
-            merged.append(entity)
-    return merged[:3]
-
-
-def _build_ai_image_prompt(summary: str, subtitle_text: str, context_entities: List[str]) -> str:
-    """Template prompt for external AI image tools (Gemini Imagen, DALL·E, etc.)."""
-    line = _clean_prompt_text(subtitle_text or summary or "One Piece theory scene")
-    scene = _clean_prompt_text(summary or subtitle_text or "One Piece theory scene", max_len=180)
-    cast_entities = _ai_prompt_context_entities(subtitle_text, summary, context_entities)
-    cast = ", ".join(cast_entities) if cast_entities else "One Piece characters"
-    return (
-        "Vertical 9:16 One Piece anime style illustration, no text, no watermark. "
-        f"Visualize this narration beat, without showing words: '{line}'. "
-        f"Main context: {cast}. "
-        f"{scene}. "
-        "One clear cinematic scene, faceless theory video B-roll, dramatic lighting, readable on mobile."
-    )
-
-
-def _anchor_ai_image_prompt(
-    ai_prompt: str,
-    summary: str,
-    subtitle_text: str,
-    context_entities: List[str],
-) -> str:
-    """Ensure Gemini-provided AI prompts stay tied to the exact spoken beat."""
-    base_prompt = (ai_prompt or "").strip()
-    if not base_prompt:
-        return _build_ai_image_prompt(summary, subtitle_text, context_entities)
-
-    prefix = "Vertical 9:16 One Piece anime style illustration, no text, no watermark."
-    if base_prompt.lower().startswith(prefix.lower()):
-        scene = base_prompt[len(prefix):].strip()
-    else:
-        scene = base_prompt
-    scene = re.sub(r"^faceless (youtube )?theory video b-roll\.?\s*", "", scene, flags=re.I)
-    scene = re.sub(
-        r"^visualize this narration beat,\s*without showing words:\s*'[^']*'\.?\s*",
-        "",
-        scene,
-        flags=re.I,
-    )
-    scene = re.sub(r"^main context:\s*[^.]+\.?\s*", "", scene, flags=re.I)
-    if "visualize this narration beat" in base_prompt.lower() and "main context:" in base_prompt.lower():
-        return base_prompt
-
-    line = _clean_prompt_text(subtitle_text or summary or "One Piece theory scene")
-    cast_entities = _ai_prompt_context_entities(subtitle_text, summary, context_entities)
-    cast = ", ".join(cast_entities) if cast_entities else "One Piece characters"
-    return (
-        f"{prefix} "
-        f"Visualize this narration beat, without showing words: '{line}'. "
-        f"Main context: {cast}. "
-        f"{scene}"
-    ).strip()
-
-
-def _needs_ai_visual(
-    subtitle_text: str,
-    summary: str,
-    image_search_query: str,
-    luffy_asset_count: int,
-) -> bool:
-    """Heuristic: catalog/Vivre cannot satisfy this beat — use AI generation."""
-    blob = f"{subtitle_text} {summary} {image_search_query}".strip()
-    if not blob:
-        return False
-    if _ASSET_ONLY_HINTS_RE.search(blob):
-        return False
-    if _BAD_ASSET_QUERY_RE.search(image_search_query):
-        return True
-    if _AI_VISUAL_HINTS_RE.search(blob):
-        return True
-    if re.search(r"\bmanga\s+panel", blob, re.I):
-        return True
-    if re.search(r"\btell me your theories\b", blob, re.I):
-        return True
-    if re.search(r"\bblueprint\b|\bancient weapon\b|\bsplit screen\b", blob, re.I):
-        return True
-    if re.search(r"\bpluton\b", blob, re.I) and not re.search(
-        r"\bshirahoshi\b|\bposeidon\b", blob, re.I
-    ):
-        return True
-    if luffy_asset_count >= 2 and re.search(r"\bluffy\b", blob, re.I) and not re.search(
-        r"\bjabra\b|blackbeard|teach|egghead", blob, re.I
-    ):
-        return True
-    return False
-
-
-def _llm_chose_ai_slide(slide: Dict) -> bool:
-    """AI image prompts are disabled; Gemini AI choices are always rewritten."""
-    return False
-
-
 def _apply_visual_source_plan(
     slide: Dict,
     subtitle_text: str,
@@ -1163,7 +1520,7 @@ def _apply_visual_source_plan(
         context_entities,
     )
 
-    if not query or _BAD_ASSET_QUERY_RE.search(query) or _AI_VISUAL_HINTS_RE.search(f"{subtitle_text} {summary} {query}"):
+    if not query or _BAD_ASSET_QUERY_RE.search(query) or _NON_SEARCHABLE_QUERY_RE.search(f"{subtitle_text} {summary} {query}"):
         query = inferred_query or _infer_query_from_subtitle_text(summary, context_entities) or query
 
     if not query or _BAD_ASSET_QUERY_RE.search(query):
@@ -1248,7 +1605,6 @@ def _refine_slides_from_subtitles(
         summary = slide.get("summary") or ""
         query = slide.get("image_search_query") or ""
         combined = f"{subtitle_text} {summary}".strip()
-        preserve_ai = _llm_chose_ai_slide(slide)
 
         inferred = _infer_query_from_subtitle_text(subtitle_text, context_entities)
         if inferred:
@@ -1264,19 +1620,18 @@ def _refine_slides_from_subtitles(
             elif not query or len(query.split()) < 2:
                 query = inferred
 
-        if not preserve_ai:
-            if not query and combined:
-                query = _infer_query_from_subtitle_text(combined, context_entities) or query
+        if not query and combined:
+            query = _infer_query_from_subtitle_text(combined, context_entities) or query
 
-            query = _sanitize_image_query(
-                query or "One Piece Logo",
-                combined or summary,
-                _slide_context_entities(slide) or context_entities,
-            )
+        query = _sanitize_image_query(
+            query or "One Piece Logo",
+            combined or summary,
+            _slide_context_entities(slide) or context_entities,
+        )
 
-        # Force unique queries: suffix beat hint when duplicate (asset slides only)
+        # Force unique queries: suffix beat hint when duplicate.
         base_key = (query or "").lower()
-        if not preserve_ai and base_key in used_queries:
+        if base_key in used_queries:
             beat_hint = _extract_context_entities(subtitle_text, limit=1)
             if beat_hint and beat_hint[0].lower() not in base_key:
                 query = _sanitize_image_query(
@@ -1295,9 +1650,8 @@ def _refine_slides_from_subtitles(
                 hint = _query_variant_hint(f"{subtitle_text} {summary}")
                 query = f"{query} {hint}".strip() if hint and hint.lower() not in base_key else f"{query} alternate scene"
 
-        if not preserve_ai:
-            used_queries[base_key] = used_queries.get(base_key, 0) + 1
-            slide["image_search_query"] = _dedupe_query_words(query)
+        used_queries[base_key] = used_queries.get(base_key, 0) + 1
+        slide["image_search_query"] = _dedupe_query_words(query)
         if subtitle_text and len(summary) < 12:
             slide["summary"] = summary or subtitle_text[:80]
 
@@ -1416,6 +1770,7 @@ def generate_gemini_image_slides(
                 "transition_in",
                 "sfx_cue",
                 "asset_confidence",
+                *STORYBOARD_FIELDS,
             ):
                 if key in gemini_slide:
                     slide[key] = gemini_slide[key]
@@ -1436,6 +1791,11 @@ def generate_gemini_image_slides(
             final_slides,
             total_duration,
             timestamped_dialogues,
+        )
+        final_slides = _apply_visual_architecture_pass(
+            final_slides,
+            script_context,
+            video_profile,
         )
 
         with open(out_path, 'w', encoding='utf-8') as f:

@@ -102,6 +102,51 @@ Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
         self.assertGreaterEqual(len(enriched), 5)
         self.assertTrue(all(item.get("expression") != "neutral" for item in enriched))
 
+    def test_enrich_expression_mapping_extends_sparse_shorts_to_late_beats(self):
+        sub_lines = [
+            {
+                "start": f"0:00:{i * 5:05.2f}",
+                "end": f"0:00:{i * 5 + 2:05.2f}",
+                "text": "The Holy Knights reveal a terrifying truth about the final villains.",
+            }
+            for i in range(9)
+        ]
+        expressions = [
+            {
+                "start": "0:00:12.99",
+                "end": "0:00:14.38",
+                "text": "of the hierarchy. The Holy",
+                "expression": "serious",
+                "character": "narrator",
+            },
+            {
+                "start": "0:00:14.42",
+                "end": "0:00:15.02",
+                "text": "Knights do.",
+                "expression": "surprised",
+                "character": "narrator",
+            },
+        ]
+
+        enriched = enrich_expression_mapping(expressions, sub_lines)
+        latest = max(VideoGenerator()._parse_time(item["start"]) for item in enriched)
+
+        self.assertGreaterEqual(len(enriched), 5)
+        self.assertGreaterEqual(latest, 30.0)
+
+    def test_prepare_expression_sequence_skips_neutral_and_repeated_shorts_labels(self):
+        generator = VideoGenerator()
+        expressions = [
+            {"start": "0:00:01.00", "end": "0:00:01.70", "text": "First claim.", "expression": "serious"},
+            {"start": "0:00:03.00", "end": "0:00:03.70", "text": "Second claim.", "expression": "serious"},
+            {"start": "0:00:05.00", "end": "0:00:05.70", "text": "Twist?", "expression": "surprised"},
+            {"start": "0:00:07.00", "end": "0:00:07.70", "text": "Filler.", "expression": "neutral"},
+        ]
+
+        prepared = generator._prepare_expression_sequence(expressions, "", horizontal_video=False)
+
+        self.assertEqual([item["expression"] for item in prepared], ["serious", "surprised"])
+
     def test_hold_motion_only_applies_after_entry_for_continuous_holds(self):
         self.assertEqual(_hold_motion(0.1, 0.2, True), (1.0, 0, 0, 1.0))
         self.assertEqual(_hold_motion(0.6, 0.2, False), (1.0, 0, 0, 1.0))

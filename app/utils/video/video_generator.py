@@ -20,6 +20,7 @@ from app.utils.expressions.expression_effects import (
     resolve_expression_effect,
 )
 from app.utils.expressions.expression_overlay_cv import render_expression_overlays_opencv
+from app.utils.expressions.expression_mapper import enrich_expression_mapping, parse_ass_file
 from app.config import NARRATOR_CHARACTER
 
 # Configure logging
@@ -796,6 +797,64 @@ class VideoGenerator:
         digest_seed = sum(ord(ch) for ch in (label or "")) + index
         return LONG_FORM_EXPRESSION_POSITIONS[digest_seed % len(LONG_FORM_EXPRESSION_POSITIONS)]
 
+    def _prepare_expression_sequence(
+        self,
+        expressions: List[Dict[str, Any]],
+        subtitle_path: str,
+        horizontal_video: bool,
+    ) -> List[Dict[str, Any]]:
+        """
+        Repair sparse expression JSON and remove overlay-noise before grouping.
+
+        Shorts should feel like intentional pops, not repeated identical sticker
+        re-entries. Neutral cues are metadata, not visual overlay commands.
+        """
+        try:
+            sub_lines = parse_ass_file(subtitle_path) if subtitle_path and os.path.exists(subtitle_path) else []
+            if sub_lines:
+                expressions = enrich_expression_mapping(expressions, sub_lines)
+        except Exception as exc:
+            logger.warning("Could not enrich expressions from subtitles: %s", exc)
+
+        prepared: List[Dict[str, Any]] = []
+        last_kept_by_character: Dict[str, Dict[str, Any]] = {}
+        for expr in sorted(expressions or [], key=lambda item: self._parse_time(item.get("start", "0:00:00.00"))):
+            label = (expr.get("expression") or "neutral").strip().lower()
+            if label == "neutral":
+                continue
+            if horizontal_video and label not in LONG_FORM_EXPRESSION_LABELS:
+                continue
+
+            character = (expr.get("character") or NARRATOR_CHARACTER).strip().lower()
+            start_time = self._parse_time(expr.get("start", "0:00:00.00"))
+            end_time = self._parse_time(expr.get("end", "0:00:00.00"))
+            if end_time <= start_time:
+                continue
+
+            if not horizontal_video:
+                previous = last_kept_by_character.get(character)
+                if previous and previous.get("expression") == label:
+                    previous_end = self._parse_time(previous.get("end", "0:00:00.00"))
+                    if start_time <= previous_end + 0.85:
+                        previous["end"] = expr.get("end", previous["end"])
+                        previous["text"] = f"{previous.get('text', '')} {expr.get('text', '')}".strip()
+                        continue
+                    logger.info(
+                        "Skipping repeated shorts expression cue %s/%s at %.2fs",
+                        character,
+                        label,
+                        start_time,
+                    )
+                    continue
+
+            item = dict(expr)
+            item["expression"] = label
+            item["character"] = character
+            prepared.append(item)
+            last_kept_by_character[character] = item
+
+        return prepared
+
     def generate_video_with_expressions(
         self,
         audio_path: str,
@@ -850,13 +909,17 @@ class VideoGenerator:
                 
             logger.info(f"Loaded {len(expressions)} expressions from {expressions_path}")
             logger.debug(f"Expressions data: {json.dumps(expressions, indent=2, ensure_ascii=False)}")
+            expressions = self._prepare_expression_sequence(
+                expressions,
+                subtitle_path,
+                horizontal_video,
+            )
+            logger.info(f"Prepared {len(expressions)} expression cues for rendering")
             
             # Group intervals by character + expression (supports multi-character scripts)
             overlay_groups: Dict[str, Dict] = {}
             for expr in expressions:
                 label = expr['expression'].lower()
-                if horizontal_video and label not in LONG_FORM_EXPRESSION_LABELS:
-                    continue
                 character = (expr.get('character') or NARRATOR_CHARACTER).lower()
                 group_key = f"{character}::{label}"
                 if group_key not in overlay_groups:

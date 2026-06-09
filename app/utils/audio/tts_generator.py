@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import uuid
+import wave
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -118,6 +119,33 @@ def _split_text_for_tts(text: str, max_chars: int) -> List[str]:
 
 
 def _concat_wav_files(input_paths: List[Path], output_path: Path) -> None:
+    if not input_paths:
+        raise ValueError("At least one WAV chunk is required for concatenation")
+
+    temp_output_path = output_path.with_suffix(f"{output_path.suffix}.tmp")
+    try:
+        with wave.open(str(input_paths[0]), "rb") as first_wav:
+            params = first_wav.getparams()
+            frames = first_wav.readframes(first_wav.getnframes())
+
+        with wave.open(str(temp_output_path), "wb") as output_wav:
+            output_wav.setparams(params)
+            output_wav.writeframes(frames)
+            for path in input_paths[1:]:
+                with wave.open(str(path), "rb") as input_wav:
+                    input_params = input_wav.getparams()
+                    if input_params[:3] != params[:3]:
+                        raise ValueError(
+                            f"WAV chunk format mismatch for {path}: "
+                            f"expected {params[:3]}, got {input_params[:3]}"
+                        )
+                    output_wav.writeframes(input_wav.readframes(input_wav.getnframes()))
+        temp_output_path.replace(output_path)
+        return
+    except Exception as exc:
+        temp_output_path.unlink(missing_ok=True)
+        logger.warning("Python WAV concat failed, falling back to FFmpeg: %s", exc)
+
     concat_path = output_path.with_suffix(".concat.txt")
     try:
         lines = []
@@ -142,7 +170,8 @@ def _concat_wav_files(input_paths: List[Path], output_path: Path) -> None:
             "1",
             str(output_path),
         ]
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        timeout = int(os.getenv("QWEN_TTS_FFMPEG_TIMEOUT", "180"))
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
     finally:
         concat_path.unlink(missing_ok=True)
 
@@ -183,7 +212,8 @@ def _master_voiceover(raw_path: Path, output_path: Path) -> None:
 
     try:
         logger.info("Mastering voiceover with FFmpeg")
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        timeout = int(os.getenv("QWEN_TTS_FFMPEG_TIMEOUT", "180"))
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
         raw_path.unlink(missing_ok=True)
     except Exception as exc:
         logger.warning("Voiceover mastering failed, using raw audio: %s", exc)

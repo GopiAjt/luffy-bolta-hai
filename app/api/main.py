@@ -1755,3 +1755,412 @@ def get_latest_image_slides():
             'message': error_msg,
             'exists': False
         }), 500
+
+
+# ── AssetDatabase endpoints ──────────────────────────────────────────
+
+
+@app.route('/api/v1/assets/search', methods=['POST'])
+def asset_search():
+    """Unified asset search.
+
+    Request JSON:
+    {
+        "query": "free text",          // for semantic search
+        "tags": ["tag1", "tag2"],       // for tag search
+        "emotions": ["grief", "hope"], // for emotion search
+        "arc": "Marineford",           // for arc search
+        "mode": "semantic",            // "semantic" | "tag" | "emotion" | "arc" | "auto"
+        "top_k": 10
+    }
+
+    When mode is "auto" (default), the endpoint picks the best mode
+    based on which fields are provided, or combines results.
+    """
+    try:
+        from app.utils.assets import get_asset_database
+
+        data = request.json or {}
+        query = (data.get('query') or '').strip()
+        tags = data.get('tags') or []
+        emotions = data.get('emotions') or []
+        arc = (data.get('arc') or '').strip()
+        mode = (data.get('mode') or 'auto').strip().lower()
+        top_k = min(int(data.get('top_k', 10)), 50)
+
+        db = get_asset_database()
+        results = []
+
+        if mode == 'semantic' and query:
+            results = db.semantic_search(query, top_k=top_k)
+        elif mode == 'tag' and tags:
+            results = db.tag_search(tags, top_k=top_k)
+        elif mode == 'emotion' and emotions:
+            results = db.emotion_search(emotions, top_k=top_k)
+        elif mode == 'arc' and arc:
+            results = db.arc_search(arc, top_k=top_k)
+        elif mode == 'auto':
+            # Combine available signals into a beat-style query.
+            if query or tags or emotions or arc:
+                beat = {
+                    'text': query,
+                    'tags': tags,
+                    'emotion': ', '.join(emotions) if emotions else '',
+                    'entities': [],
+                }
+                # Extract entities from query for better ranking.
+                if query:
+                    from app.utils.slides.image_slides import _extract_context_entities
+                    beat['entities'] = _extract_context_entities(query, limit=6)
+
+                # Adjust weights based on what's provided.
+                weights = {
+                    'semantic': 0.35 if query else 0.0,
+                    'tag': 0.25 if tags else 0.0,
+                    'emotion': 0.25 if emotions else 0.0,
+                    'arc': 0.15 if arc else 0.0,
+                    'importance': 0.10,
+                }
+                # Normalize weights to sum to ~1.
+                total_w = sum(weights.values())
+                if total_w > 0:
+                    weights = {k: v / total_w for k, v in weights.items()}
+
+                results = db.rank_for_beat(beat, top_k=top_k, weights=weights)
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Provide at least one of: query, tags, emotions, arc',
+                }), 400
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid mode "{mode}" or missing required fields for that mode',
+            }), 400
+
+        return jsonify({
+            'status': 'success',
+            'mode': mode,
+            'count': len(results),
+            'results': [r.to_dict() for r in results],
+        })
+
+    except Exception as e:
+        logger.error(f"Asset search error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/assets/rank-for-beat', methods=['POST'])
+def asset_rank_for_beat():
+    """Rank assets for a storyboard beat.
+
+    Request JSON:
+    {
+        "text": "Luffy unlocks Gear 5 at Onigashima",
+        "beat_type": "reveal",
+        "entities": ["Luffy", "Kaidou"],
+        "emotion": "hope",
+        "tags": ["nika", "gear_5"],
+        "top_k": 5
+    }
+
+    Returns ranked assets with per-component score breakdowns.
+    """
+    try:
+        from app.utils.assets import get_asset_database
+
+        data = request.json or {}
+        top_k = min(int(data.get('top_k', 5)), 50)
+
+        beat = {
+            'text': data.get('text', ''),
+            'beat_type': data.get('beat_type', ''),
+            'entities': data.get('entities', []),
+            'emotion': data.get('emotion', ''),
+            'tags': data.get('tags', []),
+        }
+
+        db = get_asset_database()
+        results = db.rank_for_beat(beat, top_k=top_k)
+
+        return jsonify({
+            'status': 'success',
+            'beat_type': beat['beat_type'],
+            'count': len(results),
+            'results': [r.to_dict() for r in results],
+        })
+
+    except Exception as e:
+        logger.error(f"Asset rank-for-beat error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/assets/status', methods=['GET'])
+def asset_database_status():
+    """Health check for the AssetDatabase.
+
+    Returns index size, embedding status, categories, and cache info.
+    """
+    try:
+        from app.utils.assets import get_asset_database
+
+        db = get_asset_database()
+        return jsonify({
+            'status': 'success',
+            **db.status(),
+        })
+
+    except Exception as e:
+        logger.error(f"Asset database status error: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'total_records': 0,
+        }), 500
+
+
+# ── Character Relationship endpoints ─────────────────────────────────
+
+
+@app.route('/api/v1/characters/relationships', methods=['POST'])
+def character_relationships():
+    """Get ranked relationships for a character.
+
+    Request JSON:
+    {
+        "character": "Blackbeard",
+        "top_k": 10,
+        "narration": "optional narration text for context boosting"
+    }
+
+    Returns ranked relationships with types and evidence.
+    """
+    try:
+        from app.utils.assets import get_relationship_engine
+
+        data = request.json or {}
+        character = (data.get('character') or '').strip()
+        if not character:
+            return jsonify({'status': 'error', 'message': 'character is required'}), 400
+
+        top_k = min(int(data.get('top_k', 10)), 50)
+        narration = data.get('narration')
+
+        engine = get_relationship_engine()
+        results = engine.get_relationships(
+            character,
+            top_k=top_k,
+            narration=narration,
+        )
+
+        return jsonify({
+            'status': 'success',
+            'character': character,
+            'count': len(results),
+            'results': [r.to_dict() for r in results],
+        })
+
+    except Exception as e:
+        logger.error(f"Character relationship error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/characters/mutual', methods=['POST'])
+def character_mutual_connections():
+    """Find mutual connections between two characters.
+
+    Request JSON:
+    {
+        "character_a": "Luffy",
+        "character_b": "Blackbeard",
+        "top_k": 5
+    }
+    """
+    try:
+        from app.utils.assets import get_relationship_engine
+
+        data = request.json or {}
+        char_a = (data.get('character_a') or '').strip()
+        char_b = (data.get('character_b') or '').strip()
+        if not char_a or not char_b:
+            return jsonify({
+                'status': 'error',
+                'message': 'character_a and character_b are required',
+            }), 400
+
+        top_k = min(int(data.get('top_k', 5)), 50)
+
+        engine = get_relationship_engine()
+        results = engine.get_mutual_connections(char_a, char_b, top_k=top_k)
+
+        return jsonify({
+            'status': 'success',
+            'character_a': char_a,
+            'character_b': char_b,
+            'count': len(results),
+            'results': [r.to_dict() for r in results],
+        })
+
+    except Exception as e:
+        logger.error(f"Character mutual connections error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ── Emotion Curve endpoint ───────────────────────────────────────────
+
+
+@app.route('/api/v1/emotion-curve', methods=['POST'])
+def emotion_curve():
+    """Generate an emotion curve from story beats or raw script text.
+
+    Request JSON (option A — pre-classified beats):
+    {
+        "beats": [
+            {"beat_type": "hook", "text": "Why did Shanks..."},
+            {"beat_type": "reveal", "text": "The truth is..."},
+            ...
+        ]
+    }
+
+    Request JSON (option B — raw script, auto-analyzed):
+    {
+        "script": "Why did Shanks sacrifice his arm? Before the Great Pirate Era..."
+    }
+
+    Returns emotion scores per beat and a curve summary.
+    """
+    try:
+        from app.utils.slides.emotion_curve import EmotionCurveGenerator
+
+        data = request.json or {}
+        beats = data.get('beats')
+
+        if not beats:
+            script = (data.get('script') or '').strip()
+            if not script:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Provide either "beats" (list of beat dicts) or "script" (raw text)',
+                }), 400
+
+            from app.utils.slides.story_analyzer import StoryAnalyzer
+            analyzer = StoryAnalyzer()
+            beats = analyzer.analyze(script)
+
+        gen = EmotionCurveGenerator()
+        curve = gen.generate(beats)
+
+        return jsonify({
+            'status': 'success',
+            **curve.to_dict(),
+        })
+
+    except Exception as e:
+        logger.error(f"Emotion curve error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ── Motion Planner endpoints ─────────────────────────────────────────
+
+
+@app.route('/api/v1/motion/plan', methods=['POST'])
+def motion_plan():
+    """Plan motion style for a single beat.
+
+    Request JSON:
+    {
+        "emotion": "fear",
+        "visual_intent": "curiosity_gap",
+        "beat_type": "hook",
+        "visual_role": "character"
+    }
+    """
+    try:
+        from app.utils.slides.motion_planner import MotionPlanner
+
+        data = request.json or {}
+        planner = MotionPlanner()
+        plan = planner.plan(
+            emotion=data.get('emotion', 'neutral'),
+            visual_intent=data.get('visual_intent', ''),
+            beat_type=data.get('beat_type', ''),
+            visual_role=data.get('visual_role', ''),
+            previous_style=data.get('previous_style', ''),
+        )
+        return jsonify({'status': 'success', **plan.to_dict()})
+
+    except Exception as e:
+        logger.error(f"Motion plan error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/v1/motion/plan-sequence', methods=['POST'])
+def motion_plan_sequence():
+    """Plan motion for a full beat sequence.
+
+    Request JSON:
+    {
+        "beats": [
+            {"emotion": "fear", "beat_type": "hook", "visual_intent": "curiosity_gap"},
+            {"emotion": "curious", "beat_type": "evidence", "visual_intent": "proof"},
+            ...
+        ]
+    }
+    """
+    try:
+        from app.utils.slides.motion_planner import MotionPlanner
+
+        data = request.json or {}
+        beats = data.get('beats') or []
+        if not beats:
+            return jsonify({'status': 'error', 'message': 'beats list is required'}), 400
+
+        planner = MotionPlanner()
+        plans = planner.plan_sequence(beats)
+
+        return jsonify({
+            'status': 'success',
+            'count': len(plans),
+            'plans': [p.to_dict() for p in plans],
+        })
+
+    except Exception as e:
+        logger.error(f"Motion plan sequence error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ── Visual Diversity endpoint ────────────────────────────────────────
+
+
+@app.route('/api/v1/visual-diversity', methods=['POST'])
+def visual_diversity():
+    """Score visual diversity of storyboard slides.
+
+    Request JSON:
+    {
+        "slides": [...],
+        "rejection_threshold": 0.7
+    }
+
+    Returns per-section scores, rejected indices, and summary.
+    """
+    try:
+        from app.utils.slides.visual_diversity import VisualDiversityScorer
+
+        data = request.json or {}
+        slides = data.get('slides') or []
+        if not slides:
+            return jsonify({'status': 'error', 'message': 'slides list is required'}), 400
+
+        threshold = float(data.get('rejection_threshold', 0.7))
+        scorer = VisualDiversityScorer(rejection_threshold=threshold)
+        report = scorer.score(slides)
+
+        return jsonify({
+            'status': 'success',
+            **report.to_dict(),
+        })
+
+    except Exception as e:
+        logger.error(f"Visual diversity error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': str(e)}), 500

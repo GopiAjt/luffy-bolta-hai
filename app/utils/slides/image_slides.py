@@ -531,7 +531,7 @@ def _build_asset_metadata(slide: Dict, context_entities: List[str], duplicate_co
     confidence = slide.get("asset_confidence")
     if confidence is None:
         confidence = _asset_confidence(query, text, entities, duplicate_count)
-    return {
+    metadata = {
         "query": query,
         "asset_type": asset_type,
         "entities": entities[:6],
@@ -539,6 +539,30 @@ def _build_asset_metadata(slide: Dict, context_entities: List[str], duplicate_co
         "source_priority": ["upload", "vivre_card", "manual_asset_search"],
         "confidence": confidence,
     }
+
+    # Enrich with AssetDatabase ranked results (additive, never breaks pipeline).
+    try:
+        from app.utils.assets import get_asset_database
+        db = get_asset_database()
+        ranked = db.rank_for_beat(
+            {
+                "text": f"{query} {text}",
+                "beat_type": slide.get("beat_type", ""),
+                "entities": entities,
+                "tags": tags,
+                "emotion": slide.get("emotion_state", {}),
+            },
+            top_k=3,
+        )
+        if ranked:
+            metadata["ranked_assets"] = [
+                {"id": r.asset.id, "name": r.asset.name, "score": round(r.score, 4)}
+                for r in ranked
+            ]
+    except Exception:
+        pass  # Graceful degradation — AssetDatabase is optional.
+
+    return metadata
 
 
 def _classify_visual_intent(slide: Dict) -> Dict:

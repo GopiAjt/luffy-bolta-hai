@@ -91,9 +91,14 @@ VECTOR_DB_CONFIG = {
     "password": "postgres"
 }
 
+# --- ASSET DATABASE ---
+ASSET_DB_EMBEDDING_MODEL = os.getenv("ASSET_DB_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+ASSET_DB_CACHE_DIR = BASE_DIR / "output" / "cache" / "asset_db"
+
 # Ensure directories exist
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 COMPILED_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 MANGA_PDF_DIR.mkdir(parents=True, exist_ok=True)
 TRANSITION_SFX_DIR.mkdir(parents=True, exist_ok=True)
+ASSET_DB_CACHE_DIR.mkdir(parents=True, exist_ok=True)

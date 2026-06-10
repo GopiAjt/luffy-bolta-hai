@@ -6,7 +6,14 @@
     "note": "Curated editorial taxonomy based on OPArchive character, devil fruit, and island categories plus slide-planning needs."
   },
   "schema": {
-    "required_asset_fields": ["character", "arc", "emotion", "visual_type", "importance", "tags"],
+    "required_asset_fields": [
+      "character",
+      "arc",
+      "emotion",
+      "visual_type",
+      "importance",
+      "tags"
+    ],
     "importance_scale": "1=low utility, 5=core recurring visual anchor"
   },
   "assets": [
@@ -19,7 +26,16 @@
       "emotion": "freedom, joy, resolve, wonder",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "captain", "nika", "gear_5", "freedom", "dream", "yonko", "protagonist"]
+      "tags": [
+        "straw_hat",
+        "captain",
+        "nika",
+        "gear_5",
+        "freedom",
+        "dream",
+        "yonko",
+        "protagonist"
+      ]
     },
     {
       "id": "straw_hat_zoro",
@@ -30,7 +46,15 @@
       "emotion": "discipline, pain, loyalty, ambition",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "swordsman", "kuina", "mihawk", "enma", "nothing_happened", "loyalty"]
+      "tags": [
+        "straw_hat",
+        "swordsman",
+        "kuina",
+        "mihawk",
+        "enma",
+        "nothing_happened",
+        "loyalty"
+      ]
     },
     {
       "id": "straw_hat_nami",
@@ -41,7 +65,15 @@
       "emotion": "fear, courage, grief, relief",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "navigator", "arlong_park", "cocoyasi", "zeus", "weather", "map"]
+      "tags": [
+        "straw_hat",
+        "navigator",
+        "arlong_park",
+        "cocoyasi",
+        "zeus",
+        "weather",
+        "map"
+      ]
     },
     {
       "id": "straw_hat_usopp",
@@ -52,7 +84,15 @@
       "emotion": "fear, bravery, insecurity, hope",
       "visual_type": "hero_character",
       "importance": 4,
-      "tags": ["straw_hat", "sniper", "sogeking", "bravery", "lies", "elbaf_dream", "god_usopp"]
+      "tags": [
+        "straw_hat",
+        "sniper",
+        "sogeking",
+        "bravery",
+        "lies",
+        "elbaf_dream",
+        "god_usopp"
+      ]
     },
     {
       "id": "straw_hat_sanji",
@@ -63,7 +103,15 @@
       "emotion": "love, sacrifice, shame, resolve",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "cook", "baratie", "zeff", "germa", "whole_cake", "ifrit_jambe"]
+      "tags": [
+        "straw_hat",
+        "cook",
+        "baratie",
+        "zeff",
+        "germa",
+        "whole_cake",
+        "ifrit_jambe"
+      ]
     },
     {
       "id": "straw_hat_chopper",
@@ -74,7 +122,14 @@
       "emotion": "innocence, grief, compassion, panic",
       "visual_type": "hero_character",
       "importance": 4,
-      "tags": ["straw_hat", "doctor", "drum_island", "hiriluk", "monster_point", "medicine"]
+      "tags": [
+        "straw_hat",
+        "doctor",
+        "drum_island",
+        "hiriluk",
+        "monster_point",
+        "medicine"
+      ]
     },
     {
       "id": "straw_hat_robin",
@@ -85,7 +140,14 @@
       "emotion": "loneliness, trauma, trust, defiance",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "archaeologist", "ohara", "poneglyph", "i_want_to_live", "void_century"]
+      "tags": [
+        "straw_hat",
+        "archaeologist",
+        "ohara",
+        "poneglyph",
+        "i_want_to_live",
+        "void_century"
+      ]
     },
     {
       "id": "straw_hat_franky",
@@ -96,7 +158,15 @@
       "emotion": "guilt, pride, invention, flamboyance",
       "visual_type": "hero_character",
       "importance": 4,
-      "tags": ["straw_hat", "shipwright", "water_7", "tom", "sunny", "pluton_blueprints", "cyborg"]
+      "tags": [
+        "straw_hat",
+        "shipwright",
+        "water_7",
+        "tom",
+        "sunny",
+        "pluton_blueprints",
+        "cyborg"
+      ]
     },
     {
       "id": "straw_hat_brook",
@@ -107,7 +177,14 @@
       "emotion": "loneliness, humor, memory, devotion",
       "visual_type": "hero_character",
       "importance": 4,
-      "tags": ["straw_hat", "musician", "laboon", "thriller_bark", "soul", "whole_cake"]
+      "tags": [
+        "straw_hat",
+        "musician",
+        "laboon",
+        "thriller_bark",
+        "soul",
+        "whole_cake"
+      ]
     },
     {
       "id": "straw_hat_jinbe",
@@ -118,7 +195,15 @@
       "emotion": "honor, calm, duty, protection",
       "visual_type": "hero_character",
       "importance": 5,
-      "tags": ["straw_hat", "helmsman", "fishman", "sun_pirates", "marineford", "whole_cake", "wano"]
+      "tags": [
+        "straw_hat",
+        "helmsman",
+        "fishman",
+        "sun_pirates",
+        "marineford",
+        "whole_cake",
+        "wano"
+      ]
     },
     {
       "id": "yonko_shanks",
@@ -129,7 +214,15 @@
       "emotion": "mystery, calm, authority, warning",
       "visual_type": "power_character",
       "importance": 5,
-      "tags": ["yonko", "red_hair_pirates", "haki", "mary_geoise", "luffy", "figarland", "warning"]
+      "tags": [
+        "yonko",
+        "red_hair_pirates",
+        "haki",
+        "mary_geoise",
+        "luffy",
+        "figarland",
+        "warning"
+      ]
     },
     {
       "id": "yonko_blackbeard",
@@ -140,7 +233,15 @@
       "emotion": "greed, chaos, fear, ambition",
       "visual_type": "villain_character",
       "importance": 5,
-      "tags": ["yonko", "blackbeard", "yami_yami", "gura_gura", "dreams", "final_villain", "darkness"]
+      "tags": [
+        "yonko",
+        "blackbeard",
+        "yami_yami",
+        "gura_gura",
+        "dreams",
+        "final_villain",
+        "darkness"
+      ]
     },
     {
       "id": "yonko_buggy",
@@ -151,7 +252,15 @@
       "emotion": "absurdity, panic, luck, spectacle",
       "visual_type": "comic_power_character",
       "importance": 4,
-      "tags": ["yonko", "cross_guild", "clown", "mihawk", "crocodile", "luck", "bounty"]
+      "tags": [
+        "yonko",
+        "cross_guild",
+        "clown",
+        "mihawk",
+        "crocodile",
+        "luck",
+        "bounty"
+      ]
     },
     {
       "id": "yonko_kaido",
@@ -162,7 +271,15 @@
       "emotion": "terror, dominance, despair, violence",
       "visual_type": "villain_character",
       "importance": 5,
-      "tags": ["yonko", "beasts_pirates", "wano", "dragon", "seiryu", "onigashima", "monster"]
+      "tags": [
+        "yonko",
+        "beasts_pirates",
+        "wano",
+        "dragon",
+        "seiryu",
+        "onigashima",
+        "monster"
+      ]
     },
     {
       "id": "yonko_big_mom",
@@ -173,7 +290,15 @@
       "emotion": "hunger, horror, family, rage",
       "visual_type": "villain_character",
       "importance": 5,
-      "tags": ["yonko", "big_mom", "totto_land", "soru_soru", "homies", "family", "wedding"]
+      "tags": [
+        "yonko",
+        "big_mom",
+        "totto_land",
+        "soru_soru",
+        "homies",
+        "family",
+        "wedding"
+      ]
     },
     {
       "id": "yonko_whitebeard",
@@ -184,7 +309,15 @@
       "emotion": "legacy, grief, pride, sacrifice",
       "visual_type": "legend_character",
       "importance": 5,
-      "tags": ["yonko", "whitebeard", "marineford", "ace", "family", "gura_gura", "legacy"]
+      "tags": [
+        "yonko",
+        "whitebeard",
+        "marineford",
+        "ace",
+        "family",
+        "gura_gura",
+        "legacy"
+      ]
     },
     {
       "id": "admiral_akainu",
@@ -195,7 +328,14 @@
       "emotion": "rage, justice, brutality, threat",
       "visual_type": "authority_character",
       "importance": 5,
-      "tags": ["admiral", "fleet_admiral", "absolute_justice", "magma", "marineford", "ace"]
+      "tags": [
+        "admiral",
+        "fleet_admiral",
+        "absolute_justice",
+        "magma",
+        "marineford",
+        "ace"
+      ]
     },
     {
       "id": "admiral_kizaru",
@@ -206,7 +346,14 @@
       "emotion": "detachment, pressure, speed, ambiguity",
       "visual_type": "authority_character",
       "importance": 5,
-      "tags": ["admiral", "light", "sabaody", "egghead", "marine", "unclear_morality"]
+      "tags": [
+        "admiral",
+        "light",
+        "sabaody",
+        "egghead",
+        "marine",
+        "unclear_morality"
+      ]
     },
     {
       "id": "admiral_aokiji",
@@ -217,7 +364,14 @@
       "emotion": "regret, restraint, coldness, ambiguity",
       "visual_type": "authority_character",
       "importance": 5,
-      "tags": ["admiral", "former_admiral", "ice", "blackbeard_pirates", "ohara", "garp"]
+      "tags": [
+        "admiral",
+        "former_admiral",
+        "ice",
+        "blackbeard_pirates",
+        "ohara",
+        "garp"
+      ]
     },
     {
       "id": "admiral_fujitora",
@@ -228,7 +382,14 @@
       "emotion": "mercy, guilt, justice, humility",
       "visual_type": "authority_character",
       "importance": 4,
-      "tags": ["admiral", "gravity", "dressrosa", "blind_swordsman", "justice", "warlord_system"]
+      "tags": [
+        "admiral",
+        "gravity",
+        "dressrosa",
+        "blind_swordsman",
+        "justice",
+        "warlord_system"
+      ]
     },
     {
       "id": "admiral_ryokugyu",
@@ -239,7 +400,14 @@
       "emotion": "arrogance, oppression, threat, obedience",
       "visual_type": "authority_character",
       "importance": 4,
-      "tags": ["admiral", "forest", "wano", "world_government", "prejudice", "marines"]
+      "tags": [
+        "admiral",
+        "forest",
+        "wano",
+        "world_government",
+        "prejudice",
+        "marines"
+      ]
     },
     {
       "id": "holy_knight_garling",
@@ -250,7 +418,14 @@
       "emotion": "supremacy, menace, judgment, aristocracy",
       "visual_type": "elite_villain_character",
       "importance": 5,
-      "tags": ["holy_knights", "figarland", "god_valley", "celestial_dragons", "executioner", "shanks"]
+      "tags": [
+        "holy_knights",
+        "figarland",
+        "god_valley",
+        "celestial_dragons",
+        "executioner",
+        "shanks"
+      ]
     },
     {
       "id": "holy_knight_shamrock",
@@ -261,7 +436,14 @@
       "emotion": "mystery, nobility, threat, control",
       "visual_type": "elite_villain_character",
       "importance": 5,
-      "tags": ["holy_knights", "figarland", "shamrock", "elbaph", "shanks_parallel", "world_nobles"]
+      "tags": [
+        "holy_knights",
+        "figarland",
+        "shamrock",
+        "elbaph",
+        "shanks_parallel",
+        "world_nobles"
+      ]
     },
     {
       "id": "holy_knight_gunko",
@@ -272,7 +454,14 @@
       "emotion": "cruelty, precision, fear, obedience",
       "visual_type": "elite_villain_character",
       "importance": 4,
-      "tags": ["holy_knights", "gunko", "elbaph", "world_nobles", "kidnapping", "threat"]
+      "tags": [
+        "holy_knights",
+        "gunko",
+        "elbaph",
+        "world_nobles",
+        "kidnapping",
+        "threat"
+      ]
     },
     {
       "id": "holy_knight_killingham",
@@ -283,7 +472,14 @@
       "emotion": "nightmare, distortion, danger, control",
       "visual_type": "elite_villain_character",
       "importance": 4,
-      "tags": ["holy_knights", "killingham", "dreams", "qilin", "elbaph", "world_nobles"]
+      "tags": [
+        "holy_knights",
+        "killingham",
+        "dreams",
+        "qilin",
+        "elbaph",
+        "world_nobles"
+      ]
     },
     {
       "id": "holy_knight_sommers",
@@ -294,7 +490,14 @@
       "emotion": "authority, menace, capture, obedience",
       "visual_type": "elite_villain_character",
       "importance": 4,
-      "tags": ["holy_knights", "sommers", "elbaph", "world_nobles", "kidnapping", "control"]
+      "tags": [
+        "holy_knights",
+        "sommers",
+        "elbaph",
+        "world_nobles",
+        "kidnapping",
+        "control"
+      ]
     },
     {
       "id": "five_elders_saturn",
@@ -305,7 +508,15 @@
       "emotion": "dread, authority, cruelty, science_horror",
       "visual_type": "supreme_authority_character",
       "importance": 5,
-      "tags": ["five_elders", "gorosei", "saturn", "egghead", "bonney", "kuma", "world_government"]
+      "tags": [
+        "five_elders",
+        "gorosei",
+        "saturn",
+        "egghead",
+        "bonney",
+        "kuma",
+        "world_government"
+      ]
     },
     {
       "id": "five_elders_mars",
@@ -316,7 +527,14 @@
       "emotion": "surveillance, dread, authority, pressure",
       "visual_type": "supreme_authority_character",
       "importance": 4,
-      "tags": ["five_elders", "gorosei", "mars", "egghead", "mary_geoise", "world_government"]
+      "tags": [
+        "five_elders",
+        "gorosei",
+        "mars",
+        "egghead",
+        "mary_geoise",
+        "world_government"
+      ]
     },
     {
       "id": "five_elders_warcury",
@@ -327,7 +545,14 @@
       "emotion": "force, dread, command, ancient_power",
       "visual_type": "supreme_authority_character",
       "importance": 4,
-      "tags": ["five_elders", "gorosei", "warcury", "egghead", "conqueror_haki", "world_government"]
+      "tags": [
+        "five_elders",
+        "gorosei",
+        "warcury",
+        "egghead",
+        "conqueror_haki",
+        "world_government"
+      ]
     },
     {
       "id": "five_elders_nusjuro",
@@ -338,7 +563,14 @@
       "emotion": "precision, coldness, threat, judgment",
       "visual_type": "supreme_authority_character",
       "importance": 4,
-      "tags": ["five_elders", "gorosei", "nusjuro", "sword", "egghead", "world_government"]
+      "tags": [
+        "five_elders",
+        "gorosei",
+        "nusjuro",
+        "sword",
+        "egghead",
+        "world_government"
+      ]
     },
     {
       "id": "five_elders_ju_peter",
@@ -349,7 +581,14 @@
       "emotion": "hunger, dread, pursuit, authority",
       "visual_type": "supreme_authority_character",
       "importance": 4,
-      "tags": ["five_elders", "gorosei", "ju_peter", "egghead", "world_government", "monster"]
+      "tags": [
+        "five_elders",
+        "gorosei",
+        "ju_peter",
+        "egghead",
+        "world_government",
+        "monster"
+      ]
     },
     {
       "id": "imu",
@@ -360,7 +599,15 @@
       "emotion": "mystery, dread, control, finality",
       "visual_type": "final_authority_character",
       "importance": 5,
-      "tags": ["imu", "empty_throne", "world_government", "void_century", "lily", "final_villain", "shadow"]
+      "tags": [
+        "imu",
+        "empty_throne",
+        "world_government",
+        "void_century",
+        "lily",
+        "final_villain",
+        "shadow"
+      ]
     },
     {
       "id": "ancient_weapon_poseidon",
@@ -371,7 +618,14 @@
       "emotion": "innocence, awe, danger, destiny",
       "visual_type": "ancient_weapon",
       "importance": 5,
-      "tags": ["ancient_weapon", "poseidon", "shirahoshi", "sea_kings", "fishman_island", "joy_boy"]
+      "tags": [
+        "ancient_weapon",
+        "poseidon",
+        "shirahoshi",
+        "sea_kings",
+        "fishman_island",
+        "joy_boy"
+      ]
     },
     {
       "id": "ancient_weapon_pluton",
@@ -382,7 +636,15 @@
       "emotion": "danger, secrecy, dread, temptation",
       "visual_type": "ancient_weapon",
       "importance": 5,
-      "tags": ["ancient_weapon", "pluton", "arabasta", "water_7", "franky", "wano", "blueprints"]
+      "tags": [
+        "ancient_weapon",
+        "pluton",
+        "arabasta",
+        "water_7",
+        "franky",
+        "wano",
+        "blueprints"
+      ]
     },
     {
       "id": "ancient_weapon_uranus",
@@ -393,7 +655,15 @@
       "emotion": "annihilation, mystery, fear, scale",
       "visual_type": "ancient_weapon",
       "importance": 5,
-      "tags": ["ancient_weapon", "uranus", "lulusia", "mother_flame", "imu", "sky_weapon", "void_century"]
+      "tags": [
+        "ancient_weapon",
+        "uranus",
+        "lulusia",
+        "mother_flame",
+        "imu",
+        "sky_weapon",
+        "void_century"
+      ]
     },
     {
       "id": "arc_east_blue",
@@ -404,7 +674,15 @@
       "emotion": "origin, adventure, promise, friendship",
       "visual_type": "arc_location_montage",
       "importance": 5,
-      "tags": ["major_arc", "east_blue", "crew_origin", "arlong_park", "baratie", "loguetown", "roger"]
+      "tags": [
+        "major_arc",
+        "east_blue",
+        "crew_origin",
+        "arlong_park",
+        "baratie",
+        "loguetown",
+        "roger"
+      ]
     },
     {
       "id": "arc_alabasta",
@@ -415,7 +693,15 @@
       "emotion": "civil_war, loyalty, desperation, relief",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "arabasta", "vivi", "crocodile", "pluton", "poneglyph", "kingdom"]
+      "tags": [
+        "major_arc",
+        "arabasta",
+        "vivi",
+        "crocodile",
+        "pluton",
+        "poneglyph",
+        "kingdom"
+      ]
     },
     {
       "id": "arc_skypiea",
@@ -426,7 +712,15 @@
       "emotion": "wonder, faith, adventure, liberation",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "skypiea", "jaya", "noland", "enel", "sun_god", "poneglyph"]
+      "tags": [
+        "major_arc",
+        "skypiea",
+        "jaya",
+        "noland",
+        "enel",
+        "sun_god",
+        "poneglyph"
+      ]
     },
     {
       "id": "arc_water_7_enies_lobby",
@@ -437,7 +731,15 @@
       "emotion": "betrayal, rescue, grief, defiance",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "water_7", "enies_lobby", "robin", "franky", "going_merry", "world_government"]
+      "tags": [
+        "major_arc",
+        "water_7",
+        "enies_lobby",
+        "robin",
+        "franky",
+        "going_merry",
+        "world_government"
+      ]
     },
     {
       "id": "arc_thriller_bark",
@@ -448,7 +750,15 @@
       "emotion": "horror, loneliness, sacrifice, loyalty",
       "visual_type": "arc_location",
       "importance": 4,
-      "tags": ["major_arc", "thriller_bark", "brook", "moria", "kuma", "nothing_happened", "shadows"]
+      "tags": [
+        "major_arc",
+        "thriller_bark",
+        "brook",
+        "moria",
+        "kuma",
+        "nothing_happened",
+        "shadows"
+      ]
     },
     {
       "id": "arc_sabaody",
@@ -459,7 +769,15 @@
       "emotion": "shock, helplessness, injustice, separation",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "sabaody", "celestial_dragons", "kizaru", "kuma", "separation", "supernovas"]
+      "tags": [
+        "major_arc",
+        "sabaody",
+        "celestial_dragons",
+        "kizaru",
+        "kuma",
+        "separation",
+        "supernovas"
+      ]
     },
     {
       "id": "arc_marineford",
@@ -470,7 +788,15 @@
       "emotion": "war, grief, sacrifice, legacy",
       "visual_type": "arc_battlefield",
       "importance": 5,
-      "tags": ["major_arc", "marineford", "ace", "whitebeard", "akainu", "war", "legacy"]
+      "tags": [
+        "major_arc",
+        "marineford",
+        "ace",
+        "whitebeard",
+        "akainu",
+        "war",
+        "legacy"
+      ]
     },
     {
       "id": "arc_fishman_island",
@@ -481,7 +807,15 @@
       "emotion": "inherited_hate, hope, apology, prophecy",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "fishman_island", "poseidon", "joy_boy", "noah", "racism", "jinbe"]
+      "tags": [
+        "major_arc",
+        "fishman_island",
+        "poseidon",
+        "joy_boy",
+        "noah",
+        "racism",
+        "jinbe"
+      ]
     },
     {
       "id": "arc_punk_hazard",
@@ -492,7 +826,15 @@
       "emotion": "experiment, danger, alliance, unease",
       "visual_type": "arc_location",
       "importance": 4,
-      "tags": ["major_arc", "punk_hazard", "law", "caesar", "smile", "children", "alliance"]
+      "tags": [
+        "major_arc",
+        "punk_hazard",
+        "law",
+        "caesar",
+        "smile",
+        "children",
+        "alliance"
+      ]
     },
     {
       "id": "arc_dressrosa",
@@ -503,7 +845,15 @@
       "emotion": "oppression, memory, rebellion, liberation",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "dressrosa", "doflamingo", "law", "sabo", "grand_fleet", "toy_soldier"]
+      "tags": [
+        "major_arc",
+        "dressrosa",
+        "doflamingo",
+        "law",
+        "sabo",
+        "grand_fleet",
+        "toy_soldier"
+      ]
     },
     {
       "id": "arc_zou",
@@ -514,7 +864,15 @@
       "emotion": "loyalty, mystery, ancient_history, resolve",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "zou", "zunesha", "minks", "road_poneglyph", "raizo", "kozuki"]
+      "tags": [
+        "major_arc",
+        "zou",
+        "zunesha",
+        "minks",
+        "road_poneglyph",
+        "raizo",
+        "kozuki"
+      ]
     },
     {
       "id": "arc_whole_cake",
@@ -525,7 +883,15 @@
       "emotion": "family_trauma, love, betrayal, escape",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "whole_cake", "sanji", "big_mom", "germa", "pudding", "wedding"]
+      "tags": [
+        "major_arc",
+        "whole_cake",
+        "sanji",
+        "big_mom",
+        "germa",
+        "pudding",
+        "wedding"
+      ]
     },
     {
       "id": "arc_wano",
@@ -536,7 +902,16 @@
       "emotion": "oppression, rebellion, liberation, dawn",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "wano", "kaido", "nika", "oden", "pluton", "onigashima", "samurai"]
+      "tags": [
+        "major_arc",
+        "wano",
+        "kaido",
+        "nika",
+        "oden",
+        "pluton",
+        "onigashima",
+        "samurai"
+      ]
     },
     {
       "id": "arc_reverie",
@@ -547,7 +922,15 @@
       "emotion": "conspiracy, dread, revelation, tension",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "reverie", "mary_geoise", "imu", "five_elders", "sabo", "holy_knights"]
+      "tags": [
+        "major_arc",
+        "reverie",
+        "mary_geoise",
+        "imu",
+        "five_elders",
+        "sabo",
+        "holy_knights"
+      ]
     },
     {
       "id": "arc_egghead",
@@ -558,7 +941,15 @@
       "emotion": "future, panic, truth, exposure",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "egghead", "vegapunk", "kizaru", "saturn", "broadcast", "void_century"]
+      "tags": [
+        "major_arc",
+        "egghead",
+        "vegapunk",
+        "kizaru",
+        "saturn",
+        "broadcast",
+        "void_century"
+      ]
     },
     {
       "id": "arc_elbaph",
@@ -569,7 +960,427 @@
       "emotion": "myth, scale, mystery, threat",
       "visual_type": "arc_location",
       "importance": 5,
-      "tags": ["major_arc", "elbaph", "giants", "loki", "holy_knights", "yggdrasil", "saul"]
+      "tags": [
+        "major_arc",
+        "elbaph",
+        "giants",
+        "loki",
+        "holy_knights",
+        "yggdrasil",
+        "saul"
+      ]
+    },
+    {
+      "id": "rev_dragon",
+      "category": "revolutionary_army",
+      "name": "Monkey D. Dragon",
+      "importance": 5,
+      "tags": [
+        "revolutionary",
+        "leader",
+        "storm",
+        "world_government",
+        "freedom"
+      ]
+    },
+    {
+      "id": "rev_sabo",
+      "category": "revolutionary_army",
+      "name": "Sabo",
+      "importance": 5,
+      "tags": [
+        "flame_emperor",
+        "revolutionary",
+        "ace",
+        "mary_geoise",
+        "freedom"
+      ]
+    },
+    {
+      "id": "rev_ivankov",
+      "category": "revolutionary_army",
+      "name": "Emporio Ivankov",
+      "importance": 4,
+      "tags": [
+        "revolutionary",
+        "kamabakka",
+        "impel_down"
+      ]
+    },
+    {
+      "id": "rev_karasu",
+      "category": "revolutionary_army",
+      "name": "Karasu",
+      "importance": 4,
+      "tags": [
+        "revolutionary",
+        "crow",
+        "commander"
+      ]
+    },
+    {
+      "id": "rev_morley",
+      "category": "revolutionary_army",
+      "name": "Morley",
+      "importance": 4,
+      "tags": [
+        "revolutionary",
+        "commander"
+      ]
+    },
+    {
+      "id": "rev_belo_betty",
+      "category": "revolutionary_army",
+      "name": "Belo Betty",
+      "importance": 4,
+      "tags": [
+        "revolutionary",
+        "morale",
+        "commander"
+      ]
+    },
+    {
+      "id": "rev_lindbergh",
+      "category": "revolutionary_army",
+      "name": "Lindbergh",
+      "importance": 4,
+      "tags": [
+        "revolutionary",
+        "inventor",
+        "mink"
+      ]
+    },
+    {
+      "id": "legend_roger",
+      "category": "roger_era_legends",
+      "name": "Gol D. Roger",
+      "importance": 5,
+      "tags": [
+        "pirate_king",
+        "laugh_tale",
+        "one_piece"
+      ]
+    },
+    {
+      "id": "legend_rayleigh",
+      "category": "roger_era_legends",
+      "name": "Silvers Rayleigh",
+      "importance": 5,
+      "tags": [
+        "dark_king",
+        "roger_pirates",
+        "haki"
+      ]
+    },
+    {
+      "id": "legend_gaban",
+      "category": "roger_era_legends",
+      "name": "Scopper Gaban",
+      "importance": 5,
+      "tags": [
+        "roger_pirates"
+      ]
+    },
+    {
+      "id": "legend_oden",
+      "category": "roger_era_legends",
+      "name": "Kozuki Oden",
+      "importance": 5,
+      "tags": [
+        "wano",
+        "laugh_tale",
+        "samurai"
+      ]
+    },
+    {
+      "id": "legend_xebec",
+      "category": "roger_era_legends",
+      "name": "Rocks D. Xebec",
+      "importance": 5,
+      "tags": [
+        "rocks",
+        "god_valley"
+      ]
+    },
+    {
+      "id": "legend_garp",
+      "category": "roger_era_legends",
+      "name": "Monkey D. Garp",
+      "importance": 5,
+      "tags": [
+        "marine_hero",
+        "god_valley"
+      ]
+    },
+    {
+      "id": "legend_sengoku",
+      "category": "roger_era_legends",
+      "name": "Sengoku",
+      "importance": 4,
+      "tags": [
+        "fleet_admiral",
+        "buddha"
+      ]
+    },
+    {
+      "id": "warlord_mihawk",
+      "category": "warlords",
+      "name": "Dracule Mihawk",
+      "importance": 5,
+      "tags": [
+        "worlds_strongest_swordsman"
+      ]
+    },
+    {
+      "id": "warlord_crocodile",
+      "category": "warlords",
+      "name": "Crocodile",
+      "importance": 5,
+      "tags": [
+        "cross_guild",
+        "arabasta"
+      ]
+    },
+    {
+      "id": "warlord_doflamingo",
+      "category": "warlords",
+      "name": "Donquixote Doflamingo",
+      "importance": 5,
+      "tags": [
+        "dressrosa",
+        "celestial_dragon"
+      ]
+    },
+    {
+      "id": "warlord_kuma",
+      "category": "warlords",
+      "name": "Bartholomew Kuma",
+      "importance": 5,
+      "tags": [
+        "revolutionary",
+        "egghead"
+      ]
+    },
+    {
+      "id": "warlord_hancock",
+      "category": "warlords",
+      "name": "Boa Hancock",
+      "importance": 5,
+      "tags": [
+        "amazon_lily",
+        "love"
+      ]
+    },
+    {
+      "id": "warlord_moria",
+      "category": "warlords",
+      "name": "Gecko Moria",
+      "importance": 4,
+      "tags": [
+        "thriller_bark",
+        "shadows"
+      ]
+    },
+    {
+      "id": "supernova_law",
+      "category": "worst_generation",
+      "name": "Trafalgar Law",
+      "importance": 5,
+      "tags": [
+        "ope_ope",
+        "heart_pirates"
+      ]
+    },
+    {
+      "id": "supernova_kid",
+      "category": "worst_generation",
+      "name": "Eustass Kid",
+      "importance": 5,
+      "tags": [
+        "magnetism",
+        "rival"
+      ]
+    },
+    {
+      "id": "supernova_killer",
+      "category": "worst_generation",
+      "name": "Killer",
+      "importance": 4,
+      "tags": [
+        "kid_pirates"
+      ]
+    },
+    {
+      "id": "supernova_bonney",
+      "category": "worst_generation",
+      "name": "Jewelry Bonney",
+      "importance": 5,
+      "tags": [
+        "kuma",
+        "egghead"
+      ]
+    },
+    {
+      "id": "supernova_bege",
+      "category": "worst_generation",
+      "name": "Capone Bege",
+      "importance": 4,
+      "tags": [
+        "mafia"
+      ]
+    },
+    {
+      "id": "supernova_hawkins",
+      "category": "worst_generation",
+      "name": "Basil Hawkins",
+      "importance": 4,
+      "tags": [
+        "cards",
+        "prediction"
+      ]
+    },
+    {
+      "id": "supernova_apoo",
+      "category": "worst_generation",
+      "name": "Scratchmen Apoo",
+      "importance": 3,
+      "tags": [
+        "music"
+      ]
+    },
+    {
+      "id": "supernova_urouge",
+      "category": "worst_generation",
+      "name": "Urouge",
+      "importance": 4,
+      "tags": [
+        "sky_island"
+      ]
+    },
+    {
+      "id": "supernova_xdrake",
+      "category": "worst_generation",
+      "name": "X Drake",
+      "importance": 4,
+      "tags": [
+        "sword",
+        "marine"
+      ]
+    },
+    {
+      "id": "lore_joyboy",
+      "category": "void_century",
+      "name": "Joy Boy",
+      "importance": 5,
+      "tags": [
+        "nika",
+        "ancient_kingdom"
+      ]
+    },
+    {
+      "id": "lore_lily",
+      "category": "void_century",
+      "name": "Nefertari D. Lily",
+      "importance": 5,
+      "tags": [
+        "imu",
+        "poneglyphs"
+      ]
+    },
+    {
+      "id": "lore_clover",
+      "category": "void_century",
+      "name": "Professor Clover",
+      "importance": 4,
+      "tags": [
+        "ohara"
+      ]
+    },
+    {
+      "id": "lore_saul",
+      "category": "void_century",
+      "name": "Jaguar D. Saul",
+      "importance": 5,
+      "tags": [
+        "ohara",
+        "elbaph"
+      ]
+    },
+    {
+      "id": "lore_vegapunk",
+      "category": "void_century",
+      "name": "Vegapunk",
+      "importance": 5,
+      "tags": [
+        "egghead",
+        "broadcast"
+      ]
+    },
+    {
+      "id": "lore_toki",
+      "category": "void_century",
+      "name": "Kozuki Toki",
+      "importance": 4,
+      "tags": [
+        "time_travel",
+        "void_century"
+      ]
     }
+  ],
+  "devil_fruits": [
+    "hito_hito_model_nika",
+    "yami_yami",
+    "gura_gura",
+    "ope_ope",
+    "uo_uo_model_seiryu",
+    "pika_pika",
+    "magu_magu"
+  ],
+  "locations": [
+    "laugh_tale",
+    "mary_geoise",
+    "god_valley",
+    "ohara",
+    "hachinosu",
+    "impel_down"
+  ],
+  "organizations": [
+    "world_government",
+    "marines",
+    "cipher_pol",
+    "cp9",
+    "cp0",
+    "revolutionary_army",
+    "cross_guild",
+    "roger_pirates",
+    "rocks_pirates",
+    "whitebeard_pirates",
+    "red_hair_pirates"
+  ],
+  "events": [
+    "god_valley_incident",
+    "ohara_incident",
+    "reverie",
+    "marineford_war",
+    "egghead_incident",
+    "void_century",
+    "rocky_port_incident",
+    "lulusia_destruction"
+  ],
+  "themes": [
+    "inherited_will",
+    "freedom",
+    "dreams",
+    "destiny",
+    "oppression",
+    "fear",
+    "control",
+    "liberation",
+    "dawn_of_the_world",
+    "corruption",
+    "sacrifice",
+    "family",
+    "loneliness",
+    "justice"
   ]
 }

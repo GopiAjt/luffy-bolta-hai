@@ -9,7 +9,6 @@ from app.utils.slides.production_pipeline import ProductionPipeline, run_pipelin
 from app.utils.slides.quality_gate import QualityGate, evaluate_quality
 from app.utils.slides.retention_optimizer import RetentionOptimizer, optimize_retention
 from app.utils.slides.story_analyzer import STORY_BEAT_TYPES, StoryAnalyzer
-from app.utils.slides.thumbnail_moments import ThumbnailMomentDetector, detect_thumbnail_moments
 from app.utils.slides.visual_diversity import VisualDiversityScorer, score_visual_diversity
 from app.utils.slides.visual_intent_classifier import (
     VISUAL_INTENTS,
@@ -27,7 +26,6 @@ __all__ = [
     
     # Narrative & Planning
     "NarrativeArcPlanner", "plan_narrative_arc",
-    "ThumbnailMomentDetector", "detect_thumbnail_moments",
     "RetentionOptimizer", "optimize_retention",
     "VisualRhythmEngine", "analyze_visual_rhythm",
     

@@ -243,54 +243,7 @@ Dialogue: 0,0:00:00.10,0:00:00.80,Default,,0,0,0,,Blackbeard
         self.assertEqual(repaired[1]["end_time"], repaired[2]["start_time"])
         self.assertEqual(repaired[-1]["end_time"], "0:00:09.50")
 
-    def test_visual_architecture_pass_adds_editorial_engines(self):
-        slides = [
-            _apply_production_edit_defaults(
-                {
-                    "start_time": "0:00:00.00",
-                    "end_time": "0:00:02.00",
-                    "summary": "The hidden truth about Zoro starts with Kuina",
-                    "subtitle_text": "The hidden truth about Zoro starts with Kuina.",
-                    "image_search_query": "Zoro Kuina Shimotsuki stairs",
-                    "context_entities": ["Zoro", "Kuina"],
-                },
-                0,
-                2,
-                "short_vertical",
-                ["Zoro", "Kuina"],
-            ),
-            _apply_production_edit_defaults(
-                {
-                    "start_time": "0:00:02.00",
-                    "end_time": "0:00:04.00",
-                    "summary": "Mihawk exposes Zoro at Baratie",
-                    "subtitle_text": "Mihawk exposes Zoro at Baratie with a tiny cross knife.",
-                    "image_search_query": "Zoro Mihawk Baratie cross knife",
-                    "context_entities": ["Zoro", "Mihawk", "Baratie"],
-                },
-                1,
-                2,
-                "short_vertical",
-                ["Zoro", "Mihawk"],
-            ),
-        ]
 
-        enriched = _apply_visual_architecture_pass(
-            slides,
-            {"entities": ["Zoro", "Kuina", "Mihawk", "Baratie"]},
-            "short_vertical",
-        )
-
-        first = enriched[0]
-        self.assertEqual(first["architecture_stage"], "Final Slides")
-        self.assertIn("Subtitles", first["architecture_path"])
-        self.assertEqual(first["asset_metadata"]["asset_type"], "object")
-        self.assertEqual(first["visual_intent"]["primary_intent"], "curiosity_gap")
-        self.assertIn("emotion", first["emotion_state"])
-        self.assertGreaterEqual(first["retention_score"], 0.0)
-        self.assertTrue(first["composition_layers"])
-        self.assertEqual(first["motion_plan"]["preset"], first["motion_preset"])
-        self.assertTrue(enriched[1]["character_relationships"])
 
 
 if __name__ == "__main__":

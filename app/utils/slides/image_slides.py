@@ -755,42 +755,20 @@ def _apply_visual_architecture_pass(
     script_context: Dict,
     video_profile: str,
 ) -> List[Dict]:
-    """Subtitles -> analyzer -> beats -> emotion -> intent -> assets -> motion -> retention."""
-    enriched: List[Dict] = []
-    script_entities = script_context.get("entities", [])
-    used_queries: Dict[str, int] = {}
-    previous_motion = ""
-    total = len(slides)
-
-    for index, slide in enumerate(slides):
-        slide = dict(slide)
-        query_key = (slide.get("image_search_query") or "").strip().lower()
-        duplicate_count = used_queries.get(query_key, 0)
-        used_queries[query_key] = duplicate_count + 1
-
+    """Applies the new 20-stage ProductionPipeline to the raw slides/beats."""
+    from app.utils.slides.production_pipeline import run_pipeline
+    
+    logger.info("Running modern ProductionPipeline on storyboard beats.")
+    result = run_pipeline(slides, video_profile={"platform": video_profile})
+    
+    if not result.passed_quality_gate:
+        logger.warning(f"Quality gate found {len(result.quality_issues)} issues in the storyboard.")
+        
+    for slide in result.slides:
         slide["architecture_stage"] = "Final Slides"
         slide["architecture_path"] = VISUAL_ARCHITECTURE_STAGES
-        slide["asset_metadata"] = slide.get("asset_metadata") or _build_asset_metadata(slide, script_entities, duplicate_count)
-        slide["visual_intent"] = slide.get("visual_intent") or _classify_visual_intent(slide)
-        slide["emotion_state"] = slide.get("emotion_state") or _emotion_for_text(
-            f"{slide.get('subtitle_text', '')} {slide.get('summary', '')}",
-            slide.get("beat_type", ""),
-            index,
-            total,
-        )
-        diversity_score, diversity_notes = _visual_diversity_score(slide, enriched)
-        slide["visual_diversity_score"] = slide.get("visual_diversity_score", diversity_score)
-        slide["diversity_notes"] = slide.get("diversity_notes") or diversity_notes
-        slide["character_relationships"] = slide.get("character_relationships") or _character_relationships_for_slide(slide, script_entities)
-        retention_score, actions, slide = _retention_optimizer_for_slide(slide, index, total, enriched)
-        slide["retention_score"] = slide.get("retention_score", retention_score)
-        slide["retention_actions"] = slide.get("retention_actions") or actions
-        slide["composition_layers"] = slide.get("composition_layers") or _composition_layers_for_slide(slide, video_profile)
-        slide["motion_plan"] = slide.get("motion_plan") or _advanced_motion_plan(slide, video_profile, previous_motion)
-        previous_motion = slide.get("motion_preset") or previous_motion
-        enriched.append(slide)
-
-    return enriched
+        
+    return result.slides
 
 
 def _apply_production_edit_defaults(
@@ -1199,6 +1177,7 @@ def _build_image_slides_full_prompt(
     timestamped_dialogues: List[Dict],
     context_entities: List[str],
     video_profile: str = "short_vertical",
+    total_duration: float = 0.0,
 ) -> str:
     raw_subtitles = "\n".join(
         f"{d['start']} - {d['end']}: {d['text']}" for d in timestamped_dialogues
@@ -1257,6 +1236,8 @@ def _build_image_slides_full_prompt(
         '"manual_upload_brief":"Use a clean One Piece logo or Straw Hat crew image with open space for text.",'
         '"avoid_visual_reuse":"Avoid another dense battle image behind the CTA."}]\n\n'
         "BAD: abstract emotion queries like 'Zoro trauma'; any ai_image_prompt text; five generic Zoro asset slides in a row.\n\n"
+        f"CRITICAL: The total video audio length is {total_duration:.2f} seconds. Your final slide MUST have an end_time of exactly {total_duration:.2f} or higher.\n"
+        f"If the subtitles end early, you MUST invent additional visual-only outro slides (with empty subtitle_text) to bridge the gap all the way to {total_duration:.2f}.\n\n"
         "Subtitles:\n"
         f"{raw_subtitles}\n"
     )
@@ -1746,7 +1727,7 @@ def generate_gemini_image_slides(
     logger.info(f"Raw subtitles with timestamps:\n{raw_subtitles}")
     
     try:
-        prompt = _build_image_slides_full_prompt(timestamped_dialogues, context_entities, video_profile)
+        prompt = _build_image_slides_full_prompt(timestamped_dialogues, context_entities, video_profile, total_duration)
         response_text = call_image_slides_llm(prompt)
         if not response_text:
             raise ValueError("Empty LLM response for image slides")

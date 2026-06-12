@@ -18,9 +18,8 @@ from .visual_memory_tracker import track_visual_memory
 from .visual_diversity import score_visual_diversity
 from .composition_planner import plan_composition
 from .motion_planner import plan_motion
-from .thumbnail_moments import detect_thumbnail_moments
 from .retention_optimizer import optimize_retention
-from .quality_gate import evaluate_quality
+from .quality_gate import evaluate_quality, QualityIssue
 from .legacy_adapter import adapt_to_legacy
 
 logger = logging.getLogger(__name__)
@@ -56,6 +55,33 @@ class ProductionPipeline:
         reports = {}
         beats = initial_beats
 
+        # 0. Sanitize initial beats (LLMs sometimes return strings for dict fields)
+        import json
+        for beat in beats:
+            # Fix asset_metadata
+            meta = beat.get("asset_metadata")
+            if isinstance(meta, str):
+                try:
+                    beat["asset_metadata"] = json.loads(meta)
+                except Exception:
+                    beat["asset_metadata"] = {}
+            elif meta is None:
+                beat["asset_metadata"] = {}
+                
+            # Fix emotion_state
+            emo = beat.get("emotion_state")
+            if isinstance(emo, str):
+                try:
+                    parsed = json.loads(emo)
+                    if isinstance(parsed, dict):
+                        beat["emotion_state"] = parsed
+                    else:
+                        beat["emotion_state"] = {"emotion": emo}
+                except Exception:
+                    beat["emotion_state"] = {"emotion": emo}
+            elif emo is None:
+                beat["emotion_state"] = {}
+
         # 1. ASS / Script -> StoryAnalyzer (assumed done outside pipeline)
         # 2. NarrativeArcPlanner
         arc_report = plan_narrative_arc(beats)
@@ -66,10 +92,7 @@ class ProductionPipeline:
         # 4. EmotionCurveGenerator (Mocked/Identity or assume done)
         # 5. VisualIntentClassifier (Mocked/Identity or assume done)
 
-        # 6. ThumbnailMomentDetector
-        thumb_report = detect_thumbnail_moments(beats)
-        beats = thumb_report.annotated_beats
-        reports["thumbnail_moments"] = thumb_report.summary
+        # 6. ThumbnailMomentDetector (Removed per user request)
 
         # 7. RetentionOptimizer
         ret_report = optimize_retention(beats)
@@ -120,6 +143,18 @@ class ProductionPipeline:
         beats = quality_report.auto_fixed_beats
         passed = quality_report.passed
         issues = quality_report.issues
+        
+        # Inject Visual Diversity warnings into the quality gate so they are surfaced
+        if diversity_report and diversity_report.rejected_count > 0:
+            for section in diversity_report.sections:
+                if section.rejected:
+                    issues.append(QualityIssue(
+                        beat_index=section.index,
+                        severity="warning",
+                        description=f"Visual Diversity Warning: Score {section.repetition_score:.2f} "
+                                    f"({', '.join(section.notes)})"
+                    ))
+        
         reports["quality_gate"] = quality_report.summary
 
         # 19. LegacyAdapter

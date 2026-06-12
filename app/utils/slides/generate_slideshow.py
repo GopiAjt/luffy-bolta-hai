@@ -967,6 +967,27 @@ def emit_panoramic_pan(
         logger.warning(f"Skipping slide with non-positive frame count: {img_path}")
         return frame_counter, None
 
+    if slide_meta and slide_meta.get("composition"):
+        from app.utils.video.frame_compositor import render_composed_frame
+        img_bgr = load_slide_bgr(img_path)
+        if img_bgr is None:
+            logger.error(f"Could not prepare slide canvas for {img_path}")
+            return frame_counter, None
+            
+        if start_frame >= num_frames:
+            start_frame = max(0, num_frames - 1)
+            
+        last_frame = None
+        for i in range(start_frame, num_frames):
+            t = (i / (num_frames - 1)) if num_frames > 1 else 0.0
+            frame = render_composed_frame(img_bgr, slide_meta, resolution, idx, t)
+            frame = apply_production_overlay(frame, slide_meta, resolution)
+            frame_writer.write(frame)
+            frame_counter += 1
+            last_frame = frame
+            
+        return frame_counter, last_frame
+
     use_kb = motion_uses_ken_burns(motion)
     if use_kb:
         scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
@@ -1022,6 +1043,15 @@ def render_panned_frame(
 ):
     """Render a single frame at pan progress t (matches emit_panoramic_pan)."""
     res_w, res_h = resolution
+    if slide_meta and slide_meta.get("composition"):
+        from app.utils.video.frame_compositor import render_composed_frame
+        img_bgr = load_slide_bgr(img_path)
+        if img_bgr is None:
+            logger.warning(f"render_panned_frame: Failed to load {img_path}, using black frame")
+            return np.zeros((res_h, res_w, 3), dtype=np.uint8)
+        frame = render_composed_frame(img_bgr, slide_meta, resolution, idx, t)
+        return apply_production_overlay(frame, slide_meta, resolution)
+
     if motion_uses_ken_burns(motion):
         scaled, scaled_w, scaled_h = prepare_ken_burns_canvas(
             img_path, resolution, blur_amount, motion=motion

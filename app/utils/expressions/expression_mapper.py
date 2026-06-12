@@ -62,50 +62,46 @@ def normalize_expression_mapping(expressions, sub_lines):
     authority, so each output item is aligned by index/text to the ASS line.
     """
     if not isinstance(expressions, list):
-        return []
+        expressions = []
 
     normalized = []
     used_indexes = set()
-    for index, expr in enumerate(expressions):
-        if not isinstance(expr, dict):
-            continue
+    
+    for i, sub_line in enumerate(sub_lines):
+        item = {
+            "start": sub_line["start"],
+            "end": sub_line["end"],
+            "text": sub_line.get("text", ""),
+            "expression": "neutral",
+            "character": NARRATOR_CHARACTER,
+        }
+        
+        # Try to find a matching expression from Gemini's output
+        sub_text = re.sub(r"\s+", " ", item["text"]).lower()
+        match_expr = None
+        
+        # First, try exact text match
+        for j, expr in enumerate(expressions):
+            if not isinstance(expr, dict) or j in used_indexes:
+                continue
+            expr_text = re.sub(r"\s+", " ", (expr.get("text") or "").strip()).lower()
+            if expr_text and expr_text == sub_text:
+                match_expr = expr
+                used_indexes.add(j)
+                break
+                
+        # If no exact text match, try positional fallback (index match)
+        if match_expr is None and i < len(expressions):
+            if i not in used_indexes and isinstance(expressions[i], dict):
+                expr = expressions[i]
+                if _time_distance(expr.get("start", item["start"]), item["start"]) <= 2.0:
+                    match_expr = expr
+                    used_indexes.add(i)
 
-        match_index = index if index < len(sub_lines) else None
-        expr_text = re.sub(r"\s+", " ", (expr.get("text") or "").strip()).lower()
-        if expr_text:
-            for candidate_index, sub_line in enumerate(sub_lines):
-                if candidate_index in used_indexes:
-                    continue
-                sub_text = re.sub(r"\s+", " ", (sub_line.get("text") or "").strip()).lower()
-                if expr_text == sub_text:
-                    match_index = candidate_index
-                    break
-
-        if match_index is None or match_index >= len(sub_lines):
-            continue
-        used_indexes.add(match_index)
-
-        sub_line = sub_lines[match_index]
-        item = dict(expr)
-        item["start"] = sub_line["start"]
-        item["end"] = sub_line["end"]
-        item["text"] = sub_line.get("text", item.get("text", ""))
-        item["expression"] = (item.get("expression") or "neutral").strip().lower()
-        item["character"] = (item.get("character") or NARRATOR_CHARACTER).strip().lower()
-
-        if _time_distance(expr.get("start", item["start"]), item["start"]) > 0.25 or _time_distance(
-            expr.get("end", item["end"]), item["end"]
-        ) > 0.25:
-            logger.debug(
-                "Corrected expression timing:",
-                extra={
-                    "original_start": expr.get("start"),
-                    "original_end": expr.get("end"),
-                    "corrected_start": item["start"],
-                    "corrected_end": item["end"],
-                },
-            )
-
+        if match_expr:
+            item["expression"] = (match_expr.get("expression") or "neutral").strip().lower()
+            item["character"] = (match_expr.get("character") or NARRATOR_CHARACTER).strip().lower()
+            
         normalized.append(item)
 
     return normalized
@@ -261,7 +257,15 @@ def generate_expression_mapping_with_gemini(model, sub_lines):
     """
     prompt = build_gemini_prompt(
         [{k: l[k] for k in ('start', 'end', 'text')} for l in sub_lines])
-    response = model.generate_content(prompt)
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.35,
+            max_output_tokens=8192,
+            response_mime_type="application/json"
+        )
+    )
     # Try to extract JSON from the response
     try:
         # Gemini may return markdown code block, so strip if needed

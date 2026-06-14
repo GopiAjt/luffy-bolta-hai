@@ -588,7 +588,32 @@ def prepare_ken_burns_canvas(img_path, resolution, blur_amount=0, headroom: floa
         logger.error(f"Failed to load image for Ken Burns: {img_path}")
         return None, res_w, res_h
 
-    if should_use_subject_layout(img, resolution):
+    if motion in ("evidence_hold", "title_card_hold"):
+        # Dynamic contain layout to maximize evidence size without overflowing screen boundaries
+        contain_scale = min((res_w * 0.92) / max(img.shape[1], 1), (res_h * 0.74) / max(img.shape[0], 1))
+        fg_w = int(img.shape[1] * contain_scale)
+        fg_h = int(img.shape[0] * contain_scale)
+        fg = cv2.resize(img, (fg_w, fg_h), interpolation=cv2.INTER_CUBIC)
+        
+        bg_scale = max(res_w / max(img.shape[1], 1), res_h / max(img.shape[0], 1))
+        bg_w = int(img.shape[1] * bg_scale)
+        bg_h = int(img.shape[0] * bg_scale)
+        bg = cv2.resize(img, (bg_w, bg_h), interpolation=cv2.INTER_CUBIC)
+        
+        y1 = (bg_h - res_h) // 2
+        x1 = (bg_w - res_w) // 2
+        canvas = bg[y1:y1+res_h, x1:x1+res_w].copy()
+        canvas = apply_blur(canvas, 35)
+        canvas = (canvas * 0.5).astype(np.uint8)  # Darken background to make evidence pop
+        
+        # Center the evidence, slightly higher to leave room for subtitles
+        pos_y = int(res_h * 0.40) - fg_h // 2
+        pos_y = max(int(res_h * 0.10), min(pos_y, res_h - fg_h - int(res_h * 0.15)))
+        pos_x = (res_w - fg_w) // 2
+        
+        canvas[pos_y:pos_y+fg_h, pos_x:pos_x+fg_w] = fg
+        img = canvas
+    elif should_use_subject_layout(img, resolution):
         img = compose_vertical_subject_bgr(img, (res_w, res_h))
 
     img_h, img_w = img.shape[:2]

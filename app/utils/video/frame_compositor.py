@@ -35,12 +35,13 @@ def render_composed_frame(
 
     # Overwrite if slide explicitly set a motion preset
     motion_preset = slide_meta.get("motion_preset", motion_preset)
+    layout_mode = slide_meta.get("layout_mode", "safe_subject")
 
     # 2. Extract Background
     bg_layer = next((l for l in layers if l.get("category") == "background" and l.get("layer_type") == "image"), None)
     
-    # 3. Extract Foreground
-    fg_layer = next((l for l in layers if l.get("category") == "foreground"), None)
+    # 3. Extract Foreground (default to a basic pip layer if not found)
+    fg_layer = next((l for l in layers if l.get("category") == "foreground"), {"name": "default_pip", "layer_type": "glassmorphism"})
 
     # Canvas
     canvas = np.zeros((res_h, res_w, 3), dtype=np.uint8)
@@ -58,9 +59,8 @@ def render_composed_frame(
     for treatment in treatments:
         canvas = _apply_treatment(canvas, treatment, resolution)
 
-    # Build Foreground
-    if fg_layer:
-        canvas = _render_foreground(canvas, img_bgr, resolution, slide_idx, t, motion_preset, parallax_enabled, fg_layer)
+    # Build Foreground PIP (Editorial panel etc.)
+    canvas = _render_foreground(canvas, img_bgr, resolution, slide_idx, t, motion_preset, parallax_enabled, fg_layer, layout_mode)
 
     # Add effects (particles/overlays) - placeholders for now
     effects = [l for l in layers if l.get("category") == "effect"]
@@ -86,8 +86,13 @@ def _render_background(canvas, img_bgr, resolution, idx, t, motion_preset, paral
     blur_amount = normalize_blur_amount(28)
     scaled = apply_blur(scaled, blur_amount)
     
-    # If parallax, background moves slightly slower (e.g., 0.8x strength)
-    t_bg = t * 0.8 if parallax else t
+    # Intense Background Parallax for panning motions
+    if motion_preset in ("wide_pan", "diagonal_pan"):
+        # Make the background pan very fast to compensate for the strictly contained PIP
+        t_bg = t * 1.6
+    else:
+        # Standard parallax logic
+        t_bg = t * 0.8 if parallax else t
     
     # Evaluate ken burns
     from app.utils.slides.generate_slideshow import ken_burns_viewport
@@ -101,39 +106,64 @@ def _render_background(canvas, img_bgr, resolution, idx, t, motion_preset, paral
         return frame
     return canvas
 
-def _render_foreground(canvas, img_bgr, resolution, idx, t, motion_preset, parallax, fg_layer):
+def _render_foreground(canvas, img_bgr, resolution, idx, t, motion_preset, parallax, fg_layer, layout_mode="safe_subject"):
     res_w, res_h = resolution
     img_h, img_w = img_bgr.shape[:2]
     
-    # Foreground uses contain fit to keep subject visible
-    subject_scale = 0.72
-    subject_max_w = int(res_w * subject_scale)
-    subject_max_h = int(res_h * subject_scale)
-    
     from app.utils.slides.generate_slideshow import ken_burns_zoom_range, PAN_EASING
     z0, z1 = ken_burns_zoom_range(motion_preset)
+    
+    # If parallax, foreground moves faster/larger
+    t_fg = t * 1.2 if parallax else t
+    
+    is_pan = motion_preset in ("stable_pan", "diagonal_pan", "wide_pan")
+    is_hold = motion_preset in ("evidence_hold", "title_card_hold")
+    
+    # PLAN: All motions use PIP containment to prevent overflow
+    # Dynamic aspect ratio sizing: Closer to 9:16 target -> larger scale
     
     # Pre-calculate max zoom to enforce strict safe margins
     max_progress = 1.2 if parallax else 1.0
     max_zoom = max(z0, z0 + (z1 - z0) * max_progress)
     
-    # Safe margins: 5% sides, 12% top. Centered at 0.42 means max height is 60%
-    safe_max_w = res_w * 0.90
-    safe_max_h = res_h * 0.60
+    if is_hold:
+        # PLAN 1: Evidence & Title Holds
+        # Maximize safe size dynamically, avoiding the strict 0.72 limit
+        safe_max_w = res_w * 0.92
+        safe_max_h = res_h * 0.74
+        scale = min(safe_max_w / max(img_w, 1), safe_max_h / max(img_h, 1))
+    else:
+        # PLAN 3: Zoom & Impact Motions
+        # Dynamic aspect ratio sizing: Closer to 9:16 target -> larger scale
+        img_aspect = img_w / max(img_h, 1)
+        target_aspect = res_w / max(res_h, 1)
+        aspect_diff = abs(img_aspect - target_aspect)
+        
+        if aspect_diff < 0.1:
+            subject_scale = 0.95
+        elif aspect_diff < 0.3:
+            subject_scale = 0.85
+        else:
+            subject_scale = 0.72
+            
+        subject_max_w = int(res_w * subject_scale)
+        subject_max_h = int(res_h * subject_scale)
+        
+        safe_max_w = res_w * 0.90
+        safe_max_h = res_h * 0.60
+        
+        scale = min(subject_max_w / max(img_w, 1), subject_max_h / max(img_h, 1))
+        scale *= 1.15  # Add headroom
     
     max_scale_w = safe_max_w / max(img_w * max_zoom, 1)
     max_scale_h = safe_max_h / max(img_h * max_zoom, 1)
     
-    # Scale to fit inside subject bounds, then add headroom, then strictly bound
-    scale = min(subject_max_w / max(img_w, 1), subject_max_h / max(img_h, 1))
-    scale = min(scale * 1.15, max_scale_w, max_scale_h)
+    # Strictly bound scale
+    scale = min(scale, max_scale_w, max_scale_h)
     
     fg_w = int(img_w * scale)
     fg_h = int(img_h * scale)
     fg_scaled = cv2.resize(img_bgr, (fg_w, fg_h), interpolation=cv2.INTER_CUBIC)
-    
-    # If parallax, foreground moves faster/larger
-    t_fg = t * 1.2 if parallax else t
     
     progress = ease_progress(t_fg, PAN_EASING)
     current_zoom = z0 + (z1 - z0) * progress
@@ -146,9 +176,38 @@ def _render_foreground(canvas, img_bgr, resolution, idx, t, motion_preset, paral
         
     fg_zoomed = cv2.resize(fg_scaled, (zoomed_w, zoomed_h), interpolation=cv2.INTER_CUBIC)
     
-    # Paste onto canvas perfectly centered
-    pos_y = int(res_h * 0.42) - zoomed_h // 2
-    pos_x = (res_w - zoomed_w) // 2
+    if is_hold:
+        pos_y = int(res_h * 0.40) - zoomed_h // 2
+        # Clamp off-center to respect strict top/bottom text margins
+        pos_y = max(int(res_h * 0.10), min(pos_y, res_h - zoomed_h - int(res_h * 0.15)))
+        pos_x = (res_w - zoomed_w) // 2
+    else:
+        # 1. Base Alignment
+        if layout_mode == "horizontal_feature":
+            # Align to top 15% to leave room at bottom
+            pos_y = int(res_h * 0.15)
+        elif layout_mode == "split_screen":
+            # Align perfectly to top
+            pos_y = int(res_h * 0.05)
+        else:
+            # Paste onto canvas perfectly centered
+            pos_y = int(res_h * 0.42) - zoomed_h // 2
+            
+        pos_x = (res_w - zoomed_w) // 2
+        
+        # 2. PIP Drift Motion
+        if is_pan:
+            # Drift 4% of screen width over the entire duration
+            drift_amount_x = int(res_w * 0.04)
+            drift_amount_y = int(res_h * 0.02)
+            
+            if motion_preset == "wide_pan":
+                pos_x += int(drift_amount_x * (t_fg - 0.5))
+            elif motion_preset == "diagonal_pan":
+                pos_x -= int(drift_amount_x * (t_fg - 0.5))
+                pos_y += int(drift_amount_y * (t_fg - 0.5))
+            elif motion_preset == "stable_pan":
+                pos_y -= int(drift_amount_y * (t_fg - 0.5))
     
     # Glassmorphism Picture-in-Picture (PIP) logic
     y1, y2 = max(0, pos_y), min(res_h, pos_y + zoomed_h)

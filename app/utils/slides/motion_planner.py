@@ -288,6 +288,30 @@ _ROLE_CAMERA_GOALS: Dict[str, str] = {
 # ── MotionPlanner ───────────────────────────────────────────────────
 
 
+class MotionHistoryTracker:
+    def __init__(self):
+        self.history = []
+        self.counts = {}
+
+    def add_motion(self, motion: str):
+        self.history.append(motion)
+        self.counts[motion] = self.counts.get(motion, 0) + 1
+        if len(self.history) > 10:
+            self.history.pop(0)
+
+    def is_violation(self, motion: str, total_beats: int = 10) -> bool:
+        # Prevent appearing more than twice consecutively
+        if len(self.history) >= 2:
+            if self.history[-1] == motion and self.history[-2] == motion:
+                return True
+                
+        # Frequency limit: reveal_zoom max 30%
+        if motion == "reveal_zoom":
+            if self.counts.get(motion, 0) >= max(2, int(total_beats * 0.30)):
+                return True
+                
+        return False
+
 class MotionPlanner:
     """Plans optimal motion style from emotion + visual intent.
 
@@ -304,6 +328,7 @@ class MotionPlanner:
 
     def __init__(self, styles: Optional[Dict[str, MotionStyle]] = None):
         self.styles = styles or MOTION_STYLES
+        self.tracker = MotionHistoryTracker()
 
     def plan(
         self,
@@ -313,6 +338,7 @@ class MotionPlanner:
         visual_role: str = "",
         intensity: Optional[float] = None,
         previous_style: str = "",
+        total_beats: int = 10,
     ) -> MotionPlan:
         """Select the best motion style for a beat.
 
@@ -341,8 +367,10 @@ class MotionPlanner:
         role_norm = (visual_role or "").strip().lower()
 
         style_name, reasoning = self._resolve_style(
-            emotion_norm, intent_norm, beat_norm, previous_style
+            emotion_norm, intent_norm, beat_norm, previous_style, total_beats
         )
+
+        self.tracker.add_motion(style_name)
 
         # Look up the style definition.
         style_def = self.styles.get(style_name, self.styles["subject_push"])
@@ -407,6 +435,7 @@ class MotionPlanner:
                 visual_role=beat.get("visual_role", ""),
                 intensity=beat_intensity,
                 previous_style=prev_style,
+                total_beats=len(beats),
             )
             plans.append(plan)
             prev_style = plan.style
@@ -421,15 +450,15 @@ class MotionPlanner:
         intent: str,
         beat_type: str,
         previous_style: str,
+        total_beats: int = 10,
     ) -> Tuple[str, str]:
         """Resolve the best motion style and return (style_name, reasoning)."""
 
         # Priority 1: Beat-type override.
         if beat_type in _BEAT_OVERRIDES:
             style = _BEAT_OVERRIDES[beat_type]
-            if style != previous_style:
+            if not self.tracker.is_violation(style, total_beats) and style != previous_style:
                 return style, f"Beat override: {beat_type} → {style}"
-            # If same as previous, fall through to try alternatives.
 
         # Priority 2: Emotion × intent agreement.
         emotion_primary, emotion_fallback = _EMOTION_MOTION_MAP.get(
@@ -439,28 +468,32 @@ class MotionPlanner:
 
         if intent_style and intent_style == emotion_primary:
             style = intent_style
-            if style != previous_style:
+            if not self.tracker.is_violation(style, total_beats) and style != previous_style:
                 return style, f"Emotion+intent agree: {emotion}+{intent} → {style}"
             # Both agree but repeats — use emotion fallback.
-            return emotion_fallback, f"Anti-repeat: {emotion}+{intent} agreed on {style}, using fallback {emotion_fallback}"
+            if not self.tracker.is_violation(emotion_fallback, total_beats):
+                return emotion_fallback, f"Anti-repeat: {emotion}+{intent} agreed on {style}, using fallback {emotion_fallback}"
 
         # Priority 3: Emotion primary.
-        if emotion_primary != previous_style:
+        if not self.tracker.is_violation(emotion_primary, total_beats) and emotion_primary != previous_style:
             return emotion_primary, f"Emotion-driven: {emotion} → {emotion_primary}"
         # Emotion primary repeats — try intent.
-        if intent_style and intent_style != previous_style:
+        if intent_style and not self.tracker.is_violation(intent_style, total_beats) and intent_style != previous_style:
             return intent_style, f"Anti-repeat via intent: {intent} → {intent_style} (emotion {emotion} would repeat)"
         # Both repeat — use emotion fallback.
-        if emotion_fallback != previous_style:
+        if not self.tracker.is_violation(emotion_fallback, total_beats) and emotion_fallback != previous_style:
             return emotion_fallback, f"Emotion fallback: {emotion} → {emotion_fallback} (primary would repeat)"
 
         # Priority 4: Intent fallback.
-        if intent_style:
+        if intent_style and not self.tracker.is_violation(intent_style, total_beats):
             return intent_style, f"Intent fallback: {intent} → {intent_style}"
 
-        # Priority 5: Default.
-        default = "slow_pan" if previous_style == "subject_push" else "subject_push"
-        return default, f"Default motion: {default}"
+        # Priority 5: Default fallback loop to find a safe motion
+        for fallback in ["subject_push", "slow_pan", "stable_pan", "hold_still"]:
+            if not self.tracker.is_violation(fallback, total_beats) and fallback != previous_style:
+                return fallback, f"System default fallback: {fallback}"
+                
+        return "slow_push", "System default fallback: exhausted all constraints"
 
     def _compute_intensity(
         self,

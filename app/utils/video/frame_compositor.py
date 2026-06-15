@@ -62,10 +62,17 @@ def render_composed_frame(
     # Build Foreground PIP (Editorial panel etc.)
     canvas = _render_foreground(canvas, img_bgr, resolution, slide_idx, t, motion_preset, parallax_enabled, fg_layer, layout_mode)
 
-    # Add effects (particles/overlays) - placeholders for now
+    # Add effects (vignette, film grain, etc)
     effects = [l for l in layers if l.get("category") == "effect"]
     for effect in effects:
         canvas = _apply_effect(canvas, effect, resolution, t)
+
+    # Render Text Layers (Rich text with emphasis colors)
+    # Only render actual text layers, ignoring metadata layers like subtitle_zone or emphasis_tags
+    text_layers = [l for l in layers if l.get("category") == "text" and l.get("layer_type") == "text"]
+    emphasis_words = slide_meta.get("emphasis_words", [])
+    for t_layer in sorted(text_layers, key=lambda x: x.get("z_index", 0)):
+        canvas = _render_text(canvas, t_layer, resolution, emphasis_words)
 
     return canvas
 
@@ -89,10 +96,10 @@ def _render_background(canvas, img_bgr, resolution, idx, t, motion_preset, paral
     # Intense Background Parallax for panning motions
     if motion_preset in ("wide_pan", "diagonal_pan"):
         # Make the background pan very fast to compensate for the strictly contained PIP
-        t_bg = t * 1.6
+        t_bg = t * 2.0
     else:
         # Standard parallax logic
-        t_bg = t * 0.8 if parallax else t
+        t_bg = t * 0.5 if parallax else t
     
     # Evaluate ken burns
     from app.utils.slides.generate_slideshow import ken_burns_viewport
@@ -114,7 +121,7 @@ def _render_foreground(canvas, img_bgr, resolution, idx, t, motion_preset, paral
     z0, z1 = ken_burns_zoom_range(motion_preset)
     
     # If parallax, foreground moves faster/larger
-    t_fg = t * 1.2 if parallax else t
+    t_fg = t * 1.4 if parallax else t
     
     is_pan = motion_preset in ("stable_pan", "diagonal_pan", "wide_pan")
     is_hold = motion_preset in ("evidence_hold", "title_card_hold")
@@ -123,7 +130,7 @@ def _render_foreground(canvas, img_bgr, resolution, idx, t, motion_preset, paral
     # Dynamic aspect ratio sizing: Closer to 9:16 target -> larger scale
     
     # Pre-calculate max zoom to enforce strict safe margins
-    max_progress = 1.2 if parallax else 1.0
+    max_progress = 1.4 if parallax else 1.0
     max_zoom = max(z0, z0 + (z1 - z0) * max_progress)
     
     if is_hold:
@@ -265,9 +272,128 @@ def _apply_treatment(canvas, treatment, resolution):
     return canvas
 
 def _apply_effect(canvas, effect, resolution, t):
-    # Basic effect handling (e.g. vignette, film grain)
-    if effect.get("name") == "subtle_vignette":
-        pass # could implement vignette
+    # Advanced Cinematic Effects
+    layer_type = effect.get("layer_type", "")
+    name = effect.get("name", "")
+    
+    if layer_type == "vignette" or name == "subtle_vignette":
+        # Create a radial gradient mask
+        res_w, res_h = resolution
+        opacity = effect.get("metadata", {}).get("intensity", 0.5)
+        
+        # We can use a pre-calculated Gaussian kernel to simulate a vignette
+        kernel_x = cv2.getGaussianKernel(res_w, res_w/2)
+        kernel_y = cv2.getGaussianKernel(res_h, res_h/2)
+        kernel = kernel_y * kernel_x.T
+        # Normalize kernel
+        mask = 255 * kernel / np.linalg.norm(kernel)
+        mask = mask / np.max(mask)
+        # Invert and scale mask to create dark edges
+        vignette_mask = (1.0 - (1.0 - mask) * opacity)
+        vignette_mask = np.repeat(vignette_mask[:, :, np.newaxis], 3, axis=2)
+        return (canvas * vignette_mask).astype(np.uint8)
+        
+    elif layer_type == "film_grain" or name == "grain":
+        # Create a random Gaussian noise matrix
+        res_w, res_h = resolution
+        intensity = effect.get("metadata", {}).get("intensity", 0.1)
+        # Generate noise
+        noise = np.random.normal(0, intensity * 255, (res_h, res_w, 3))
+        # Add to canvas and clip
+        noisy_canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        return noisy_canvas
+
+    return canvas
+
+def _resolve_dimension(val, max_val):
+    if isinstance(val, str) and "%" in val:
+        return int(max_val * float(val.replace("%", "")) / 100.0)
+    elif str(val).lower() == "auto":
+        return max_val
+    return int(val)
+
+def _render_text(canvas, layer, resolution, emphasis_words):
+    text = layer.get("source", "")
+    if not text:
+        return canvas
+        
+    res_w, res_h = resolution
+    pos = layer.get("position", {})
+    layer_type = layer.get("layer_type", "")
+    
+    if layer_type == "text_tags":
+        x0 = 0
+        y0 = int(res_h * 0.05)  # Higher up, near the very top margin
+        w = res_w
+    else:
+        x0 = _resolve_dimension(pos.get("x", "0%"), res_w)
+        y0 = _resolve_dimension(pos.get("y", "70%"), res_h)
+        w = _resolve_dimension(pos.get("width", "100%"), res_w)
+    
+    layer_name = layer.get("name", "")
+    is_title = layer_name == "headline" or layer.get("fit") == "cover"
+    is_tags = layer_type == "text_tags"
+    
+    # Base styling
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    if is_tags:
+        font_scale = 0.65
+    else:
+        font_scale = 0.90 if is_title else 0.76
+    thickness = 2 if not is_tags else 1
+    
+    # Gold emphasis color in BGR
+    accent_color = (88, 198, 238)
+    text_color = (245, 245, 245)
+    
+    from app.utils.slides.generate_slideshow import _wrap_overlay_text
+    # max_chars rough estimate based on font width
+    max_chars = int(w / (18 * font_scale))
+    lines = _wrap_overlay_text(text.upper() if is_title else text, max_chars)
+    
+    if not lines:
+        return canvas
+        
+    line_h = int(42 * font_scale) + 16
+    
+    # Process emphasis words
+    emp_lower = [str(w).lower() for w in emphasis_words]
+    
+    # If rendering tags, make everything the accent color
+    if is_tags:
+        emp_lower = [w.strip().lower() for w in text.split(",")]
+    
+    # Draw transparent panel backdrop
+    panel_h = line_h * len(lines) + 40
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + w, min(res_h, y0 + panel_h)), (10, 12, 18), -1)
+    canvas = cv2.addWeighted(overlay, 0.66, canvas, 0.34, 0)
+    
+    y = y0 + line_h
+    for line in lines:
+        words = line.split(" ")
+        # Center the line within the width `w`
+        # Calculate total line width first
+        total_w = 0
+        space_w = int(10 * font_scale)
+        for i, word in enumerate(words):
+            (tw, th), _ = cv2.getTextSize(word, font, font_scale, thickness)
+            total_w += tw
+            if i < len(words) - 1:
+                total_w += space_w
+                
+        curr_x = x0 + max(24, (w - total_w) // 2)
+        
+        for word in words:
+            clean_word = "".join(c for c in word.lower() if c.isalnum())
+            color = accent_color if clean_word in emp_lower else text_color
+            
+            (tw, th), _ = cv2.getTextSize(word, font, font_scale, thickness)
+            cv2.putText(canvas, word, (curr_x, y), font, font_scale, color, thickness, cv2.LINE_AA)
+            curr_x += tw + space_w
+            
+        y += line_h
+        
     return canvas
 
 def _fallback_render(img_bgr, slide_meta, resolution, slide_idx, t):

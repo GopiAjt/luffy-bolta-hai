@@ -2,11 +2,11 @@
 
 from app.utils.slides.asset_narrative_planner import AssetNarrativePlanner, plan_asset_narrative
 from app.utils.slides.composition_planner import CompositionPlanner, plan_composition
-from app.utils.slides.legacy_adapter import LegacyAdapter, adapt_to_legacy
+from app.utils.slides.old_legacy_adapter import LegacyAdapter, adapt_to_legacy
 from app.utils.slides.motion_planner import MotionPlanner, plan_motion
 from app.utils.slides.narrative_arc_planner import NarrativeArcPlanner, plan_narrative_arc
-from app.utils.slides.production_pipeline import ProductionPipeline, run_pipeline
-from app.utils.slides.quality_gate import QualityGate, evaluate_quality
+from app.utils.slides.legacy_production_pipeline import ProductionPipeline, run_pipeline
+from app.utils.slides.legacy_quality_gate import QualityGate, evaluate_quality
 from app.utils.slides.retention_optimizer import RetentionOptimizer, optimize_retention
 from app.utils.slides.story_analyzer import STORY_BEAT_TYPES, StoryAnalyzer
 from app.utils.slides.visual_diversity import VisualDiversityScorer, score_visual_diversity

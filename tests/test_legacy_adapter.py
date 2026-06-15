@@ -1,72 +1,56 @@
-"""Tests for LegacyAdapter."""
-
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
 from app.utils.slides.legacy_adapter import LegacyAdapter, adapt_to_legacy
 
-
-@pytest.fixture
-def adapter():
-    return LegacyAdapter()
-
-
-def _make_beat(**kwargs):
-    beat = {
-        "start_time": "10",
-        "end_time": "15",
-        "subtitle_text": "text",
-        "beat_type": "hook",
-        "visual_role": "character",
-        "asset_metadata": {"search_tags": ["tag1", "tag2"]},
-    }
-    beat.update(kwargs)
-    return beat
-
-
-def test_empty_beats(adapter):
-    slides = adapter.adapt([])
-    assert len(slides) == 0
-
-
-def test_basic_adaptation(adapter):
-    beats = [_make_beat()]
+def test_legacy_adapter_extracts_required_fields():
+    adapter = LegacyAdapter()
+    
+    beats = [
+        {
+            "start_time": 1.5,
+            "end_time": 4.5,
+            "summary": "Luffy punches",
+            "image_search_query": "Luffy gear 5",
+            "motion_preset": "pan_left",
+            "transition_in": "zoom_dissolve",
+            "ignored_field": "This should not be in the output"
+        }
+    ]
+    
     slides = adapter.adapt(beats)
     assert len(slides) == 1
-    assert slides[0]["start_time"] == "10"
-    assert slides[0]["end_time"] == "15"
+    slide = slides[0]
+    
+    assert slide["start_time"] == 1.5
+    assert slide["end_time"] == 4.5
+    assert slide["summary"] == "Luffy punches"
+    assert slide["image_search_query"] == "Luffy gear 5"
+    assert slide["motion_preset"] == "pan_left"
+    assert slide["transition_in"] == "zoom_dissolve"
+    assert "ignored_field" not in slide
 
-
-def test_search_tags_extraction(adapter):
-    beats = [_make_beat()]
-    slides = adapter.adapt(beats)
-    assert "search_tags" in slides[0]
-    assert slides[0]["search_tags"] == ["tag1", "tag2"]
-
-
-def test_duration_calculation(adapter):
-    beats = [_make_beat(start_time="10.5", end_time="15.5")]
-    slides = adapter.adapt(beats)
-    assert "duration" in slides[0]
-    assert slides[0]["duration"] == 5.0
-
-
-def test_duration_calculation_fallback(adapter):
-    # Non-float times
-    beats = [_make_beat(start_time="00:10", end_time="00:15")]
-    slides = adapter.adapt(beats)
-    assert "duration" not in slides[0] # calculation fails silently
-
-
-def test_convenience_function():
-    beats = [_make_beat()]
+def test_legacy_adapter_handles_fallback_fields():
+    adapter = LegacyAdapter()
+    
+    beats = [
+        {
+            # Missing start/end time, missing transition_in
+            "summary": "Fallback test",
+            "image_search_query": "Test",
+            "motion": {"style": "slow_push"},
+            "transition_type": "fade_eased"
+        }
+    ]
+    
     slides = adapt_to_legacy(beats)
     assert len(slides) == 1
+    slide = slides[0]
+    
+    # Defaults
+    assert slide["start_time"] == 0.0
+    assert slide["end_time"] == 0.0
+    
+    # Fallback from motion.style
+    assert slide["motion_preset"] == "slow_push"
+    
+    # Fallback from transition_type
+    assert slide["transition_in"] == "fade_eased"

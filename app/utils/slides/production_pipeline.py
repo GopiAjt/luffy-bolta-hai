@@ -1,173 +1,169 @@
-"""Production Pipeline Orchestrator.
-
-Wires the complete 20-stage StoryboardBeat architecture end-to-end.
-Takes raw input and returns fully realized legacy slide JSON ready for rendering.
-"""
-
-from __future__ import annotations
-
-import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-
-# Import available modules
-from .narrative_arc_planner import plan_narrative_arc
-from .visual_rhythm_engine import analyze_visual_rhythm
-from .asset_narrative_planner import plan_asset_narrative
-from .visual_memory_tracker import track_visual_memory
-from .visual_diversity import score_visual_diversity
-from .composition_planner import plan_composition
-from .motion_planner import plan_motion
-from .retention_optimizer import optimize_retention
-from .quality_gate import evaluate_quality, QualityIssue
-from .legacy_adapter import adapt_to_legacy
-
-logger = logging.getLogger(__name__)
-
+from typing import List, Dict, Any
+from app.utils.slides.emotion_curve import EmotionCurveGenerator
+from app.utils.slides.composition_planner import CompositionPlanner
+from app.utils.slides.motion_planner import MotionPlanner
+from app.utils.slides.transition_planner import TransitionPlanner
+from app.utils.slides.visual_memory_tracker import VisualMemoryTracker
+from app.utils.slides.quality_gate import QualityGate
+from app.utils.slides.legacy_adapter import LegacyAdapter
 
 @dataclass
 class PipelineResult:
-    """Final result of the production pipeline."""
-    slides: List[Dict[str, Any]]
-    passed_quality_gate: bool
-    quality_issues: List[Any]
-    reports: Dict[str, Any] = field(default_factory=dict)
+    """The result of executing the production pipeline."""
+    success: bool
+    beats: List[Dict[str, Any]]
+    logs: List[str] = field(default_factory=list)
 
+class PipelineStage:
+    """Interface for a stage in the production pipeline."""
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        raise NotImplementedError("PipelineStage must implement execute()")
 
 class ProductionPipeline:
-    """Orchestrates the entire storyboard beat generation process."""
+    """Executes a series of PipelineStages on a list of beats."""
+    
+    def __init__(self, stages: List[PipelineStage] = None):
+        self.stages = stages or []
+        self.disabled_stages = set()
+        self.logs: List[str] = []
 
-    def __init__(self, video_profile: Optional[Dict[str, Any]] = None):
-        self.video_profile = video_profile or {"platform": "youtube_long"}
+    def register_stage(self, stage: PipelineStage):
+        """Add a stage to the end of the pipeline."""
+        self.stages.append(stage)
+        
+    def disable_stage(self, stage_name: str):
+        """Disable a stage by its class name so it won't be executed."""
+        self.disabled_stages.add(stage_name)
+        
+    def override_stage(self, stage_name: str, new_stage: PipelineStage):
+        """Replace a stage that has a specific class name with a new stage."""
+        for i, stage in enumerate(self.stages):
+            if stage.__class__.__name__ == stage_name:
+                self.stages[i] = new_stage
+                return
+        raise ValueError(f"Stage '{stage_name}' not found in pipeline.")
 
-    def run(self, initial_beats: List[Dict[str, Any]]) -> PipelineResult:
-        """Run the full storyboard pipeline.
-
-        Parameters
-        ----------
-        initial_beats : list of dict
-            Raw analyzed beats from StoryAnalyzer / Script.
-
-        Returns
-        -------
-        PipelineResult
-        """
-        reports = {}
-        beats = initial_beats
-
-        # 0. Sanitize initial beats (LLMs sometimes return strings for dict fields)
-        import json
-        for beat in beats:
-            # Fix asset_metadata
-            meta = beat.get("asset_metadata")
-            if isinstance(meta, str):
-                try:
-                    beat["asset_metadata"] = json.loads(meta)
-                except Exception:
-                    beat["asset_metadata"] = {}
-            elif meta is None:
-                beat["asset_metadata"] = {}
+    def run(self, beats: List[Dict[str, Any]]) -> PipelineResult:
+        self.logs = ["Starting pipeline execution"]
+        current_beats = list(beats)  # Work on a copy of the list
+        
+        for stage in self.stages:
+            stage_name = stage.__class__.__name__
+            
+            if stage_name in self.disabled_stages:
+                self.logs.append(f"Skipping disabled stage: {stage_name}")
+                continue
                 
-            # Fix emotion_state
-            emo = beat.get("emotion_state")
-            if isinstance(emo, str):
-                try:
-                    parsed = json.loads(emo)
-                    if isinstance(parsed, dict):
-                        beat["emotion_state"] = parsed
-                    else:
-                        beat["emotion_state"] = {"emotion": emo}
-                except Exception:
-                    beat["emotion_state"] = {"emotion": emo}
-            elif emo is None:
-                beat["emotion_state"] = {}
+            self.logs.append(f"Executing stage: {stage_name}")
+            
+            try:
+                current_beats = stage.execute(current_beats)
+                self.logs.append(f"Stage {stage_name} completed successfully")
+            except Exception as e:
+                self.logs.append(f"Stage {stage_name} failed: {str(e)}")
+                return PipelineResult(
+                    success=False,
+                    beats=current_beats,
+                    logs=list(self.logs)
+                )
+                
+        self.logs.append("Pipeline execution completed successfully")
+        return PipelineResult(
+            success=True,
+            beats=current_beats,
+            logs=list(self.logs)
+        )
 
-        # 1. ASS / Script -> StoryAnalyzer (assumed done outside pipeline)
-        # 2. NarrativeArcPlanner
-        arc_report = plan_narrative_arc(beats)
-        beats = arc_report.annotated_beats
-        reports["narrative_arc"] = arc_report.summary
+class EmotionCurveStage(PipelineStage):
+    def __init__(self, generator: EmotionCurveGenerator = None):
+        self.generator = generator or EmotionCurveGenerator()
 
-        # 3. StoryBeatDetector (Mocked/Identity)
-        # 4. EmotionCurveGenerator (Mocked/Identity or assume done)
-        # 5. VisualIntentClassifier (Mocked/Identity or assume done)
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        curve = self.generator.generate(beats)
+        for i, beat in enumerate(beats):
+            if i < len(curve.points):
+                pt = curve.points[i]
+                beat["emotion_score"] = pt.score
+                # Inject label into emotion_state
+                beat.setdefault("emotion_state", {})["emotion"] = pt.label
+        return beats
 
-        # 6. ThumbnailMomentDetector (Removed per user request)
+class CompositionStage(PipelineStage):
+    def __init__(self, planner: CompositionPlanner = None):
+        self.planner = planner or CompositionPlanner()
 
-        # 7. RetentionOptimizer
-        ret_report = optimize_retention(beats)
-        # RetentionOptimizer is an analyzer, we just pass the original beats through.
-        reports["retention"] = ret_report.summary
-
-        # 8. VisualRhythmEngine
-        rhythm_report = analyze_visual_rhythm(beats)
-        beats = rhythm_report.annotated_beats
-        reports["visual_rhythm"] = rhythm_report.summary
-
-        # 9. CharacterRelationshipEngine (Mocked)
-        # 10. AssetDatabase (Mocked)
-
-        # 11. AssetNarrativePlanner
-        asset_report = plan_asset_narrative(beats, available_assets={})
-        beats = asset_report.annotated_beats
-        reports["asset_narrative"] = asset_report.summary
-
-        # 12. AssetSelector (Mocked)
-
-        # 13. VisualMemoryTracker
-        memory_report = track_visual_memory(beats)
-        beats = memory_report.annotated_beats
-        reports["visual_memory"] = memory_report.summary
-
-        # 14. VisualDiversityScorer
-        diversity_report = score_visual_diversity(beats)
-        reports["visual_diversity"] = diversity_report.summary
-
-        # 15. CompositionPlanner
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for beat in beats:
-            beat["composition"] = plan_composition(beat).to_dict()
+            composition = self.planner.plan(beat)
+            beat["composition"] = composition.to_dict()
+        return beats
 
-        # 16. MotionPlanner
+class MotionStage(PipelineStage):
+    def __init__(self, planner: MotionPlanner = None):
+        self.planner = planner or MotionPlanner()
+
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        prev_style = ""
         for beat in beats:
             emo = beat.get("emotion_state", {}).get("emotion", "neutral")
             intent = beat.get("visual_intent", "")
             btype = beat.get("beat_type", "")
-            beat["motion"] = plan_motion(emo, intent, btype).to_dict()
+            motion_plan = self.planner.plan(
+                emotion=emo, 
+                visual_intent=intent, 
+                beat_type=btype,
+                previous_style=prev_style,
+                total_beats=len(beats)
+            )
+            beat["motion"] = motion_plan.to_dict()
             if "motion_preset" not in beat:
-                beat["motion_preset"] = beat["motion"]["style"]
+                beat["motion_preset"] = motion_plan.style
+            prev_style = motion_plan.style
+        return beats
 
-        # 17. StoryboardGenerator (Mocked)
+class TransitionStage(PipelineStage):
+    def __init__(self, planner: TransitionPlanner = None):
+        self.planner = planner or TransitionPlanner()
 
-        # 18. QualityGate
-        quality_report = evaluate_quality(beats)
-        beats = quality_report.auto_fixed_beats
-        passed = quality_report.passed
-        issues = quality_report.issues
-        
-        # Inject Visual Diversity warnings into the quality gate so they are surfaced
-        if diversity_report and diversity_report.rejected_count > 0:
-            for section in diversity_report.sections:
-                if section.rejected:
-                    issues.append(QualityIssue(
-                        beat_index=section.index,
-                        severity="warning",
-                        description=f"Visual Diversity Warning: Score {section.repetition_score:.2f} "
-                                    f"({', '.join(section.notes)})"
-                    ))
-        
-        reports["quality_gate"] = quality_report.summary
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        total_beats = len(beats)
+        for i in range(total_beats):
+            curr_beat = beats[i]
+            prev_beat = beats[i-1] if i > 0 else None
+            plan = self.planner.plan_transition(prev_beat, curr_beat, total_beats)
+            curr_beat["transition_in"] = plan.transition_type.value
+            curr_beat["transition_duration"] = plan.duration
+        return beats
 
-        # 19. LegacyAdapter
-        legacy_slides = adapt_to_legacy(beats)
+class VisualMemoryStage(PipelineStage):
+    def __init__(self, tracker: VisualMemoryTracker = None):
+        self.tracker = tracker or VisualMemoryTracker()
 
-        return PipelineResult(
-            slides=legacy_slides,
-            passed_quality_gate=passed,
-            quality_issues=issues,
-            reports=reports,
-        )
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        report = self.tracker.track(beats)
+        return report.annotated_beats
 
+class StoryboardStage(PipelineStage):
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Mock/pass-through stage for now
+        return beats
 
-def run_pipeline(initial_beats: List[Dict[str, Any]], **kwargs) -> PipelineResult:
-    """Shortcut function to run the production pipeline."""
-    return ProductionPipeline(**kwargs).run(initial_beats)
+class QualityGateStage(PipelineStage):
+    def __init__(self, gate: QualityGate = None):
+        self.gate = gate or QualityGate()
+
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        self.gate.analyze_storyboard(beats)
+        report = self.gate.evaluate()
+        if not report.passed:
+            errors = [i.description for i in report.issues if i.severity.value == "ERROR"]
+            raise RuntimeError(f"QualityGate failed with {len(errors)} ERROR(s): {errors}")
+        return beats
+
+class LegacyAdapterStage(PipelineStage):
+    def __init__(self, adapter: LegacyAdapter = None):
+        self.adapter = adapter or LegacyAdapter()
+
+    def execute(self, beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self.adapter.adapt(beats)

@@ -11,9 +11,6 @@ DEFAULT_VISUAL_STYLE = "clean_pro"
 VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
     "clean_pro": {
         "transition_mood": "clean",
-        "transitions": ["crossfade", "fade_eased", "zoom_dissolve"],
-        "transition_weights": [0.56, 0.30, 0.14],
-        "motion": ["slow_push", "slow_push", "hold_still"],
         "global_fx": [],
         "subtitle_style": "clean_pro",
         "expression_entry": "fade_scale",
@@ -21,9 +18,6 @@ VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
     },
     "manga_hype": {
         "transition_mood": "manga",
-        "transitions": ["zoom_dissolve", "whip_pan_right", "whip_pan_left", "radial_wipe", "iris_wipe"],
-        "transition_weights": [0.34, 0.16, 0.16, 0.18, 0.16],
-        "motion": ["impact_zoom", "diagonal_pan", "slow_push"],
         "global_fx": ["grain", "vignette"],
         "subtitle_style": "manga_panel",
         "expression_entry": "pop_in",
@@ -31,9 +25,6 @@ VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
     },
     "emotional": {
         "transition_mood": "dramatic",
-        "transitions": ["fade_eased", "crossfade", "iris_wipe"],
-        "transition_weights": [0.46, 0.40, 0.14],
-        "motion": ["hold_still", "slow_push", "pull_out"],
         "global_fx": ["vignette"],
         "subtitle_style": "emotional",
         "expression_entry": "fade_rise",
@@ -41,9 +32,6 @@ VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
     },
     "dark_lore": {
         "transition_mood": "dramatic",
-        "transitions": ["crossfade", "iris_wipe", "zoom_dissolve", "radial_wipe"],
-        "transition_weights": [0.34, 0.24, 0.24, 0.18],
-        "motion": ["slow_push", "hold_still", "diagonal_pan"],
         "global_fx": ["vignette", "cool_grade"],
         "subtitle_style": "void_century",
         "expression_entry": "fade_scale",
@@ -51,9 +39,6 @@ VISUAL_STYLE_PRESETS: Dict[str, Dict] = {
     },
     "action": {
         "transition_mood": "hype",
-        "transitions": ["whip_pan_right", "whip_pan_left", "motion_slide_right", "motion_slide_left", "zoom_dissolve"],
-        "transition_weights": [0.22, 0.22, 0.20, 0.20, 0.16],
-        "motion": ["impact_zoom", "diagonal_pan", "slow_push"],
         "global_fx": ["grain"],
         "subtitle_style": "yonko_hype",
         "expression_entry": "pop_in",
@@ -101,36 +86,7 @@ def deterministic_pick(items: List[str], seed_text: str, offset: int = 0) -> str
     return items[int(digest[:8], 16) % len(items)]
 
 
-def choose_motion_preset(visual_style: Optional[str], beat: str, index: int = 0) -> str:
-    style = normalize_visual_style(visual_style)
-    if beat == "hook":
-        return "slow_push"
-    if beat == "reveal":
-        return "impact_zoom" if style in {"manga_hype", "action"} else "slow_push"
-    if beat == "payoff":
-        return "hold_still" if style == "emotional" else "pull_out"
-    if beat == "cta":
-        return "hold_still"
-    if style == "clean_pro":
-        return "slow_push" if index % 4 else "hold_still"
-    return deterministic_pick(get_visual_preset(style)["motion"], style, index) or "stable_pan"
 
-
-def choose_visual_transition(
-    visual_style: Optional[str],
-    beat: str = "evidence",
-    last_transition: Optional[str] = None,
-    index: int = 0,
-) -> str:
-    preset = get_visual_preset(visual_style)
-    transitions = list(preset["transitions"])
-    if beat in {"hook", "payoff"}:
-        transitions = [t for t in transitions if t in {"fade", "fade_eased", "crossfade", "iris_wipe"}] or transitions
-    if beat == "reveal":
-        transitions = [t for t in transitions if t in {"zoom_dissolve", "whip_pan_right", "whip_pan_left", "radial_wipe"}] or transitions
-    if last_transition and len(transitions) > 1:
-        transitions = [t for t in transitions if t != last_transition] or transitions
-    return deterministic_pick(transitions, f"{normalize_visual_style(visual_style)}:{beat}", index)
 
 
 KEYWORD_SUBTITLE_STYLES = frozenset(

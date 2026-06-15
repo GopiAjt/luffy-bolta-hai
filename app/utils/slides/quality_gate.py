@@ -1,129 +1,127 @@
-"""Quality Gate — final validation for the storyboard.
-
-Validates the complete storyboard against production rules, ensuring
-no missing data, valid annotations, and correct formatting before rendering.
-"""
-
-from __future__ import annotations
-
-import logging
+import enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import List
 
-logger = logging.getLogger(__name__)
-
+class Severity(str, enum.Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 @dataclass
 class QualityIssue:
-    """An issue caught by the quality gate."""
-    beat_index: int
-    severity: str        # "critical", "warning"
+    severity: Severity
+    component: str
     description: str
 
-
 @dataclass
-class QualityGateReport:
-    """Output of the quality gate."""
+class QualityReport:
     passed: bool
-    issues: List[QualityIssue]
-    auto_fixed_beats: List[Dict[str, Any]]
-    summary: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "passed": self.passed,
-            "issues": [
-                {
-                    "beat_index": i.beat_index,
-                    "severity": i.severity,
-                    "description": i.description,
-                }
-                for i in self.issues
-            ],
-            "auto_fixed_beats": self.auto_fixed_beats,
-            "summary": self.summary,
-        }
-
+    issues: List[QualityIssue] = field(default_factory=list)
 
 class QualityGate:
-    """Validates and applies auto-fixes to the complete storyboard."""
-
+    """Evaluates the quality of a generated slide or video to determine if it meets standards."""
+    
     def __init__(self):
-        self.required_keys = ["beat_type", "visual_role", "motion_preset"]
+        self.issues: List[QualityIssue] = []
 
-    def evaluate(self, beats: Sequence[Dict[str, Any]]) -> QualityGateReport:
-        """Run quality checks on the storyboard.
+    def add_issue(self, severity: Severity, component: str, description: str):
+        """Register a new quality issue."""
+        self.issues.append(QualityIssue(
+            severity=severity,
+            component=component,
+            description=description
+        ))
 
-        Parameters
-        ----------
-        beats : list of dict
-            The fully annotated storyboard beats.
-
-        Returns
-        -------
-        QualityGateReport
+    def evaluate(self) -> QualityReport:
         """
-        if not beats:
-            return QualityGateReport(
-                passed=False,
-                issues=[QualityIssue(-1, "critical", "Storyboard is empty.")],
-                auto_fixed_beats=[],
-                summary={"beat_count": 0},
-            )
+        Evaluate all collected issues.
+        Returns a QualityReport that passes ONLY if there are no ERROR severity issues.
+        """
+        passed = True
+        for issue in self.issues:
+            if issue.severity == Severity.ERROR:
+                passed = False
+                break
+                
+        # Return a copy of the issues list to avoid external modification
+        return QualityReport(passed=passed, issues=list(self.issues))
 
-        issues = []
-        fixed_beats = []
-
+    def analyze_storyboard(self, beats: List[dict]):
+        """
+        Analyze a sequence of beats for common quality issues like consecutive repetitions.
+        """
+        low_energy_streak = 0
+        
+        # Check individual beat properties
         for i, beat in enumerate(beats):
-            beat_copy = dict(beat)
-            fixed = False
+            beat_type = str(beat.get("beat_type", "")).upper()
+            duration = beat.get("duration")
+            if duration is None:
+                start = beat.get("start_time", 0)
+                end = beat.get("end_time", 0)
+                duration = end - start
+                
+            emotion_score = beat.get("emotion_score", 0)
+            
+            # Check Reveal duration
+            if beat_type == "REVEAL" and duration > 8.0:
+                self.add_issue(
+                    severity=Severity.ERROR,
+                    component=f"Beat {i}",
+                    description=f"REVEAL beat is too long ({duration}s). Maximum allowed is 8s."
+                )
+                
+            # Check Hook strength
+            if beat_type == "HOOK" and emotion_score < 70:
+                self.add_issue(
+                    severity=Severity.WARNING,
+                    component=f"Beat {i}",
+                    description=f"HOOK beat is too weak (emotion_score={emotion_score}). Should be >= 70."
+                )
+                
+            # Track low-energy streaks
+            if emotion_score < 30:
+                low_energy_streak += 1
+                if low_energy_streak > 2:
+                    self.add_issue(
+                        severity=Severity.WARNING,
+                        component=f"Beat {i}",
+                        description=f"Too many consecutive low-energy beats (streak of {low_energy_streak})."
+                    )
+            else:
+                low_energy_streak = 0
 
-            # 1. Missing required keys
-            for key in self.required_keys:
-                if not beat_copy.get(key):
-                    # Auto-fix if possible
-                    if key == "beat_type":
-                        beat_copy[key] = "neutral"
-                        fixed = True
-                        issues.append(QualityIssue(i, "warning", "Missing beat_type. Auto-fixed to 'neutral'."))
-                    elif key == "visual_role":
-                        beat_copy[key] = "character"
-                        fixed = True
-                        issues.append(QualityIssue(i, "warning", "Missing visual_role. Auto-fixed to 'character'."))
-                    elif key == "motion_preset":
-                        beat_copy[key] = "static_hold"
-                        fixed = True
-                        issues.append(QualityIssue(i, "warning", "Missing motion_preset. Auto-fixed to 'static_hold'."))
-                    else:
-                        issues.append(QualityIssue(i, "critical", f"Missing required key: {key}"))
-
-            # 2. Text checks
-            text = beat_copy.get("subtitle_text", "")
-            summary_txt = beat_copy.get("summary", "")
-            if not text and not summary_txt:
-                issues.append(QualityIssue(i, "critical", "Beat has no subtitle_text and no summary."))
-
-            # 3. Time checks
-            start = beat_copy.get("start_time")
-            end = beat_copy.get("end_time")
-            if start is None or end is None:
-                issues.append(QualityIssue(i, "warning", "Missing start_time or end_time."))
-
-            fixed_beats.append(beat_copy)
-
-        critical_count = sum(1 for i in issues if i.severity == "critical")
-        passed = critical_count == 0
-
-        summary = {
-            "beat_count": len(beats),
-            "passed": passed,
-            "critical_issues": critical_count,
-            "warnings": len(issues) - critical_count,
-        }
-
-        return QualityGateReport(passed, issues, fixed_beats, summary)
-
-
-def evaluate_quality(beats: Sequence[Dict[str, Any]], **kwargs) -> QualityGateReport:
-    """Shortcut function for the quality gate."""
-    return QualityGate(**kwargs).evaluate(beats)
+        # Check consecutive repetitions
+        for i in range(1, len(beats)):
+            prev_beat = beats[i-1]
+            curr_beat = beats[i]
+            
+            # Check repeated assets
+            curr_asset = curr_beat.get("asset_id") or curr_beat.get("image_search_query")
+            prev_asset = prev_beat.get("asset_id") or prev_beat.get("image_search_query")
+            if curr_asset and curr_asset == prev_asset:
+                self.add_issue(
+                    severity=Severity.WARNING,
+                    component=f"Beat {i}",
+                    description=f"Consecutive repeated asset detected: {curr_asset}"
+                )
+                
+            # Check repeated transitions
+            curr_trans = curr_beat.get("transition_type")
+            prev_trans = prev_beat.get("transition_type")
+            if curr_trans and curr_trans == prev_trans:
+                self.add_issue(
+                    severity=Severity.INFO,
+                    component=f"Beat {i}",
+                    description=f"Consecutive repeated transition detected: {curr_trans}"
+                )
+                
+            # Check repeated motion presets
+            curr_motion = curr_beat.get("motion_preset")
+            prev_motion = prev_beat.get("motion_preset")
+            if curr_motion and curr_motion == prev_motion:
+                self.add_issue(
+                    severity=Severity.INFO,
+                    component=f"Beat {i}",
+                    description=f"Consecutive repeated motion preset detected: {curr_motion}"
+                )

@@ -14,10 +14,9 @@ import math
 from app.config import VIDEO_RESOLUTION
 from app.utils.video.visual_effects import (
     classify_beat,
-    choose_motion_preset,
-    choose_visual_transition,
     get_visual_preset,
     normalize_visual_style,
+    subtitle_style_for_visual_style,
 )
 from app.utils.images.image_composition import compose_vertical_subject_bgr
 from app.utils.audio.transition_sfx import save_transition_events
@@ -502,6 +501,13 @@ def _draw_text_panel(frame: np.ndarray, text: str, resolution, mode: str) -> np.
 def apply_production_overlay(frame: np.ndarray, slide_meta: Optional[Dict], resolution) -> np.ndarray:
     if not slide_meta:
         return frame
+        
+    # If the slide uses the new advanced composition engine, text is rendered in frame_compositor.py
+    if slide_meta.get("composition"):
+        layers = slide_meta.get("composition", {}).get("layers", [])
+        if any(l.get("category") == "text" for l in layers):
+            return frame
+            
     text = (slide_meta.get("text_overlay") or "").strip()
     layout = (slide_meta.get("layout_mode") or "").strip().lower()
     role = (slide_meta.get("visual_role") or "").strip().lower()
@@ -1232,10 +1238,7 @@ def choose_slide_motion(
             ("pull_out", 0.08),
         ]
 
-    if visual_style:
-        style_motion = choose_motion_preset(visual_style, beat, index)
-        if style_motion and style_motion not in STATIC_HOLD_MOTIONS:
-            candidates.append((style_motion, 0.16))
+
 
     if previous_motion and len(candidates) > 1:
         candidates = [(motion, weight) for motion, weight in candidates if motion != previous_motion] or candidates
@@ -1820,9 +1823,7 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                             ]
                             selected_transition_type = random.choices(pool, weights=pool_weights, k=1)[0]
                         else:
-                            selected_transition_type = choose_visual_transition(
-                                visual_style, beat, last_selected_transition, idx
-                            )
+                            selected_transition_type = "fade_eased"
                     else:
                         transitions_pool = ['crossfade', 'zoom_dissolve', 'fade_eased']
                         selected_transition_type = random.choices(

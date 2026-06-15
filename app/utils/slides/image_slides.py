@@ -756,7 +756,7 @@ def _apply_visual_architecture_pass(
     video_profile: str,
 ) -> List[Dict]:
     """Applies the new 20-stage ProductionPipeline to the raw slides/beats."""
-    from app.utils.slides.production_pipeline import run_pipeline
+    from app.utils.slides.legacy_production_pipeline import run_pipeline
     
     logger.info("Running modern ProductionPipeline on storyboard beats.")
     result = run_pipeline(slides, video_profile={"platform": video_profile})

@@ -1,6 +1,7 @@
 import enum
+import random
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 
 class TransitionType(str, enum.Enum):
     crossfade = "crossfade"
@@ -24,8 +25,8 @@ class TransitionPlan:
 
 class TransitionHistoryTracker:
     def __init__(self):
-        self.history = []
-        self.counts = {}
+        self.history: List[TransitionType] = []
+        self.counts: Dict[TransitionType, int] = {}
         
     def add_transition(self, transition: TransitionType):
         self.history.append(transition)
@@ -33,100 +34,159 @@ class TransitionHistoryTracker:
         if len(self.history) > 10:
             self.history.pop(0)
             
-    def is_violation(self, transition: TransitionType, total_beats: int = 10) -> bool:
+    def is_violation(self, transition: TransitionType) -> bool:
+        # Never repeat the same transition more than twice consecutively
         if len(self.history) >= 2:
             if self.history[-1] == transition and self.history[-2] == transition:
                 return True
-                
-        # Frequency limit: fade_eased max 30%
-        if transition == TransitionType.fade_eased:
-            if self.counts.get(transition, 0) >= max(2, int(total_beats * 0.30)):
-                return True
-                
         return False
 
 class TransitionPlanner:
-    def __init__(self):
+    def __init__(self, visual_style: str = "clean_pro"):
+        self.visual_style = visual_style.lower()
         self.tracker = TransitionHistoryTracker()
         
-    def get_fallback(self, transition_type: TransitionType) -> TransitionType:
-        """Return a compatible fallback if a transition is used too many times."""
-        fallbacks = {
-            TransitionType.zoom_dissolve: TransitionType.fade_eased,
-            TransitionType.iris_wipe: TransitionType.radial_wipe,
-            TransitionType.glitch_cut: TransitionType.whip_pan_right,
-            TransitionType.fade_eased: TransitionType.crossfade,
-            TransitionType.crossfade: TransitionType.zoom_dissolve,
-            TransitionType.cube_rotation: TransitionType.zoom_dissolve,
-            TransitionType.whip_pan_right: TransitionType.whip_pan_left,
-            TransitionType.whip_pan_left: TransitionType.whip_pan_right,
-            TransitionType.motion_slide_left: TransitionType.motion_slide_right,
-            TransitionType.motion_slide_right: TransitionType.motion_slide_left,
-        }
-        return fallbacks.get(transition_type, TransitionType.crossfade)
+    def _get_semantic_candidates(self, beat_type: str, emotion: str) -> Dict[TransitionType, int]:
+        """Map narrative context to transition choices with base semantic scores."""
+        candidates = {}
+        
+        # Base mappings based on narrative beat
+        if beat_type == "REVEAL":
+            candidates[TransitionType.zoom_dissolve] = 50
+            candidates[TransitionType.iris_wipe] = 50
+            candidates[TransitionType.radial_wipe] = 40
+        elif beat_type in ("SETUP", "MYSTERY"):
+            candidates[TransitionType.iris_wipe] = 50
+            candidates[TransitionType.radial_wipe] = 50
+            candidates[TransitionType.crossfade] = 30
+        elif beat_type == "TWIST" or emotion in ("shock", "fear", "surprise"):
+            candidates[TransitionType.glitch_cut] = 60
+            candidates[TransitionType.zoom_dissolve] = 40
+        elif beat_type == "ACTION" or emotion in ("excitement", "rage", "anger"):
+            candidates[TransitionType.whip_pan_left] = 50
+            candidates[TransitionType.whip_pan_right] = 50
+            candidates[TransitionType.motion_slide_left] = 40
+            candidates[TransitionType.motion_slide_right] = 40
+            candidates[TransitionType.cube_rotation] = 30
+        elif beat_type == "EMOTIONAL" or emotion in ("sadness", "joy", "hope"):
+            candidates[TransitionType.crossfade] = 50
+            candidates[TransitionType.fade_eased] = 40
+        elif beat_type == "PAYOFF":
+            candidates[TransitionType.zoom_dissolve] = 50
+            candidates[TransitionType.iris_wipe] = 40
+            candidates[TransitionType.fade_eased] = 30
+        else: # Default/Evidence/Hook
+            candidates[TransitionType.crossfade] = 40
+            candidates[TransitionType.fade_eased] = 40
+            candidates[TransitionType.motion_slide_right] = 20
+            
+        return candidates
+
+    def _get_style_weights(self) -> Dict[TransitionType, int]:
+        """Return bonus scores based on the visual style's preferred transitions."""
+        weights = {}
+        
+        if self.visual_style == "action" or self.visual_style == "yonko_hype":
+            weights[TransitionType.whip_pan_left] = 30
+            weights[TransitionType.whip_pan_right] = 30
+            weights[TransitionType.glitch_cut] = 30
+        elif self.visual_style == "dark_lore" or self.visual_style == "void_century":
+            weights[TransitionType.iris_wipe] = 30
+            weights[TransitionType.radial_wipe] = 30
+            weights[TransitionType.zoom_dissolve] = 20
+        elif self.visual_style == "emotional":
+            weights[TransitionType.crossfade] = 30
+            weights[TransitionType.fade_eased] = 30
+        elif self.visual_style == "clean_pro":
+            # Clean pro tolerates all but favors clean dissolves and fades
+            weights[TransitionType.fade_eased] = 20
+            weights[TransitionType.crossfade] = 20
+            weights[TransitionType.zoom_dissolve] = 20
+            weights[TransitionType.motion_slide_left] = 10
+            weights[TransitionType.motion_slide_right] = 10
+            
+        return weights
+
+    def _calculate_diversity_score(self, transition: TransitionType) -> int:
+        """Reward transitions that haven't been used recently."""
+        score = 30
+        # Penalty for being used at all
+        count = self.tracker.counts.get(transition, 0)
+        score -= min(count * 5, 20)
+        
+        # Heavy penalty for being used immediately prior
+        if self.tracker.history and self.tracker.history[-1] == transition:
+            score -= 15
+            
+        return max(0, score)
+
+    def _get_style_modifiers(self) -> Tuple[float, float]:
+        """Return (intensity_mod, duration_mod) based on style."""
+        if self.visual_style == "action" or self.visual_style == "yonko_hype":
+            return 1.5, 0.7  # Stronger motion blur, faster cuts
+        elif self.visual_style == "clean_pro":
+            return 0.7, 1.2  # Lower blur, shorter/softer motions, longer fades
+        elif self.visual_style == "emotional":
+            return 0.8, 1.3  # Soft, lingering transitions
+        return 1.0, 1.0
 
     def plan_transition(self, current_beat: dict, next_beat: dict, total_beats: int = 10) -> TransitionPlan:
-        """Plan the transition between two beats."""
         beat_type = next_beat.get("beat_type", "").upper() if next_beat else ""
         emotion = str(next_beat.get("emotion_state", {}).get("emotion", "neutral")).lower() if next_beat else "neutral"
-        story_phase = str(next_beat.get("story_phase", "middle")).lower() if next_beat else "middle"
 
-        choices = []
-        reason = ""
-
-        if beat_type == "HOOK" or story_phase == "beginning":
-            choices = [TransitionType.zoom_dissolve, TransitionType.whip_pan_right]
-            reason = f"{beat_type or 'Hook'} beat in {story_phase} requires high impact"
-        elif beat_type == "REVEAL":
-            choices = [TransitionType.iris_wipe, TransitionType.radial_wipe, TransitionType.cube_rotation]
-            reason = "Reveal beat uses focus or rotation transitions"
-        elif beat_type == "TWIST" or emotion in ["shock", "fear", "surprise", "tension"]:
-            choices = [TransitionType.glitch_cut, TransitionType.zoom_dissolve]
-            reason = "Twist/Shocking beat requires jarring cut"
-        elif beat_type == "ACTION" or emotion in ["excitement", "rage", "anger"]:
-            choices = [TransitionType.whip_pan_right, TransitionType.whip_pan_left, TransitionType.motion_slide_left, TransitionType.motion_slide_right]
-            reason = "Action beat uses fast directional motion"
-        elif beat_type in ["EMOTIONAL", "EVIDENCE", "SETUP"] or emotion in ["sadness", "joy", "calm", "hope"]:
-            choices = [TransitionType.fade_eased, TransitionType.crossfade]
-            reason = "Emotional/Evidence beat uses smooth fade"
-        elif beat_type == "PAYOFF" or story_phase == "end":
-            choices = [TransitionType.zoom_dissolve, TransitionType.iris_wipe]
-            reason = "Payoff beat uses cinematic closure"
-        else:
-            choices = [TransitionType.crossfade]
-            reason = f"Default crossfade for {beat_type or 'unknown'} beat"
-        # Scale intensity and duration based on emotion_score
-        emotion_score = next_beat.get("emotion_score", 0) if next_beat else 0
-        if emotion_score <= 20:
-            intensity = 0.3
-            duration = 1.0
-        elif emotion_score <= 50:
-            intensity = 0.5
-            duration = 0.8
-        elif emotion_score <= 80:
-            intensity = 0.7
-            duration = 0.5
-        else:
-            intensity = 1.0
-            duration = 0.3
-            
-        # Check history for consecutive repetitions
-        transition_type = None
-        for choice in choices:
-            if not self.tracker.is_violation(choice, total_beats):
-                transition_type = choice
-                break
+        # 1. Get semantic base candidates
+        candidates = self._get_semantic_candidates(beat_type, emotion)
+        
+        # 2. Add style weights
+        style_weights = self._get_style_weights()
+        for t, weight in style_weights.items():
+            if t in candidates:
+                candidates[t] += weight
+            else:
+                # Allow style to introduce transitions even if not semantically mapped, but at lower priority
+                candidates[t] = weight
                 
-        if transition_type is None:
-            # If all choices violate history, use fallback on the first choice
-            transition_type = self.get_fallback(choices[0])
-            reason += " (Fallback due to repetition limit)"
+        # 3. Add diversity scores and filter violations
+        scored_candidates = []
+        for t, base_score in candidates.items():
+            if self.tracker.is_violation(t):
+                continue
+            diversity = self._calculate_diversity_score(t)
+            total_score = base_score + diversity
+            scored_candidates.append((total_score, t))
             
-        self.tracker.add_transition(transition_type)
+        # 4. Select the best transition
+        if not scored_candidates:
+            # Absolute fallback
+            selected_type = TransitionType.crossfade
+            reason = "Fallback (all choices violated rules)"
+        else:
+            # Sort by highest score
+            scored_candidates.sort(key=lambda x: x[0], reverse=True)
             
+            # Add some slight randomness among top contenders to avoid determinism if scores are close
+            top_score = scored_candidates[0][0]
+            top_contenders = [t for score, t in scored_candidates if score >= top_score - 15]
+            selected_type = random.choice(top_contenders)
+            
+            reason = f"Semantic match for {beat_type}/{emotion} under {self.visual_style} style"
+
+        # 5. Calculate base intensity/duration based on emotion
+        emotion_score = next_beat.get("emotion_score", 50) if next_beat else 50
+        base_intensity = 0.5 + (emotion_score / 200.0) # 0.5 to 1.0
+        base_duration = 1.0 - (emotion_score / 200.0)  # 1.0 to 0.5
+        
+        # 6. Apply style modifiers
+        int_mod, dur_mod = self._get_style_modifiers()
+        final_intensity = min(1.0, max(0.1, base_intensity * int_mod))
+        final_duration = min(2.0, max(0.2, base_duration * dur_mod))
+
+        # Record in history
+        self.tracker.add_transition(selected_type)
+
         return TransitionPlan(
-            transition_type=transition_type,
-            duration=duration,
-            intensity=intensity,
+            transition_type=selected_type,
+            duration=round(final_duration, 2),
+            intensity=round(final_intensity, 2),
             reason=reason
         )

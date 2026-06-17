@@ -151,7 +151,8 @@ class ProductionPipeline:
             prev_style = motion_plan.style
 
         # 16.5 TransitionPlanner
-        transition_planner = TransitionPlanner()
+        visual_style = self.video_profile.get("visual_style", "clean_pro")
+        transition_planner = TransitionPlanner(visual_style=visual_style)
         total_beats = len(beats)
         for i in range(total_beats):
             curr_beat = beats[i]

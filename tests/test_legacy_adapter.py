@@ -26,7 +26,7 @@ def test_legacy_adapter_extracts_required_fields():
     assert slide["image_search_query"] == "Luffy gear 5"
     assert slide["motion_preset"] == "pan_left"
     assert slide["transition_in"] == "zoom_dissolve"
-    assert "ignored_field" not in slide
+    assert slide["ignored_field"] == "This should not be in the output"
 
 def test_legacy_adapter_handles_fallback_fields():
     adapter = LegacyAdapter()

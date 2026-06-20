@@ -518,10 +518,13 @@ def apply_production_overlay(frame: np.ndarray, slide_meta: Optional[Dict], reso
 
 
 KEN_BURNS_ZOOM = {
+    # Standard named presets
     "slow_push": (1.0, 1.14),
+    "slow_push_in": (1.0, 1.14),      # LLM alias → same as slow_push
     "impact_zoom": (1.06, 1.22),
     "hold_still": (1.0, 1.04),
     "pull_out": (1.16, 1.0),
+    "pull_out_zoom": (1.16, 1.0),     # LLM alias
     "stable_pan": (1.0, 1.10),
     "diagonal_pan": (1.0, 1.12),
     "subject_push": (1.0, 1.10),
@@ -529,17 +532,26 @@ KEN_BURNS_ZOOM = {
     "reveal_zoom": (1.04, 1.18),
     "wide_pan": (1.0, 1.08),
     "title_card_hold": (1.0, 1.0),
+    # Cinematic director presets
+    "dramatic_push": (1.0, 1.20),
+    "push_in": (1.0, 1.12),
+    "creep_in": (1.0, 1.08),
 }
 
 KEN_BURNS_CENTER_LOCKED = {
     "slow_push",
+    "slow_push_in",
     "impact_zoom",
     "hold_still",
     "pull_out",
+    "pull_out_zoom",
     "subject_push",
     "evidence_hold",
     "reveal_zoom",
     "title_card_hold",
+    "dramatic_push",
+    "push_in",
+    "creep_in",
 }
 STATIC_HOLD_MOTIONS = {"static_hold", "still_frame", "no_ken_burns", "title_card_hold"}
 FRAME_SAFE_TRANSITIONS = {
@@ -731,6 +743,120 @@ def fade_effect(current_frame, next_frame, progress):
     p = ease_progress(progress, DEFAULT_EASING)
     # Gamma-correct blend for better midtones
     return blend_linear_bgr(current_frame, next_frame, p)
+
+
+def morph_effect(current_frame: np.ndarray, next_frame: np.ndarray, progress: float) -> np.ndarray:
+    """Soft morphing blend: desaturated mid-point + crossfade simulates state-change morph.
+    
+    Used for character-state transitions e.g. young Shuri -> older Gunko.
+    Desaturates toward the midpoint then re-saturates on the incoming frame.
+    """
+    p = ease_progress(progress, DEFAULT_EASING)
+    # For the first half, fade current to desaturated midpoint
+    if p < 0.5:
+        blend_t = p * 2.0  # 0..1
+        blended = blend_linear_bgr(current_frame, next_frame, blend_t)
+        # Desaturate proportionally toward midpoint
+        desat_strength = float(1.0 - abs(blend_t - 0.5) * 2.0) * 0.65
+        gray = cv2.cvtColor(blended, cv2.COLOR_BGR2GRAY)
+        gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        blended = cv2.addWeighted(blended, 1.0 - desat_strength, gray_bgr, desat_strength, 0)
+        return blended
+    else:
+        # Second half: blend normally from mid to next
+        blend_t = (p - 0.5) * 2.0
+        blended = blend_linear_bgr(current_frame, next_frame, 0.5 + blend_t * 0.5)
+        return blended
+
+
+# ── Per-frame cinematic effect_cues application ─────────────────────────────
+
+_SHAKE_OFFSETS: List[tuple] = [
+    (4, 2), (-3, 4), (5, -3), (-4, 1), (3, -4), (-2, 3), (4, 2), (-3, -2)
+]
+
+
+def apply_effect_cues(
+    frame: np.ndarray,
+    effect_cues: list,
+    frame_index: int,
+    total_frames: int,
+    resolution,
+) -> np.ndarray:
+    """Apply effect_cues to a single rendered frame.
+
+    Args:
+        frame: Input BGR frame.
+        effect_cues: List of effect name strings from the slide JSON.
+        frame_index: Current frame index within this slide (0-based).
+        total_frames: Total frames for this slide.
+        resolution: (width, height) tuple.
+
+    Returns:
+        Modified BGR frame.
+    """
+    if not effect_cues:
+        return frame
+
+    res_w, res_h = resolution
+    t = frame_index / max(total_frames - 1, 1)  # 0..1 progress through slide
+    out = frame.copy()
+
+    for cue in effect_cues:
+        cue = (cue or "").strip().lower()
+
+        if cue == "impact_shake":
+            # Apply for first 30% of slide, diminishing amplitude
+            if t < 0.30:
+                amp = max(1.0, 6.0 * (1.0 - t / 0.30))
+                dx = int((_SHAKE_OFFSETS[frame_index % len(_SHAKE_OFFSETS)][0]) * amp / 6.0)
+                dy = int((_SHAKE_OFFSETS[frame_index % len(_SHAKE_OFFSETS)][1]) * amp / 6.0)
+                M = np.float32([[1, 0, dx], [0, 1, dy]])
+                out = cv2.warpAffine(out, M, (res_w, res_h), borderMode=cv2.BORDER_REPLICATE)
+
+        elif cue == "flash_frame":
+            # White flash on first 2 frames only
+            if frame_index < 2:
+                alpha = 0.85 - frame_index * 0.40  # frame 0 = 0.85, frame 1 = 0.45
+                white = np.full_like(out, 255)
+                out = cv2.addWeighted(out, 1.0 - alpha, white, alpha, 0)
+
+        elif cue == "red_eye_flash":
+            # Red tint for first 25% of slide, fading out
+            if t < 0.25:
+                fade = 1.0 - (t / 0.25)
+                red_overlay = out.copy()
+                red_overlay[:, :, 0] = np.clip(red_overlay[:, :, 0].astype(np.int32) - 40, 0, 255)
+                red_overlay[:, :, 2] = np.clip(red_overlay[:, :, 2].astype(np.int32) + 80, 0, 255)
+                out = cv2.addWeighted(out, 1.0 - fade * 0.5, red_overlay, fade * 0.5, 0)
+
+        elif cue in ("dark_vignette", "vignette"):
+            # Persistent edge darkening
+            vig = np.zeros_like(out, dtype=np.float32)
+            cx, cy = res_w // 2, res_h // 2
+            Y, X = np.ogrid[:res_h, :res_w]
+            dist = np.sqrt(((X - cx) / max(cx, 1)) ** 2 + ((Y - cy) / max(cy, 1)) ** 2)
+            mask = np.clip(dist * 0.65, 0.0, 0.72)[..., np.newaxis]
+            out = np.clip(out.astype(np.float32) * (1.0 - mask), 0, 255).astype(np.uint8)
+
+        elif cue == "desaturation":
+            # Fully desaturate for the whole slide
+            gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+            gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            out = cv2.addWeighted(out, 0.25, gray_bgr, 0.75, 0)
+
+        elif cue in ("glitch", "chromatic_shift"):
+            # RGB channel separation — only on first 15% of slide
+            if t < 0.15:
+                shift = max(1, int(5 * (1.0 - t / 0.15)))
+                b, g, r = cv2.split(out)
+                M_r = np.float32([[1, 0, shift], [0, 1, 0]])
+                M_b = np.float32([[1, 0, -shift], [0, 1, 0]])
+                r = cv2.warpAffine(r, M_r, (res_w, res_h), borderMode=cv2.BORDER_REPLICATE)
+                b = cv2.warpAffine(b, M_b, (res_w, res_h), borderMode=cv2.BORDER_REPLICATE)
+                out = cv2.merge([b, g, r])
+
+    return out
 
 
 def page_curl_effect(current_frame, next_frame, progress, corner='top-right'):
@@ -998,6 +1124,25 @@ def emit_panoramic_pan(
         logger.warning(f"Skipping slide with non-positive frame count: {img_path}")
         return frame_counter, None
 
+    # Read pacing and effect_cues from slide metadata
+    effect_cues = []
+    pacing_intent = ""
+    dramatic_pause_frames = 0
+    if slide_meta:
+        effect_cues = [e for e in (slide_meta.get("effect_cues") or []) if e]
+        pacing_intent = (slide_meta.get("pacing_intent") or "").strip().lower()
+
+        # dramatic_pause: prepend black frames before the slide
+        if pacing_intent == "dramatic_pause":
+            pause_dur = min(0.45, duration * 0.15)  # Max 0.45s, but at most 15% of slide
+            dramatic_pause_frames = max(0, int(pause_dur * fps))
+            black = np.zeros((resolution[1], resolution[0], 3), dtype=np.uint8)
+            for _ in range(dramatic_pause_frames):
+                frame_writer.write(black)
+                frame_counter += 1
+            num_frames = max(1, num_frames - dramatic_pause_frames)
+            logger.info("dramatic_pause: prepended %d black frames for slide", dramatic_pause_frames)
+
     if slide_meta and slide_meta.get("composition"):
         from app.utils.video.frame_compositor import render_composed_frame
         img_bgr = load_slide_bgr(img_path)
@@ -1013,6 +1158,7 @@ def emit_panoramic_pan(
             t = (i / (num_frames - 1)) if num_frames > 1 else 0.0
             frame = render_composed_frame(img_bgr, slide_meta, resolution, idx, t)
             frame = apply_production_overlay(frame, slide_meta, resolution)
+            frame = apply_effect_cues(frame, effect_cues, i, num_frames, resolution)
             frame_writer.write(frame)
             frame_counter += 1
             last_frame = frame
@@ -1055,6 +1201,7 @@ def emit_panoramic_pan(
         else:
             frame = crop_panned_frame(scaled, scaled_w, resolution, idx, t, pan_strength=pan_strength)
         frame = apply_production_overlay(frame, slide_meta, resolution)
+        frame = apply_effect_cues(frame, effect_cues, i, num_frames, resolution)
         frame_writer.write(frame)
         frame_counter += 1
         last_frame = frame
@@ -2245,6 +2392,16 @@ def main(json_path, image_dir, output_path, total_duration=None, resolution=VIDE
                                         progress,
                                         direction=direction
                                     )
+                                elif selected_transition_type == 'morph':
+                                    frame = morph_effect(current_frame, next_frame, progress)
+                                elif selected_transition_type == 'glitch_cut':
+                                    # Hard cut with brief chromatic shift
+                                    if progress < 0.15:
+                                        frame = apply_effect_cues(
+                                            current_frame, ["glitch"], int(progress * 10), 2, resolution
+                                        )
+                                    else:
+                                        frame = next_frame.copy()
                                 else:
                                     # Fallback to crossfade
                                     frame = crossfade_effect(current_frame, next_frame, progress, blur_amount)

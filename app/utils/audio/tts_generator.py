@@ -176,8 +176,8 @@ def _concat_wav_files(input_paths: List[Path], output_path: Path) -> None:
         concat_path.unlink(missing_ok=True)
 
 
-def _master_voiceover(raw_path: Path, output_path: Path) -> None:
-    """Apply light voiceover mastering with FFmpeg, falling back to raw audio."""
+def _master_voiceover(raw_path: Path, output_path: Path, word_count: int = 0, target_wpm: float = 168.0) -> None:
+    """Apply light voiceover mastering with FFmpeg, and normalize pacing via atempo."""
     if os.getenv("QWEN_TTS_MASTERING", "1").strip().lower() in {"0", "false", "no"}:
         shutil.move(str(raw_path), str(output_path))
         logger.info("Voiceover mastering disabled; using raw generated audio")
@@ -188,8 +188,26 @@ def _master_voiceover(raw_path: Path, output_path: Path) -> None:
     except Exception:
         raw_duration = 0.0
 
-    fade_out_start = max(0.0, raw_duration - 0.08)
+    atempo_filter = ""
+    new_duration = raw_duration
+    if word_count > 0 and raw_duration > 0 and target_wpm > 0:
+        actual_wpm = (word_count / raw_duration) * 60.0
+        # atempo > 1 speeds up, < 1 slows down.
+        # If actual=171 and target=130, we want it to take longer. Speed factor = 171 / 130 = 1.31... wait.
+        # If we want 130 WPM, Target Duration = word_count / (130/60)
+        # Factor = actual_duration / target_duration.
+        target_duration = word_count / (target_wpm / 60.0)
+        speed_factor = raw_duration / target_duration
+        # Clamp speed factor to FFmpeg's safe single-pass limits [0.5, 2.0]
+        speed_factor = max(0.5, min(2.0, speed_factor))
+        atempo_filter = f"atempo={speed_factor:.3f},"
+        new_duration = raw_duration / speed_factor
+        logger.info("Normalizing TTS pace: %d words, raw=%.1fs (%.0f wpm) -> target=%.1fs (%.0f wpm) [atempo=%.3f]", 
+                    word_count, raw_duration, actual_wpm, new_duration, target_wpm, speed_factor)
+
+    fade_out_start = max(0.0, new_duration - 0.08)
     audio_filter = (
+        f"{atempo_filter}"
         "loudnorm=I=-16:TP=-1.5:LRA=11,"
         "acompressor=threshold=-18dB:ratio=2.2:attack=20:release=250,"
         "alimiter=limit=0.95,"
@@ -400,7 +418,8 @@ def generate_voiceover(
         for chunk_path in chunk_paths:
             chunk_path.unlink(missing_ok=True)
 
-    _master_voiceover(raw_output_path, output_path)
+    word_count = len(text.split())
+    _master_voiceover(raw_output_path, output_path, word_count=word_count, target_wpm=168.0)
     duration = get_audio_duration(str(output_path))
     logger.info("Generated voiceover %s (duration %.2fs)", output_path.name, duration)
 

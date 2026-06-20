@@ -276,7 +276,7 @@ def _apply_effect(canvas, effect, resolution, t):
     layer_type = effect.get("layer_type", "")
     name = effect.get("name", "")
     
-    if layer_type == "vignette" or name == "subtle_vignette":
+    if layer_type == "vignette" or name in ("subtle_vignette", "vignette_dark", "vignette_subtle", "dark_vignette"):
         # Create a radial gradient mask
         res_w, res_h = resolution
         opacity = effect.get("metadata", {}).get("intensity", 0.5)
@@ -293,7 +293,7 @@ def _apply_effect(canvas, effect, resolution, t):
         vignette_mask = np.repeat(vignette_mask[:, :, np.newaxis], 3, axis=2)
         return (canvas * vignette_mask).astype(np.uint8)
         
-    elif layer_type == "film_grain" or name == "grain":
+    elif layer_type == "film_grain" or name in ("grain", "film_grain"):
         # Create a random Gaussian noise matrix
         res_w, res_h = resolution
         intensity = effect.get("metadata", {}).get("intensity", 0.1)
@@ -302,6 +302,58 @@ def _apply_effect(canvas, effect, resolution, t):
         # Add to canvas and clip
         noisy_canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
         return noisy_canvas
+
+    elif name == "impact_shake" or layer_type == "camera_shake":
+        # Camera shake — random X/Y pixel offset via affine warp
+        amplitude = effect.get("metadata", {}).get("amplitude", 4)
+        dx = np.random.randint(-amplitude, amplitude + 1)
+        dy = np.random.randint(-amplitude, amplitude + 1)
+        M = np.float32([[1, 0, dx], [0, 1, dy]])
+        res_w, res_h = resolution
+        return cv2.warpAffine(canvas, M, (res_w, res_h), borderMode=cv2.BORDER_REFLECT)
+
+    elif name == "flash_frame" or layer_type == "flash":
+        # Brief white flash — blend toward white for 2 frames (66ms at 30fps)
+        flash_duration = effect.get("metadata", {}).get("duration", 0.066)
+        # `t` is the normalized progress within this slide (0.0 to 1.0)
+        # Flash at the very start of the effect layer
+        if t < flash_duration:
+            alpha = 1.0 - (t / flash_duration)  # Fade from white to normal
+            white = np.full_like(canvas, 255)
+            return cv2.addWeighted(white, alpha, canvas, 1.0 - alpha, 0)
+        return canvas
+
+    elif name == "red_eye_flash" or layer_type == "red_flash":
+        # Brief red overlay for menace/threat moments
+        flash_duration = effect.get("metadata", {}).get("duration", 0.15)
+        if t < flash_duration:
+            alpha = 0.35 * (1.0 - (t / flash_duration))  # Fade from red tint to normal
+            red_overlay = np.zeros_like(canvas)
+            red_overlay[:, :, 2] = 200  # Red channel in BGR
+            return cv2.addWeighted(red_overlay, alpha, canvas, 1.0 - alpha, 0)
+        return canvas
+
+    elif name == "desaturation" or layer_type == "color_filter" and effect.get("metadata", {}).get("saturation", 1.0) < 0.8:
+        # Drain color for grief/trauma — convert to gray and blend back
+        saturation = effect.get("metadata", {}).get("saturation", 0.3)
+        brightness = effect.get("metadata", {}).get("brightness", 0.85)
+        gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+        gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        # Blend between full color and grayscale based on saturation
+        result = cv2.addWeighted(canvas, saturation, gray_bgr, 1.0 - saturation, 0)
+        if brightness != 1.0:
+            result = np.clip(result.astype(np.float32) * brightness, 0, 255).astype(np.uint8)
+        return result
+
+    elif name == "chromatic_shift" or layer_type == "distortion":
+        # Split BGR channels, offset R channel by a few pixels, remerge
+        offset = effect.get("metadata", {}).get("offset", 2)
+        b, g, r = cv2.split(canvas)
+        # Shift red channel right
+        M = np.float32([[1, 0, offset], [0, 1, 0]])
+        res_w, res_h = resolution
+        r_shifted = cv2.warpAffine(r, M, (res_w, res_h), borderMode=cv2.BORDER_REFLECT)
+        return cv2.merge([b, g, r_shifted])
 
     return canvas
 

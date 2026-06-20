@@ -47,21 +47,24 @@ SFX_VOLUME_SCALE: Dict[str, float] = {
     "heartbeat": 1.0,
     "electric_charge": 1.1,
     "sword_slash": 1.1,
-    "sparkle": 0.70,
-    "whoosh": 1.1,
+    "pop": 0.70,
+    "fast-whoosh": 1.1,
     "soft_whoosh": 1.0,
     "reverse_whoosh": 1.0,
     "slide": 1.0,
+    "whoosh-wind": 1.1,
+    "swoosh-sound-effects": 1.1,
+    "mouse-click-by-ek6_VR0O6PL": 1.2,
 }
 
 # Exact transition name -> sfx stem (app/data/sfx/{stem}.mp3)
 TRANSITION_SFX_FILES: Dict[str, str] = {
     "none": "",
-    "default": "soft_whoosh",
+    "default": "whoosh-wind",
     # Gentle blends
-    "fade": "soft_whoosh",
-    "fade_eased": "soft_whoosh",
-    "crossfade": "soft_whoosh",
+    "fade": "swoosh-sound-effects",
+    "fade_eased": "whoosh-wind",
+    "crossfade": "swoosh-sound-effects",
     # Impact / scale
     "zoom_dissolve": "impact_hit",
     "radial_wipe": "sub_boom",
@@ -72,8 +75,8 @@ TRANSITION_SFX_FILES: Dict[str, str] = {
     "cube_rotation_up": "reverse_whoosh",
     "cube_rotation_down": "reverse_whoosh",
     # Directional motion
-    "whip_pan_right": "whoosh",
-    "whip_pan_left": "whoosh",
+    "whip_pan_right": "fast-whoosh",
+    "whip_pan_left": "fast-whoosh",
     "motion_slide_right": "slide",
     "motion_slide_left": "slide",
     "slide_left": "slide",
@@ -81,16 +84,20 @@ TRANSITION_SFX_FILES: Dict[str, str] = {
     "slide_up": "slide",
     "slide_down": "slide",
     # Stylized
+    "glitch_cut": "electric_charge",
+    "bass_hit": "sub_boom",
     "page_curl_tl": "stinger",
     "page_curl_tr": "stinger",
     "page_curl_bl": "stinger",
     "page_curl_br": "stinger",
-    "water_ripple": "sparkle",
+    "water_ripple": "pop",
+    # UI / System
+    "mouse_click": "mouse-click-by-ek6_VR0O6PL",
 }
 
 # Longest-prefix wins when exact key is missing
 TRANSITION_SFX_PREFIXES: Tuple[Tuple[str, str], ...] = (
-    ("whip_pan", "whoosh"),
+    ("whip_pan", "fast-whoosh"),
     ("motion_slide", "slide"),
     ("slide_", "slide"),
     ("cube_rotation", "reverse_whoosh"),
@@ -98,10 +105,11 @@ TRANSITION_SFX_PREFIXES: Tuple[Tuple[str, str], ...] = (
 )
 
 GENTLE_TRANSITION_SFX_VARIANTS: Tuple[str, ...] = (
+    "whoosh-wind",
+    "swoosh-sound-effects",
     "soft_whoosh",
     "reverse_whoosh",
     "slide",
-    "sparkle",
 )
 
 IMPACT_TRANSITION_SFX_VARIANTS: Tuple[str, ...] = (
@@ -341,7 +349,7 @@ def ensure_sfx_library() -> None:
 
 
 def build_transition_events_from_slides(slides: List[Dict]) -> List[Dict]:
-    """Build SFX cue list from slide boundaries (slide 2+ start times)."""
+    """Build SFX cue list from slide boundaries and sfx_target_word cues."""
     events = []
     for idx, slide in enumerate(slides):
         if idx == 0:
@@ -358,6 +366,49 @@ def build_transition_events_from_slides(slides: List[Dict]) -> List[Dict]:
                 "transition": transition_type,
             }
         )
+
+    # Word-level SFX cues: if a slide has sfx_target_word, calculate the
+    # approximate timestamp of that word within the slide and add a bass_hit.
+    for slide in slides:
+        target_word = (slide.get("sfx_target_word") or "").strip()
+        if not target_word:
+            continue
+        start_str = slide.get("start_time")
+        end_str = slide.get("end_time")
+        if not start_str or not end_str:
+            continue
+        slide_start = parse_time_to_seconds(start_str)
+        slide_end = parse_time_to_seconds(end_str)
+        slide_duration = slide_end - slide_start
+        if slide_duration <= 0:
+            continue
+        # Find word position in subtitle text
+        subtitle = slide.get("subtitle_text") or slide.get("summary") or ""
+        words = subtitle.split()
+        if not words:
+            continue
+        target_lower = target_word.lower()
+        word_index = next(
+            (i for i, w in enumerate(words) if target_lower in w.lower()),
+            None,
+        )
+        if word_index is None:
+            continue
+        # Approximate timestamp: word position / total words * duration
+        word_time = slide_start + (word_index / len(words)) * slide_duration
+        events.append(
+            {
+                "time": word_time,
+                "transition": "bass_hit",
+            }
+        )
+        logger.debug(
+            "SFX target word '%s' at %.2fs in slide %s-%s",
+            target_word, word_time, start_str, end_str,
+        )
+
+    # Sort all events by time
+    events.sort(key=lambda e: e.get("time", 0))
     return events
 
 

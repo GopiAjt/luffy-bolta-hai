@@ -62,12 +62,19 @@ class TransitionPlanner:
         elif beat_type == "TWIST" or emotion in ("shock", "fear", "surprise"):
             candidates[TransitionType.glitch_cut] = 60
             candidates[TransitionType.zoom_dissolve] = 40
-        elif beat_type == "ACTION" or emotion in ("excitement", "rage", "anger"):
+            candidates[TransitionType.whip_pan_right] = 30
+        elif beat_type == "ESCALATION" or emotion in ("excitement", "rage", "anger"):
             candidates[TransitionType.whip_pan_left] = 50
             candidates[TransitionType.whip_pan_right] = 50
             candidates[TransitionType.motion_slide_left] = 40
             candidates[TransitionType.motion_slide_right] = 40
             candidates[TransitionType.cube_rotation] = 30
+        elif beat_type == "ACTION":
+            candidates[TransitionType.whip_pan_left] = 50
+            candidates[TransitionType.whip_pan_right] = 50
+            candidates[TransitionType.motion_slide_left] = 40
+            candidates[TransitionType.motion_slide_right] = 40
+            candidates[TransitionType.glitch_cut] = 35
         elif beat_type == "EMOTIONAL" or emotion in ("sadness", "joy", "hope"):
             candidates[TransitionType.crossfade] = 50
             candidates[TransitionType.fade_eased] = 40
@@ -75,6 +82,9 @@ class TransitionPlanner:
             candidates[TransitionType.zoom_dissolve] = 50
             candidates[TransitionType.iris_wipe] = 40
             candidates[TransitionType.fade_eased] = 30
+        elif beat_type == "RESOLUTION":
+            candidates[TransitionType.fade_eased] = 55
+            candidates[TransitionType.crossfade] = 45
         else: # Default/Evidence/Hook
             candidates[TransitionType.crossfade] = 40
             candidates[TransitionType.fade_eased] = 40
@@ -133,6 +143,7 @@ class TransitionPlanner:
     def plan_transition(self, current_beat: dict, next_beat: dict, total_beats: int = 10) -> TransitionPlan:
         beat_type = next_beat.get("beat_type", "").upper() if next_beat else ""
         emotion = str(next_beat.get("emotion_state", {}).get("emotion", "neutral")).lower() if next_beat else "neutral"
+        pacing_intent = (next_beat.get("pacing_intent") or "standard").strip().lower() if next_beat else "standard"
 
         # 1. Get semantic base candidates
         candidates = self._get_semantic_candidates(beat_type, emotion)
@@ -145,6 +156,18 @@ class TransitionPlanner:
             else:
                 # Allow style to introduce transitions even if not semantically mapped, but at lower priority
                 candidates[t] = weight
+
+        # 2b. Pacing intent bonuses
+        if pacing_intent == "rapid_montage":
+            for fast_t in (TransitionType.whip_pan_left, TransitionType.whip_pan_right, 
+                           TransitionType.motion_slide_left, TransitionType.motion_slide_right,
+                           TransitionType.glitch_cut):
+                candidates[fast_t] = candidates.get(fast_t, 0) + 25
+        elif pacing_intent == "hold_frame":
+            for slow_t in (TransitionType.fade_eased, TransitionType.crossfade):
+                candidates[slow_t] = candidates.get(slow_t, 0) + 30
+        elif pacing_intent == "dramatic_pause":
+            candidates[TransitionType.fade_eased] = candidates.get(TransitionType.fade_eased, 0) + 35
                 
         # 3. Add diversity scores and filter violations
         scored_candidates = []
@@ -169,7 +192,7 @@ class TransitionPlanner:
             top_contenders = [t for score, t in scored_candidates if score >= top_score - 15]
             selected_type = random.choice(top_contenders)
             
-            reason = f"Semantic match for {beat_type}/{emotion} under {self.visual_style} style"
+            reason = f"Semantic match for {beat_type}/{emotion}/{pacing_intent} under {self.visual_style} style"
 
         # 5. Calculate base intensity/duration based on emotion
         emotion_score = next_beat.get("emotion_score", 50) if next_beat else 50

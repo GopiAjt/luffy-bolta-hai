@@ -73,7 +73,7 @@ for _extra_entity in ("Caribou", "Shirahoshi", "Pluton", "Poseidon", "Fishman Is
 IMAGE_SLIDE_MAX_SECONDS = float(os.getenv("IMAGE_SLIDE_MAX_SECONDS", "5.5"))
 IMAGE_SLIDE_MIN_SECONDS = float(os.getenv("IMAGE_SLIDE_MIN_SECONDS", "1.6"))
 
-PRODUCTION_BEAT_TYPES = {"hook", "setup", "evidence", "reveal", "payoff", "cta"}
+PRODUCTION_BEAT_TYPES = {"hook", "setup", "evidence", "reveal", "twist", "escalation", "payoff", "resolution", "cta"}
 EDITOR_VISUAL_ROLES = {
     "character",
     "evidence",
@@ -114,9 +114,20 @@ TRANSITION_BY_BEAT = {
     "setup": "fade_eased",
     "evidence": "crossfade",
     "reveal": "zoom_dissolve",
+    "twist": "glitch_cut",
+    "escalation": "whip_pan_right",
     "payoff": "fade_eased",
+    "resolution": "fade_eased",
     "cta": "fade_eased",
 }
+
+# These are effect_cues names — NOT valid transition_in values.
+# If the LLM accidentally puts one of these in transition_in, we sanitize it out.
+_EFFECT_ONLY_NAMES: frozenset = frozenset({
+    "flash_frame", "impact_shake", "red_eye_flash", "glitch",
+    "dark_vignette", "desaturation", "chromatic_shift", "slow_push_in",
+    "morph", "bass_hit",
+})
 VISUAL_ARCHITECTURE_STAGES = [
     "Subtitles",
     "Script Analyzer",
@@ -341,8 +352,14 @@ def _classify_production_beat(text: str, index: int, total: int) -> str:
         return "hook"
     if index >= max(0, total - 1) or re.search(r"\b(follow|comment|subscribe|tell me|like)\b", lowered):
         return "cta"
-    if re.search(r"\breveal|truth|secret|hidden|clue|twist|impossible|danger|reason\b", lowered):
+    if re.search(r"\b(twist|shocking|but actually|plot twist|never expected|impossible|what if|turns out)\b", lowered):
+        return "twist"
+    if re.search(r"\b(escalat|stronger|even more|worse|intensif|on top of that|not only|also|furthermore)\b", lowered):
+        return "escalation"
+    if re.search(r"\breveal|truth|secret|hidden|clue|impossible|danger|real reason)\b", lowered):
         return "reveal"
+    if re.search(r"\b(answer|resolution|ending|finally|in the end|closure|conclusion|that's why)\b", lowered):
+        return "resolution"
     if re.search(r"\bpayoff|means|proves|changes|therefore|because|so this\b", lowered):
         return "payoff"
     if index <= 2:
@@ -806,8 +823,21 @@ def _apply_production_edit_defaults(
     )
     if not isinstance(slide.get("emphasis_words"), list):
         slide["emphasis_words"] = _emphasis_words(text, context_entities)
-    slide["transition_in"] = slide.get("transition_in") or TRANSITION_BY_BEAT.get(beat_type, "crossfade")
-    slide["sfx_cue"] = slide.get("sfx_cue") or slide["transition_in"]
+    raw_transition = (slide.get("transition_in") or "").strip().lower()
+    # Sanitize: if the LLM put an effect_cue name in transition_in, replace it with the beat default
+    if not raw_transition or raw_transition in _EFFECT_ONLY_NAMES:
+        raw_transition = TRANSITION_BY_BEAT.get(beat_type, "crossfade")
+    slide["transition_in"] = raw_transition
+
+    raw_sfx = (slide.get("sfx_cue") or "").strip().lower()
+    # Normalize literal "none" string to empty
+    if raw_sfx == "none":
+        raw_sfx = ""
+    # If sfx_target_word already provides a mid-slide hit, don't also fire a boundary hit
+    # (prevents double bass-hit on the same slide). Allow only if it's a different cue.
+    if raw_sfx == "bass_hit" and slide.get("sfx_target_word"):
+        raw_sfx = ""
+    slide["sfx_cue"] = raw_sfx or slide["transition_in"]
     slide["visual_purpose"] = _clean_prompt_text(
         slide.get("visual_purpose")
         or _visual_purpose_for_slide(slide.get("summary", ""), slide.get("subtitle_text", ""), beat_type, visual_role),
@@ -835,6 +865,32 @@ def _apply_production_edit_defaults(
             text,
             context_entities,
         )
+    # Cinematic pacing fields — preserve LLM values or set sensible defaults
+    VALID_PACING_INTENTS = {"rapid_montage", "hold_frame", "dramatic_pause", "parallel_cut", "standard"}
+    pacing = (slide.get("pacing_intent") or "").strip().lower()
+    slide["pacing_intent"] = pacing if pacing in VALID_PACING_INTENTS else "standard"
+    if not isinstance(slide.get("effect_cues"), list):
+        slide["effect_cues"] = []
+    slide["sfx_target_word"] = slide.get("sfx_target_word") or ""
+    slide["director_note"] = slide.get("director_note") or ""
+
+    # Fix 4: Cap rapid_montage slide duration to 2.0 seconds max.
+    # If the LLM gave a 5-second window with pacing_intent=rapid_montage, clamp it so
+    # the render engine enforces the visual energy the intent implies.
+    if slide["pacing_intent"] == "rapid_montage":
+        try:
+            s = parse_time(slide["start_time"])
+            e = parse_time(slide["end_time"])
+            if e - s > 2.0:
+                logger.debug(
+                    "rapid_montage slide %s duration %.2fs capped to 2.0s",
+                    slide.get("summary", "")[:40],
+                    e - s,
+                )
+                slide["end_time"] = format_time(s + 2.0)
+        except Exception:
+            pass  # timing strings non-parseable; leave as-is
+
     return slide
 
 
@@ -1141,6 +1197,39 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
         "- Long narration sections must become multiple visual beats with different scene-search queries.\n"
         "- For trauma/psychology/symbolic narration, DO NOT invent symbolic art. Map the feeling to the closest searchable canon entity, arc, place, object, or logo.\n"
         "- Avoid generic repeats like only 'Zoro training' or 'Zoro scars'; each slide needs a new focal action or object.\n\n"
+        "CINEMATIC PACING (DIRECTOR'S TIMELINE):\n"
+        "- Think like a professional video editor creating a cinematic timeline, not a slideshow.\n"
+        "- If a sentence contains a reveal, shock, or name-drop, split it into 2-3 rapid visual cuts (0.8-2.0 seconds each) with DIFFERENT assets per cut.\n"
+        "- Example: 'Out of everyone in the world... why did Imu choose Gunko?' should become 3 cuts: Imu eyes close-up (1.5s), Empty Throne zoom (1.0s), Gunko silhouette (1.5s).\n"
+        "- beat_type values now include: hook, setup, evidence, reveal, twist, escalation, payoff, resolution, cta.\n"
+        "- Use pacing_intent to signal the editor how this beat should be cut:\n"
+        "  - 'rapid_montage': 3+ quick cuts showing alternatives/candidates (e.g., Admirals, Gorosei, Holy Knights in rapid succession).\n"
+        "  - 'hold_frame': freeze on a single powerful image for emphasis (e.g., 'That's not trust.' — hold on Gunko expression).\n"
+        "  - 'dramatic_pause': brief black/silence before a payoff line.\n"
+        "  - 'parallel_cut': interleave two subjects (e.g., Imu + Gunko alternating).\n"
+        "  - 'standard': normal pacing.\n"
+        "- Use effect_cues to request cinematic compositor effects (array of strings):\n"
+        "  - 'impact_shake': camera shake on impact words.\n"
+        "  - 'flash_frame': 2-frame white flash between reveals.\n"
+        "  - 'slow_push_in': Ken Burns slow zoom toward subject.\n"
+        "  - 'red_eye_flash': brief red overlay for menace.\n"
+        "  - 'glitch': digital distortion for shock/twist.\n"
+        "  - 'dark_vignette': heavy edge darkening for mystery.\n"
+        "  - 'desaturation': drain color for grief/trauma.\\n"
+        "  - 'morph': blend/dissolve between two character states (e.g., young Shuri → older Gunko).\n"
+        "  - 'chromatic_shift': RGB channel split for glitch/distortion.\n"
+        "CRITICAL effect_cues rules:\n"
+        "- effect_cues go in the 'effect_cues' array ONLY. NEVER put effect names in 'transition_in'.\n"
+        "- 'transition_in' only accepts: crossfade, fade_eased, zoom_dissolve, iris_wipe, radial_wipe, glitch_cut, whip_pan_left, whip_pan_right, motion_slide_left, motion_slide_right, fade_eased, cube_rotation, water_ripple.\n"
+        "- 'sfx_cue' must be '' (empty string) or a transition name — NEVER 'none' (use '' instead).\n"
+        "- If you set sfx_target_word, set sfx_cue to '' — they both trigger audio and having both causes a double-hit.\n"
+        "RAPID MONTAGE RULE:\n"
+        "- When pacing_intent is 'rapid_montage', you MUST generate at least 3 separate slides from the narration sentence, each with a completely different image_search_query and visual.\n"
+        "- Example: 'Out of everyone in the world... why did Imu choose Gunko?' must produce:\n"
+        "  Slide A: Imu eyes (1.5s), Slide B: Empty Throne zoom (1.0s), Slide C: Gunko silhouette (1.5s)\n"
+        "- Two slides for a rapid_montage is NOT acceptable.\n"
+        "- Use sfx_target_word to sync a bass_hit to the exact emphasis word in the narration (e.g., 'Gunko').\n"
+        "- Use director_note for human-readable editorial intent (e.g., 'This is the first reveal moment', 'This line deserves its own shot', 'Retention spike').\n\n"
         f'For EVERY slide set visual_source to "{_VISUAL_SOURCE_ASSET}". AI image generation is disabled.\n'
         'For EVERY slide set ai_image_prompt to empty string "".\n\n'
         "USE asset_search FOR:\n"
@@ -1160,6 +1249,10 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
         "- viewer_focus: one concrete sentence telling the editor/viewer what should be inspected on screen and why it supports this narration beat.\n"
         "- manual_upload_brief: one practical storyboard note for a human picking the image. Name the needed character, object, arc, expression, or scene.\n"
         "- avoid_visual_reuse: short warning about what visual not to repeat from nearby beats, especially repeated portraits or the same generic crew shot.\n"
+        "- pacing_intent: one of rapid_montage, hold_frame, dramatic_pause, parallel_cut, standard.\n"
+        "- effect_cues: array of effect strings from the cinematic list above. Empty array [] if none needed.\n"
+        "- sfx_target_word: the word in the narration to sync a bass_hit sound to. Empty string if none.\n"
+        "- director_note: human-readable editorial intent. Empty string if none.\n"
         "- asset_metadata, visual_intent, emotion_state, visual_diversity_score, diversity_notes, character_relationships, retention_score, retention_actions, composition_layers, and motion_plan may be included; if uncertain, leave coherent simple values and the backend will repair them.\n"
         "- image_search_query: REQUIRED. 3–9 words, searchable canon scene/entity phrase. "
         "Never repeat the same query twice. No jargon filenames.\n"
@@ -1169,7 +1262,7 @@ def _image_slides_rules_block(context_entities: List[str], video_profile: str = 
         "TIMING: merge short fragments; max ~3.5s per slide; continuous timestamps with no gaps. "
         "Each slide's end_time must equal the next slide's start_time.\n\n"
         "OUTPUT: ONLY a JSON array. Each object MUST include:\n"
-        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt, beat_type, visual_role, visual_purpose, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence, viewer_focus, manual_upload_brief, avoid_visual_reuse, asset_metadata, visual_intent, emotion_state, visual_diversity_score, diversity_notes, character_relationships, retention_score, retention_actions, composition_layers, motion_plan\n"
+        "start_time, end_time, summary, visual_source, image_search_query, ai_image_prompt, beat_type, visual_role, visual_purpose, layout_mode, motion_preset, text_overlay, emphasis_words, transition_in, sfx_cue, asset_confidence, viewer_focus, manual_upload_brief, avoid_visual_reuse, pacing_intent, effect_cues, sfx_target_word, director_note, asset_metadata, visual_intent, emotion_state, visual_diversity_score, diversity_notes, character_relationships, retention_score, retention_actions, composition_layers, motion_plan\n"
     )
 
 
@@ -1699,6 +1792,57 @@ def _script_context_summary(dialogues: List[Dict]) -> Dict:
     }
 
 
+def _expand_parallel_cuts(slides: List[Dict]) -> List[Dict]:
+    """Fix 5: Expand parallel_cut slides into two rapid sub-slides.
+
+    When pacing_intent == "parallel_cut", the slide represents two subjects
+    interleaved (e.g., young Shuri vs older Gunko). We split it into two
+    equal-duration sub-slides so the renderer produces an actual alternating cut.
+
+    Rules:
+    - Both sub-slides get pacing_intent = "rapid_montage"
+    - Sub-slide A keeps the original image_search_query
+    - Sub-slide B appends " alternate view" to force a different asset search
+    - Both sub-slides share effect_cues from the original
+    - Transition between them becomes "crossfade" (fast)
+    """
+    expanded: List[Dict] = []
+    for slide in slides:
+        if (slide.get("pacing_intent") or "").strip().lower() != "parallel_cut":
+            expanded.append(slide)
+            continue
+
+        try:
+            s = parse_time(slide["start_time"])
+            e = parse_time(slide["end_time"])
+            mid = s + (e - s) / 2.0
+        except Exception:
+            expanded.append(slide)
+            continue
+
+        base = dict(slide)
+        base["pacing_intent"] = "rapid_montage"
+        base["end_time"] = format_time(mid)
+        base["transition_in"] = slide.get("transition_in", "crossfade")
+
+        alt = dict(slide)
+        alt["pacing_intent"] = "rapid_montage"
+        alt["start_time"] = format_time(mid)
+        alt["transition_in"] = "crossfade"
+        original_query = (slide.get("image_search_query") or "").strip()
+        alt["image_search_query"] = f"{original_query} alternate view".strip()
+        alt["summary"] = f"{slide.get('summary', '')} (alt angle)".strip()
+
+        logger.info(
+            "parallel_cut split: [%.2f-%.2f] -> [%.2f-%.2f] + [%.2f-%.2f]",
+            s, e, s, mid, mid, e,
+        )
+        expanded.append(base)
+        expanded.append(alt)
+
+    return expanded
+
+
 def generate_gemini_image_slides(
     ass_path: str,
     out_path: str,
@@ -1802,6 +1946,7 @@ def generate_gemini_image_slides(
             script_context,
             video_profile,
         )
+        final_slides = _expand_parallel_cuts(final_slides)
 
         with open(out_path, 'w', encoding='utf-8') as f:
             json.dump(final_slides, f, indent=2, ensure_ascii=False)

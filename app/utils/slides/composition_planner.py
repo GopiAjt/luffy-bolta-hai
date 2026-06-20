@@ -115,23 +115,54 @@ _COMPOSITION_STRATEGIES: Dict[Tuple[str, str], str] = {
     ("hook", "section_card"): "title_splash",
     ("hook", "symbol"):       "symbol_dramatic",
     ("hook", "location"):     "establishing_wide",
+    ("hook", "evidence"):     "evidence_inspect",
     # Setup — context building.
     ("setup", "character"):   "character_context",
     ("setup", "location"):    "establishing_wide",
     ("setup", "evidence"):    "evidence_inspect",
+    ("setup", "symbol"):      "symbol_dramatic",
+    ("setup", "object"):      "object_focus",
+    ("setup", "comparison"):  "split_compare",
+    ("setup", "timeline"):    "timeline_progression",
     # Evidence — proof and detail.
     ("evidence", "evidence"):     "evidence_inspect",
     ("evidence", "character"):    "character_context",
     ("evidence", "object"):       "object_focus",
     ("evidence", "quote_card"):   "quote_emphasis",
+    ("evidence", "symbol"):       "symbol_dramatic",
+    ("evidence", "location"):     "establishing_wide",
     # Reveal — dramatic unveiling.
     ("reveal", "character"):  "hero_reveal",
     ("reveal", "symbol"):     "symbol_dramatic",
     ("reveal", "evidence"):   "evidence_inspect",
+    ("reveal", "object"):     "object_focus",
+    ("reveal", "location"):   "establishing_wide",
+    ("reveal", "comparison"): "split_compare",
+    # Twist — jarring/shocking.
+    ("twist", "character"):   "character_dread",
+    ("twist", "symbol"):      "symbol_dramatic",
+    ("twist", "evidence"):    "evidence_inspect",
+    ("twist", "object"):      "object_focus",
+    ("twist", "comparison"):  "split_compare",
+    # Escalation — building tension/momentum.
+    ("escalation", "character"):   "hero_reveal",
+    ("escalation", "symbol"):      "symbol_dramatic",
+    ("escalation", "evidence"):    "evidence_inspect",
+    ("escalation", "comparison"):  "split_compare",
+    ("escalation", "object"):      "object_focus",
+    ("escalation", "location"):    "establishing_wide",
     # Payoff — climactic impact.
     ("payoff", "character"):  "hero_reveal",
     ("payoff", "symbol"):     "symbol_dramatic",
     ("payoff", "location"):   "establishing_wide",
+    ("payoff", "object"):     "object_focus",
+    ("payoff", "evidence"):   "evidence_inspect",
+    ("payoff", "comparison"): "split_compare",
+    # Resolution — ending/closure.
+    ("resolution", "character"):  "character_context",
+    ("resolution", "symbol"):     "symbol_dramatic",
+    ("resolution", "location"):   "establishing_wide",
+    ("resolution", "quote_card"): "quote_emphasis",
     # Warning — dread.
     ("warning", "character"): "character_dread",
     ("warning", "symbol"):    "symbol_dramatic",
@@ -281,12 +312,28 @@ class CompositionPlanner:
                     layers.append(eff)
                     z += 1
 
+        # ── Layer 4b: Director effect_cues from LLM ──────────────────
+        effect_cues = beat.get("effect_cues") or []
+        if isinstance(effect_cues, list):
+            for cue_name in effect_cues:
+                if z >= self.max_layers:
+                    break
+                cue_layer = self._build_effect_cue_layer(cue_name, z)
+                if cue_layer:
+                    layers.append(cue_layer)
+                    z += 1
+
+        # ── Pacing intent modifiers ──────────────────────────────────
+        pacing_intent = (beat.get("pacing_intent") or "standard").strip().lower()
+
         # ── Layer 5: Editorial panel / shape ─────────────────────────
-        panel = self._build_editorial_panel(beat, layout_mode, strategy)
-        if panel and z < self.max_layers:
-            panel.z_index = z
-            layers.append(panel)
-            z += 1
+        # rapid_montage skips editorial panels for maximum visual velocity
+        if pacing_intent != "rapid_montage":
+            panel = self._build_editorial_panel(beat, layout_mode, strategy)
+            if panel and z < self.max_layers:
+                panel.z_index = z
+                layers.append(panel)
+                z += 1
 
         # ── Layer 6: Text placement ──────────────────────────────────
         text_layers = self._build_text_layers(beat, beat_type, visual_role, strategy)
@@ -298,6 +345,9 @@ class CompositionPlanner:
 
         # ── Layer 7: Motion metadata ─────────────────────────────────
         motion_layer = self._build_motion_layer(beat, beat_type, emotion, intensity)
+        # hold_frame disables motion entirely
+        if pacing_intent == "hold_frame":
+            motion_layer = None
         if motion_layer and z < self.max_layers:
             motion_layer.z_index = z
             layers.append(motion_layer)
@@ -311,6 +361,38 @@ class CompositionPlanner:
             visual_role=visual_role,
             layout_mode=layout_mode,
             reasoning=reasoning,
+        )
+
+    # ── Effect cue layer builder ────────────────────────────────────
+
+    _EFFECT_CUE_MAP = {
+        "impact_shake": {"layer_type": "camera_shake", "params": {"amplitude": 4}},
+        "flash_frame": {"layer_type": "flash", "params": {"duration": 0.066}},
+        "red_eye_flash": {"layer_type": "red_flash", "params": {"duration": 0.15}},
+        "slow_push_in": {"layer_type": "motion", "params": {"style": "ken_burns", "direction": "in"}},
+        "glitch": {"layer_type": "distortion", "params": {"offset": 3}},
+        "dark_vignette": {"layer_type": "vignette", "params": {"intensity": 0.7, "color": "#000000"}},
+        "desaturation": {"layer_type": "color_filter", "params": {"saturation": 0.3, "brightness": 0.85}},
+    }
+
+    def _build_effect_cue_layer(self, cue_name: str, z_index: int) -> Optional[CompositionLayer]:
+        """Build a composition layer from a director's effect_cue string."""
+        cue_name = (cue_name or "").strip().lower()
+        spec = self._EFFECT_CUE_MAP.get(cue_name)
+        if not spec:
+            return None
+        return CompositionLayer(
+            name=cue_name,
+            category="effect",
+            z_index=z_index,
+            source=cue_name,
+            layer_type=spec["layer_type"],
+            fit="cover",
+            opacity=1.0,
+            blend_mode="normal",
+            position=_POS_FULL,
+            animation=_ANIM_NONE,
+            metadata=spec.get("params", {}),
         )
 
     def plan_sequence(

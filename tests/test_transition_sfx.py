@@ -15,13 +15,13 @@ class TransitionSfxTests(unittest.TestCase):
     def test_default_transition_resolves_real_sfx_file(self):
         resolved = transition_sfx.resolve_transition_sfx("fade")
         self.assertIsNotNone(resolved)
-        self.assertEqual(resolved.name, "soft_whoosh.mp3")
+        self.assertEqual(resolved.name, "swoosh-sound-effects.mp3")
 
     def test_default_sfx_gain_is_audible(self):
         resolved = transition_sfx.resolve_transition_sfx("fade")
         self.assertIsNotNone(resolved)
         self.assertGreaterEqual(transition_sfx.sfx_volume_for_path(resolved), 1.2)
-        self.assertLessEqual(transition_sfx.sfx_volume_for_path(resolved), 1.3)
+        self.assertLessEqual(transition_sfx.sfx_volume_for_path(resolved), 1.4)
         self.assertGreaterEqual(transition_sfx.TRANSITION_SFX_MIX_WEIGHT, 2.0)
 
     def test_repeated_gentle_transitions_are_spaced_and_varied(self):

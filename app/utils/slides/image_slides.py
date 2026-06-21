@@ -128,6 +128,34 @@ _EFFECT_ONLY_NAMES: frozenset = frozenset({
     "dark_vignette", "desaturation", "chromatic_shift", "slow_push_in",
     "morph", "bass_hit",
 })
+
+# Motion preset aliases that sometimes leak into effect_cues. These are camera
+# movements, not per-frame pixel effects, so strip them from effect_cues.
+_MOTION_ONLY_NAMES: frozenset = frozenset({
+    "slow_push_in", "slow_push", "pull_out", "pull_out_zoom",
+    "reveal_zoom", "impact_zoom", "wide_pan", "stable_pan",
+    "diagonal_pan", "subject_push", "evidence_hold", "hold_still",
+    "title_card_hold", "dramatic_push", "push_in", "creep_in",
+})
+
+# Common English stop words and single-letter words that produce false-positive
+# word-position matches for sfx_target_word. Any target_word in this set gets
+# cleared during sanitization.
+_SFX_TARGET_STOP_WORDS: frozenset = frozenset({
+    "a", "an", "the", "is", "was", "were", "are", "be", "been",
+    "not", "no", "nor", "but", "or", "and", "if", "in", "on",
+    "to", "of", "at", "by", "for", "it", "its", "so", "as",
+    "he", "she", "his", "her", "him", "we", "us", "our", "they",
+    "do", "did", "had", "has", "have", "will", "can", "may",
+    "that", "this", "with", "from", "who", "what", "how",
+})
+
+# Effect cues that require a minimum number of frames to render visibly.
+# If a slide is shorter than _MIN_EFFECT_DURATION_SECONDS, these are stripped.
+_DURATION_SENSITIVE_EFFECTS: frozenset = frozenset({
+    "impact_shake", "red_eye_flash", "glitch", "chromatic_shift",
+})
+_MIN_EFFECT_DURATION_SECONDS: float = 0.5
 VISUAL_ARCHITECTURE_STAGES = [
     "Subtitles",
     "Script Analyzer",
@@ -833,11 +861,25 @@ def _apply_production_edit_defaults(
     # Normalize literal "none" string to empty
     if raw_sfx == "none":
         raw_sfx = ""
-    # If sfx_target_word already provides a mid-slide hit, don't also fire a boundary hit
-    # (prevents double bass-hit on the same slide). Allow only if it's a different cue.
-    if raw_sfx == "bass_hit" and slide.get("sfx_target_word"):
+    # Bug 1 fix: if sfx_cue duplicates transition_in, clear it — the transition
+    # system already plays an SFX for transition_in, so mirroring causes double fire.
+    if raw_sfx and raw_sfx == raw_transition:
+        raw_sfx = ""
+    # Bug 5 fix: if sfx_target_word provides a mid-slide hit, clear ALL boundary
+    # sfx_cues (not just bass_hit) to prevent audio clutter on emphasis slides.
+    if raw_sfx and slide.get("sfx_target_word"):
+        logger.debug(
+            "Clearing sfx_cue '%s' because sfx_target_word '%s' already set",
+            raw_sfx, slide.get("sfx_target_word"),
+        )
         raw_sfx = ""
     slide["sfx_cue"] = raw_sfx or slide["transition_in"]
+    # CTA slides always get mouse_click SFX for engagement feel
+    # Hook slides get pop SFX for a punchy opening
+    if beat_type == "cta":
+        slide["sfx_cue"] = "mouse_click"
+    elif beat_type == "hook":
+        slide["sfx_cue"] = "pop"
     slide["visual_purpose"] = _clean_prompt_text(
         slide.get("visual_purpose")
         or _visual_purpose_for_slide(slide.get("summary", ""), slide.get("subtitle_text", ""), beat_type, visual_role),
@@ -859,6 +901,22 @@ def _apply_production_edit_defaults(
         or "Do not reuse the same portrait/pose if the previous slide already used this character.",
         max_len=180,
     )
+    # Bug 6 fix: cap asset_confidence for queries that mention characters absent
+    # from CANONICAL_ENTITIES — the search engine likely can't resolve them.
+    ac = slide.get("asset_confidence")
+    if ac is not None:
+        query_lower = (slide.get("image_search_query") or "").lower()
+        canon_lower = {e.lower() for e in CANONICAL_ENTITIES}
+        query_words = set(query_lower.split())
+        # If no canonical entity appears in the query, cap confidence at 0.55
+        if not query_words & canon_lower:
+            capped = min(float(ac), 0.55)
+            if capped < float(ac):
+                logger.debug(
+                    "asset_confidence capped %.2f -> %.2f for non-canonical query: %s",
+                    float(ac), capped, query_lower[:60],
+                )
+            slide["asset_confidence"] = capped
     if "asset_confidence" not in slide:
         slide["asset_confidence"] = _asset_confidence(
             slide.get("image_search_query", ""),
@@ -869,14 +927,51 @@ def _apply_production_edit_defaults(
     VALID_PACING_INTENTS = {"rapid_montage", "hold_frame", "dramatic_pause", "parallel_cut", "standard"}
     pacing = (slide.get("pacing_intent") or "").strip().lower()
     slide["pacing_intent"] = pacing if pacing in VALID_PACING_INTENTS else "standard"
+
+    # Bug 2 fix: filter motion-alias names out of effect_cues. These are camera
+    # movements (Ken Burns presets), not per-frame pixel effects.
     if not isinstance(slide.get("effect_cues"), list):
         slide["effect_cues"] = []
-    slide["sfx_target_word"] = slide.get("sfx_target_word") or ""
+    slide["effect_cues"] = [
+        cue for cue in slide["effect_cues"]
+        if (cue or "").strip().lower() not in _MOTION_ONLY_NAMES
+    ]
+
+    # Bug 4 fix: clear sfx_target_word if it is a common stop word.
+    raw_target = (slide.get("sfx_target_word") or "").strip().lower()
+    if raw_target in _SFX_TARGET_STOP_WORDS:
+        logger.debug(
+            "Clearing sfx_target_word '%s' (stop word) on slide '%s'",
+            raw_target, slide.get("summary", "")[:40],
+        )
+        raw_target = ""
+    slide["sfx_target_word"] = raw_target
     slide["director_note"] = slide.get("director_note") or ""
 
-    # Fix 4: Cap rapid_montage slide duration to 2.0 seconds max.
-    # If the LLM gave a 5-second window with pacing_intent=rapid_montage, clamp it so
-    # the render engine enforces the visual energy the intent implies.
+    # Bug 3 fix: strip duration-sensitive effects from very short slides where
+    # they can't render enough frames to be visible (e.g. impact_shake needs ~9
+    # frames at 30fps = 0.3s minimum window, so we use 0.5s as a safe floor).
+    try:
+        s = parse_time(slide["start_time"])
+        e = parse_time(slide["end_time"])
+        slide_dur = e - s
+    except Exception:
+        slide_dur = 999.0  # unparseable, skip duration checks
+
+    if slide_dur < _MIN_EFFECT_DURATION_SECONDS and slide["effect_cues"]:
+        original_cues = list(slide["effect_cues"])
+        slide["effect_cues"] = [
+            cue for cue in slide["effect_cues"]
+            if (cue or "").strip().lower() not in _DURATION_SENSITIVE_EFFECTS
+        ]
+        if len(slide["effect_cues"]) < len(original_cues):
+            logger.debug(
+                "Stripped duration-sensitive effects from %.2fs slide '%s': %s",
+                slide_dur, slide.get("summary", "")[:40],
+                [c for c in original_cues if c not in slide["effect_cues"]],
+            )
+
+    # Cap rapid_montage slide duration to 2.0 seconds max.
     if slide["pacing_intent"] == "rapid_montage":
         try:
             s = parse_time(slide["start_time"])

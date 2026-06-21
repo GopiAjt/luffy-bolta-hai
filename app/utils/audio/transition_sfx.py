@@ -388,8 +388,11 @@ def build_transition_events_from_slides(slides: List[Dict]) -> List[Dict]:
         if not words:
             continue
         target_lower = target_word.lower()
+        # Use exact whole-word match to avoid false positives (e.g. "not" matching
+        # "another", "notable"). Also try stripping common punctuation.
         word_index = next(
-            (i for i, w in enumerate(words) if target_lower in w.lower()),
+            (i for i, w in enumerate(words)
+             if target_lower == w.lower().strip(".,!?;:'\"-")),
             None,
         )
         if word_index is None:

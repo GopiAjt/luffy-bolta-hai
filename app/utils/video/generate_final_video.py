@@ -164,6 +164,8 @@ def generate_final_video(
             try:
                 with open(expressions_path, 'r', encoding='utf-8') as f:
                     expressions_data = json.load(f)
+                    if expressions_data is None:
+                        expressions_data = []
                     logger.info(f"Loaded {len(expressions_data)} expressions from {expressions_path}")
                     logger.debug(f"Expressions data: {json.dumps(expressions_data, indent=2, ensure_ascii=False)}")
             except Exception as e:

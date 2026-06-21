@@ -906,6 +906,10 @@ class VideoGenerator:
             # Load expressions
             with open(expressions_path, 'r', encoding='utf-8') as f:
                 expressions = json.load(f)
+            
+            # Guard against expressions file containing literal "null" instead of an array
+            if expressions is None:
+                expressions = []
                 
             logger.info(f"Loaded {len(expressions)} expressions from {expressions_path}")
             logger.debug(f"Expressions data: {json.dumps(expressions, indent=2, ensure_ascii=False)}")
